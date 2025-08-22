@@ -1,7 +1,10 @@
 import os
 import pandas as pd
+import numpy as np
 import yaml
 from glob import glob
+import traceback
+
 
 
 class BaseParser:
@@ -40,24 +43,23 @@ class BaseParser:
             specs = spec if isinstance(spec, list) else [spec]
 
             dfs = []
+            num_rows = 0
             for pq in glob(os.path.join(subdir_path, "*.parquet")):
                 try:
                     df = self.deserialise(pq)
-
+                    num_rows += len(df)
+                    # print(f"📄 Read {pq}: {len(df)} rows")
                     for sub_spec in specs:
-                        df_sub = self.apply_spec(df.copy(), sub_spec, name)
-                        df_sub = self.validate(df_sub, sub_spec, name)
+                        try:
+                            df_sub = self.apply_spec(df.copy(), sub_spec, name)
+                            df_sub = self.validate(df_sub, sub_spec, name)
 
-                        # inject relation_name if given
-                        if "relation_name" in sub_spec:
-                            df_sub["relation"] = sub_spec["relation_name"]
-
-                        dfs.append(df_sub)
-
+                            dfs.append(df_sub)
+                        except Exception as e:
+                            print(f"⚠️ Error applying spec for {sub_spec}: {e}")
+                            traceback.print_exc()
+                    # print(f"📦 Finished parsing: {name} ({num_rows} rows total)")
                 except Exception as e:
-                    pd.set_option("display.max_columns", None)
-                    pd.set_option("display.max_rows", None)
-                    print(df.head(1))
                     print(f"⚠️ Error reading {pq}: {e}")
                     break
 
@@ -91,6 +93,29 @@ class BaseParser:
     # Default: no validation (override in EdgeParser)
     def validate(self, df, spec, name):
         return df
+    
+    @staticmethod
+    def normalise(val):
+        """
+        Ensure a value is always a list:
+        - None/NaN -> []
+        - list/tuple -> unchanged
+        - numpy.ndarray -> converted to list
+        - scalar -> [val]
+        """
+        if val is None:
+            return []
+        if isinstance(val, (list, tuple)):
+            return list(val)
+        if isinstance(val, np.ndarray):
+            return val.tolist()
+        # only call pd.isna on scalars
+        try:
+            if pd.isna(val):
+                return []
+        except Exception:
+            pass
+        return [val]
 
 
 
@@ -129,34 +154,106 @@ class EdgeParser(BaseParser):
         src_col = spec["source"]
         tgt_col = spec["target"]
 
-        # Case 1: Normal edge (direct source-target columns)
-        if tgt_col in df.columns and not tgt_col.startswith("pathways"):
-            cols = {"source": src_col, "target": tgt_col, "relation": spec["relation"]}
-            if "props" in spec:
-                for p in spec["props"]:
-                    if p in df.columns:
-                        cols[p] = p
-            return df[list(cols.values())].rename(columns={v: k for k, v in cols.items()})
+        # Decide relation value
+        if "relation" in spec:
+            relation_value = spec["relation"]   # column name in df
+            relation_is_column = True
+        elif "relation_name" in spec:
+            relation_value = spec["relation_name"]  # constant string
+            relation_is_column = False
+        else:
+            raise ValueError(f"No relation or relation_name in spec for {name}")
 
-        # Case 2: Expand pathway list-of-dicts
-        if tgt_col == "pathways.id" and "pathways" in df.columns:
+        # === Case 1: Direct column-to-column edges ===
+        if tgt_col in df.columns and "." not in tgt_col:
+            sample_val = df[tgt_col].iloc[0]
+            if not isinstance(sample_val, (list, tuple, np.ndarray)):
+                cols = {"source": src_col, "target": tgt_col}
+                if relation_is_column:
+                    cols["relation"] = relation_value
+                else:
+                    df = df.copy()
+                    df["relation"] = relation_value
+                    cols["relation"] = "relation"
+
+                if "props" in spec:
+                    for p in spec["props"]:
+                        if p in df.columns:
+                            cols[p] = p
+
+                return df[list(cols.values())].rename(columns={v: k for k, v in cols.items()})
+
+        # === Case 2: Nested dict expansion (e.g. pathways.id) ===
+        if "." in tgt_col:
+            base_col, subfield = tgt_col.split(".", 1)
+            if base_col in df.columns:
+                expanded_edges = []
+                for _, row in df.iterrows():
+                    tgts = row.get(base_col, [])
+                    if isinstance(tgts, np.ndarray):
+                        tgts = tgts.tolist()
+                    if not isinstance(tgts, list):
+                        tgts = [tgts]
+
+                    for t in tgts:
+                        if isinstance(t, dict):
+                            t_val = t.get(subfield)
+                            if not t_val:
+                                continue
+                            edge = {
+                                "source": row[src_col],
+                                "target": t_val,
+                                "relation": relation_value if not relation_is_column else row.get(relation_value),
+                            }
+                            for p in spec.get("props", []):
+                                val = row.get(p)
+                                if val is None or (isinstance(val, float) and np.isnan(val)):
+                                    continue
+                                if isinstance(val, np.ndarray):
+                                    val = val.tolist()
+                                if isinstance(val, (list, dict)):
+                                    val = str(val)
+                                edge[p] = val
+                            expanded_edges.append(edge)
+                return (
+                    pd.DataFrame(expanded_edges)
+                    if expanded_edges
+                    else pd.DataFrame(columns=["source", "target", "relation"] + spec.get("props", []))
+                )
+
+        # === Case 3: List-like target expansion (parents, children, etc.) ===
+        if tgt_col in df.columns:
             expanded_edges = []
             for _, row in df.iterrows():
-                pathways = row.get("pathways", [])
-                if isinstance(pathways, list):
-                    for pw in pathways:
-                        if isinstance(pw, dict) and "id" in pw:
-                            edge = {
-                                "source": row.get(src_col),
-                                "target": pw.get("id"),
-                                "relation": spec.get("relation_name", spec["relation"])
-                            }
-                            # copy props
-                            for p in spec.get("props", []):
-                                if p in row:
-                                    edge[p] = row[p]
-                            expanded_edges.append(edge)
-            return pd.DataFrame(expanded_edges)
+                tgts = row.get(tgt_col, [])
+                if isinstance(tgts, np.ndarray):
+                    tgts = tgts.tolist()
+                if not isinstance(tgts, list):
+                    tgts = [tgts]
+
+                for t in tgts:
+                    if not t:
+                        continue
+                    edge = {
+                        "source": row[src_col],
+                        "target": t,
+                        "relation": relation_value if not relation_is_column else row.get(relation_value),
+                    }
+                    for p in spec.get("props", []):
+                        val = row.get(p)
+                        if val is None or (isinstance(val, float) and np.isnan(val)):
+                            continue
+                        if isinstance(val, np.ndarray):
+                            val = val.tolist()
+                        if isinstance(val, (list, dict)):
+                            val = str(val)
+                        edge[p] = val
+                    expanded_edges.append(edge)
+            return (
+                pd.DataFrame(expanded_edges)
+                if expanded_edges
+                else pd.DataFrame(columns=["source", "target", "relation"] + spec.get("props", []))
+            )
 
         raise ValueError(f"Unsupported target {tgt_col} for {name}")
 
@@ -190,5 +287,15 @@ class EdgeParser(BaseParser):
         #     print(f"Edges discarded due to missing target: {invalid_row.loc[~invalid_row['target'].astype(str).isin(set.union(*self.node_store.values()))].shape[0]}")
 
         return df
+    
+    def serialise(self, df, out_path):
+        # normalise selected props
+        for col in df.columns:
+            if col in ["literature"]:  # extend this list as needed
+                df[col] = df[col].apply(self.normalise)
+
+        df.to_parquet(out_path, index=False)
+        print(f"💾 Saved → {out_path} ({len(df)} rows)")
+
 
 

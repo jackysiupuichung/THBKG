@@ -13,13 +13,11 @@ sourceId=cancer_biomarkers:
 sourceId=chembl:
   - source: drugId
     target: diseaseId
-    relation: datatypeId
     relation_name: clinical_trial
     props: [score, literature, publicationYear, id]
 
   - source: drugId
     target: targetId
-    relation: datatypeId
     relation_name: modulated_by
     props: [score, literature, publicationYear, id]
 
@@ -32,14 +30,13 @@ sourceId=reactome:
     
   - source: targetId
     target: pathways.id
-    relation: datatypeId
-    relation_name: involved_in_pathway
+    relation_name: involved_in
     props: [score, literature, publicationYear, id]
 
-  - source: pathways.id
-    target: diseaseId
+  - source: diseaseId
+    target: pathways.id
     relation: datatypeId
-    relation_name: pathway_associated_with
+    relation_name: associated_with
     props: [score, literature, publicationYear, id]
 
 sourceId=clingen:
@@ -76,14 +73,12 @@ sourceId=slapenrich:
 
   - source: targetId
     target: pathways.id
-    relation: datatypeId
-    relation_name: involved_in_pathway
+    relation_name: involved_in
     props: [score, literature, publicationYear, id]
 
-  - source: pathways.id
-    target: diseaseId
-    relation: datatypeId
-    relation_name: pathway_associated_with
+  - source: diseaseId
+    target: pathways.id
+    relation_name: associated_with
     props: [score, literature, publicationYear, id]
 
 sourceId=crispr:
@@ -143,14 +138,12 @@ sourceId=progeny:
 
   - source: targetId
     target: pathways.id
-    relation: datatypeId
-    relation_name: involved_in_pathway
+    relation_name: involved_in
     props: [score, literature, publicationYear, id]
 
-  - source: pathways.id
-    target: diseaseId
+  - source: diseaseId
+    target: pathways.id
     relation: datatypeId
-    relation_name: pathway_associated_with
     props: [score, literature, publicationYear, id]
 
 sourceId=uniprot_literature:
