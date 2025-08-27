@@ -1,0 +1,48 @@
+# configs/experiment.yaml
+
+# ========================
+# Data settings
+# ========================
+data:
+  parquet: data/kg_output/edges/sourceId=chembl.parquet
+  cutoff: 2010
+  horizon: 5
+  cold_start_file: data/cold_start_targets.txt
+  graph: kg_output/hetero_graph_2010_5.pt
+
+# ========================
+# Model settings
+# ========================
+model:
+  name: ncf        # options: [ncf, graph]
+  embed_dim: 64
+  loss_type: bpr   # [bce, mse, bpr]
+  num_neg: 5
+
+# ========================
+# Training settings
+# ========================
+train:
+  epochs: 20
+  batch_size: 256
+  lr: 1e-3
+
+# ========================
+# Evaluation settings
+# ========================
+eval:
+  topk: [10, 50]
+  metrics: ["Recall", "NDCG"]
+  valid_metric: NDCG@10
+
+# ========================
+# RecBole-specific configs
+# ========================
+recbole:
+  neg_sampling:
+    uniform: 1
+  eval_args:
+    split: { "RS": [0.8, 0.1, 0.1] }
+    group_by: user
+    order: RO
+    mode: full
