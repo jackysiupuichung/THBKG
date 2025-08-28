@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import datetime
 import pandas as pd
@@ -13,15 +14,63 @@ from src.data.dataset import InteractionDataset
 from src.models.base_lightning import BaseRecLightning
 from src.models.ncf import NCF
 
-def collate_variable(batch):
-        collated = {}
-        for key in batch[0]:
-            if key == "neg_items":
-                # keep as list of tensors
-                collated[key] = [d[key] for d in batch]
-            else:
-                collated[key] = torch.stack([d[key] for d in batch])
-        return collated
+from src.models.utils import initialise_model, collate_variable, collect_predictions
+
+def create_datasets(train_df, valid_df, test_df, user_map, item_map, all_interactions, cfg):
+    """Create train, validation, and test datasets."""
+    
+    train_ds = InteractionDataset(
+        train_df,
+        user_map,
+        item_map,
+        num_neg=cfg.model.num_neg if cfg.model.loss_type == "bpr" else 0,
+        dynamic=True
+    )
+
+    valid_ds = InteractionDataset(
+        valid_df,
+        user_map,
+        item_map,
+        exhaustive_eval=True,
+        all_interactions=all_interactions
+    )
+
+    test_ds = InteractionDataset(
+        test_df,
+        user_map,
+        item_map,
+        exhaustive_eval=True,
+        all_interactions=all_interactions
+    )
+
+    return train_ds, valid_ds, test_ds
+
+def create_dataloaders(train_ds, valid_ds, test_ds, cfg):
+    """Create dataloaders for train, validation, and test datasets."""
+    
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=cfg.train.batch_size,
+        shuffle=True,
+        num_workers=4
+    )
+
+    valid_loader = DataLoader(
+        valid_ds,
+        batch_size=cfg.train.batch_size,
+        num_workers=4,
+        collate_fn=collate_variable
+    )
+
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=cfg.train.batch_size,
+        num_workers=4,
+        collate_fn=collate_variable
+    )
+
+    return train_loader, valid_loader, test_loader
+
 
 def main(cfg):
     # -----------------------
@@ -39,25 +88,40 @@ def main(cfg):
     # -----------------------
     # Step 1: Custom split
     # -----------------------
-    cold_start_targets = []
+    cold_start_diseases = []
     if cfg.data.cold_start_file and os.path.exists(cfg.data.cold_start_file):
-        with open(cfg.data.cold_start_file) as f:
-            cold_start_targets = [line.strip() for line in f if line.strip()]
+        print(f"✅ Loaded cold start diseases from {cfg.data.cold_start_file}")
+        cold_start_df = pd.read_csv(cfg.data.cold_start_file)
+        cold_start_diseases = cold_start_df.iloc[:, 0].dropna().astype(str).tolist()
             
 
     train_df, valid_df, test_df = temporal_and_cold_split(
         cfg.data.parquet,
         cutoff=cfg.data.cutoff,
         horizon=cfg.data.horizon,
-        cold_start_targets=cold_start_targets,
+        cold_start_diseases=cold_start_diseases,
         out_dir=run_dir
     )
 
     # -----------------------
     # Step 2: Build global maps
     # -----------------------
-    all_users = pd.concat([train_df["user_id"], valid_df["user_id"], test_df["user_id"]]).astype(str).unique()
-    all_items = pd.concat([train_df["item_id"], valid_df["item_id"], test_df["item_id"]]).astype(str).unique()
+    # Load node files for targets (users) and diseases (items)
+    disease_nodes = pd.read_parquet(cfg.data.disease_nodes)
+    target_nodes = pd.read_parquet(cfg.data.target_nodes)
+
+    # Check overlap between disease_nodes and cold_start_diseases
+    disease_node_ids = set(disease_nodes["id"].astype(str).unique())
+    cold_start_set = set(cold_start_diseases)
+    overlap = disease_node_ids & cold_start_set
+    print(f"✅ Overlap between disease nodes and cold start diseases: {len(overlap)}")
+    print(f"❗️ Cold start diseases not in disease nodes: {cold_start_set - overlap}")
+    print(f"❗️ Disease nodes not in cold start diseases: {len(disease_node_ids - cold_start_set)}")
+
+    all_users = disease_nodes["id"].astype(str).unique()
+    all_items = target_nodes["id"].astype(str).unique()
+    print(f"✅ Loaded {len(all_users)} users (diseases) and {len(all_items)} items (targets)")
+
     user_map = {u: idx for idx, u in enumerate(all_users)}
     item_map = {i: idx for idx, i in enumerate(all_items)}
 
@@ -70,29 +134,7 @@ def main(cfg):
             all_interactions.setdefault(uid, set()).add(iid)
 
 
-    train_ds = InteractionDataset(
-        os.path.join(run_dir, "dataframe", "train.csv"),
-        user_map,
-        item_map,
-        num_neg=cfg.model.num_neg if cfg.model.loss_type == "bpr" else 0,
-        dynamic=True
-    )
-
-    valid_ds = InteractionDataset(
-        os.path.join(run_dir, "dataframe", "valid.csv"),
-        user_map,
-        item_map,
-        exhaustive_eval=True,
-        all_interactions=all_interactions
-    )
-
-    test_ds = InteractionDataset(
-        os.path.join(run_dir, "dataframe", "test.csv"),
-        user_map,
-        item_map,
-        exhaustive_eval=True,
-        all_interactions=all_interactions
-    )
+    train_ds, valid_ds, test_ds = create_datasets(train_df, valid_df, test_df, user_map, item_map, all_interactions, cfg)
 
     # -----------------------
     # Step 3: Build train interactions dict (for ranking exclusion)
@@ -104,16 +146,11 @@ def main(cfg):
     # -----------------------
     # Step 4: Select model
     # -----------------------
-    if cfg.model.name.lower() == "ncf":
-        model = NCF(num_users=train_ds.num_users, num_items=train_ds.num_items, embed_dim=cfg.model.embed_dim)
-    elif cfg.model.name.lower() == "graph":
-        if not cfg.data.graph or not os.path.exists(cfg.data.graph):
-            raise ValueError("Graph model requires a valid graph path in config")
-        hetero_data = torch.load(cfg.data.graph)
-        print(f"✅ Loaded graph object from {cfg.data.graph}")
-        raise NotImplementedError("Graph model integration placeholder")
-    else:
-        raise ValueError(f"Unknown model: {cfg.model.name}")
+    pretrained_embeddings = None  # load here if you want to pass Word2Vec, etc.
+    hetero_data = None  # load here if using graph-based model
+    # add assert statement to ensure graph object is created under the same config as the training process
+
+    model = initialise_model(cfg, user_map=user_map, item_map=item_map, hetero_data=hetero_data, pretrained_embeddings=pretrained_embeddings)
 
     lightning_model = BaseRecLightning(
         model,
@@ -153,27 +190,7 @@ def main(cfg):
     # Step 6: Train
     # -----------------------
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=cfg.train.batch_size,
-        shuffle=True,
-        num_workers=4
-    )
-
-    valid_loader = DataLoader(
-        valid_ds,
-        batch_size=cfg.train.batch_size,
-        num_workers=4,
-        collate_fn=collate_variable
-    )
-
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=cfg.train.batch_size,
-        num_workers=4,
-        collate_fn=collate_variable
-    )
-
+    train_loader, valid_loader, test_loader = create_dataloaders(train_ds, valid_ds, test_ds, cfg)
     trainer.fit(lightning_model, train_loader, valid_loader)
 
     # -----------------------
@@ -194,33 +211,10 @@ def main(cfg):
     # -----------------------
     # Step 8: Collect predictions
     # -----------------------
-    def collect_predictions(dataloader, stage="val"):
-        preds, users, items, labels = [], [], [], []
-        best_model.eval()
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        best_model.to(device)
-
-        with torch.no_grad():
-            for batch in dataloader:
-                u, i, l = batch["user_id"].to(device), batch["item_id"].to(device), batch["label"].to(device)
-                p = best_model(u, i).squeeze().cpu()
-                preds.extend(p.tolist())
-                users.extend(u.cpu().tolist())
-                items.extend(i.cpu().tolist())
-                labels.extend(l.cpu().tolist())
-
-        df = pd.DataFrame({"user_id": users, "item_id": items, "label": labels, "pred": preds})
-        out_path = os.path.join(run_dir, f"{stage}_predictions.csv")
-        df.to_csv(out_path, index=False)
-        print(f"💾 {stage} predictions saved to {out_path}")
-        return df
-
-    collect_predictions(valid_loader, stage="val")
-    collect_predictions(test_loader, stage="test")
-
+    valid_preds = BaseRecLightning.serialise(best_model, valid_loader, run_dir, user_map, item_map, stage="val")
+    test_preds = BaseRecLightning.serialise(best_model, test_loader, run_dir, user_map, item_map, stage="test")
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
     args = parser.parse_args()

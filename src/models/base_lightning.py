@@ -1,5 +1,7 @@
 import pytorch_lightning as pl
 import torch
+import pandas as pd
+import os
 import torch.nn.functional as F
 
 
@@ -149,3 +151,40 @@ class BaseRecLightning(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
+    
+
+
+    @staticmethod
+    def predict(best_model, dataloader):
+        preds, users, items, labels = [], [], [], []
+        best_model.eval()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        best_model.to(device)
+
+        with torch.no_grad():
+            for batch in dataloader:
+                u, i, l = batch["user_id"].to(device), batch["item_id"].to(device), batch["label"].to(device)
+                p = best_model(u, i).squeeze().cpu()
+                preds.extend(p.tolist())
+                users.extend(u.cpu().tolist())
+                items.extend(i.cpu().tolist())
+                labels.extend(l.cpu().tolist())
+        return preds, users, items, labels
+
+    @staticmethod
+    def serialise(best_model, dataloader, run_dir, user_map, item_map, stage):
+        preds, users, items, labels = BaseRecLightning.predict(best_model, dataloader)
+        rev_user_map = {v: k for k, v in user_map.items()}
+        rev_item_map = {v: k for k, v in item_map.items()}
+
+        # Map user/item ids back to names
+        user_names = [rev_user_map.get(uid, uid) for uid in users]
+        item_names = [rev_item_map.get(iid, iid) for iid in items]
+
+        df = pd.DataFrame({"user_id": user_names, "item_id": item_names, "label": labels, "pred": preds})
+        pred_dir = os.path.join(run_dir, f"predictions")
+        os.makedirs(pred_dir, exist_ok=True)
+        out_path = os.path.join(pred_dir, f"{stage}_predictions.csv")
+        df.to_csv(out_path, index=False)
+        print(f"💾 {stage} predictions saved to {out_path}")
+        return df

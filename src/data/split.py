@@ -7,7 +7,7 @@ def temporal_and_cold_split(
     parquet_path: str,
     cutoff: int = 2015,
     horizon: int = 5,
-    cold_start_targets=None,
+    cold_start_diseases=None,
     out_dir="data/"
 ):
     """
@@ -17,7 +17,7 @@ def temporal_and_cold_split(
       parquet_path: path to chembl parquet file
       cutoff: training cutoff year
       horizon: years after cutoff for test set
-      cold_start_targets: list of target IDs reserved for cold-start (excluded from train)
+      cold_start_diseases: list of disease IDs reserved for cold-start (excluded from train)
       out_dir: directory to save train/valid/test CSVs
     """
 
@@ -38,14 +38,16 @@ def temporal_and_cold_split(
     # --------------------------
     # Define cold-start target set
     # --------------------------
-    cold_start_targets = set(str(x) for x in (cold_start_targets or []))
+    cold_start_diseases = set(str(x) for x in (cold_start_diseases or []))
+    print(f"✅ Using {len(cold_start_diseases)} cold-start diseases")
 
     # --------------------------
     # TRAIN = edges before cutoff, excluding cold-start users
+    # TODO: do you exclude cold_start here too
     # --------------------------
     train_df = edges[
         (edges["year"] <= cutoff)
-        & (~edges["source"].astype(str).isin(cold_start_targets))
+        & (~edges["source"].astype(str).isin(cold_start_diseases))
     ].copy()
 
     # --------------------------
@@ -54,7 +56,7 @@ def temporal_and_cold_split(
     valid_df = edges[
         (edges["year"] > cutoff)
         & (edges["year"] <= cutoff + horizon)
-        & (~edges["source"].astype(str).isin(cold_start_targets))
+        & (~edges["source"].astype(str).isin(cold_start_diseases))
     ].copy()
 
     # --------------------------
@@ -63,18 +65,18 @@ def temporal_and_cold_split(
     test_df = edges[
         (edges["year"] > cutoff)
         & (edges["year"] <= cutoff + horizon)
-        & (edges["source"].astype(str).isin(cold_start_targets))
+        & (edges["source"].astype(str).isin(cold_start_diseases))
     ].copy()
 
     # Cold-start users must not leak into train/valid
-    assert not train_df["source"].astype(str).isin(cold_start_targets).any(), \
+    assert not train_df["source"].astype(str).isin(cold_start_diseases).any(), \
         "❌ Cold-start users found in train!"
-    assert not valid_df["source"].astype(str).isin(cold_start_targets).any(), \
+    assert not valid_df["source"].astype(str).isin(cold_start_diseases).any(), \
         "❌ Cold-start users found in valid!"
 
     # Test must contain only cold-start users
     if len(test_df) > 0:
-        assert test_df["source"].astype(str).isin(cold_start_targets).all(), \
+        assert test_df["source"].astype(str).isin(cold_start_diseases).all(), \
             "❌ Non cold-start users found in test!"
     else:
         print("⚠️ WARNING: No cold-start interactions found in test set.")
@@ -123,6 +125,6 @@ if __name__ == "__main__":
         parquet_path=args.parquet,
         cutoff=args.cutoff,
         horizon=args.horizon,
-        cold_start_targets=args.cold_start_targets,
+        cold_start_diseases=args.cold_start_diseases,
         out_dir=args.out_dir
     )

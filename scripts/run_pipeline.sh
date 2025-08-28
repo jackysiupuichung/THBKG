@@ -5,7 +5,7 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Config ===
-INPUT="evidenceDated_subset"
+INPUT="data/evidenceDated_subset"
 NODE_SCHEMA="config/node_schema.yaml"
 EDGE_SCHEMA="config/edge_schema.yaml"
 STATIC_EDGE_SCHEMA="config/static_edge_schema.yaml"

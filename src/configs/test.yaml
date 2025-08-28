@@ -5,10 +5,12 @@
 # ========================
 data:
   parquet: data/kg_output/edges/sourceId=chembl.parquet
-  cutoff: 2010
+  cutoff: 2015
   horizon: 5
-  cold_start_file: data/cold_start_targets.txt
+  cold_start_file: data/cold_start_diseases.csv
   graph: kg_output/hetero_graph_2010_5.pt
+  disease_nodes: data/kg_output/nodes/diseases.parquet   # users
+  target_nodes: data/kg_output/nodes/targets.parquet     # items
 
 # ========================
 # Model settings
@@ -23,7 +25,7 @@ model:
 # Training settings
 # ========================
 train:
-  epochs: 20
+  epochs: 1
   batch_size: 256
   lr: 1e-3
 
@@ -34,15 +36,3 @@ eval:
   topk: [10, 50]
   metrics: ["Recall", "NDCG"]
   valid_metric: NDCG@10
-
-# ========================
-# RecBole-specific configs
-# ========================
-recbole:
-  neg_sampling:
-    uniform: 1
-  eval_args:
-    split: { "RS": [0.8, 0.1, 0.1] }
-    group_by: user
-    order: RO
-    mode: full

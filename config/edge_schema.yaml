@@ -9,10 +9,10 @@ sourceId=cancer_biomarkers:
   relation: datatypeId
   props: [datasourceId, score, year, id]
 
-# chembl_drug_disease.yaml
+# chembl_drug_target_disease.yaml
 sourceId=chembl:
-  - source: drugId
-    target: diseaseId
+  - source: diseaseId
+    target: targetId
     relation_name: clinical_trial
     props: [datasourceId, score, year, id]
 

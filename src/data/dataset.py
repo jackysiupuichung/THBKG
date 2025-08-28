@@ -9,20 +9,23 @@ class UniformNegSampler:
         self.num_neg = num_neg
         self.rng = np.random.default_rng(seed)
 
-    def sample(self, user, positives=None):
-        """Sample negatives for one user, excluding positives if provided"""
+    def sample(self, user=None, positives=None):
+        """Sample negatives from item space (targets only)."""
         if positives:
             candidates = list(set(range(self.num_items)) - set(positives))
-            return self.rng.choice(candidates, size=self.num_neg, replace=len(candidates) < self.num_neg)
+            return self.rng.choice(
+                candidates,
+                size=self.num_neg,
+                replace=len(candidates) < self.num_neg
+            )
         return self.rng.integers(low=0, high=self.num_items, size=self.num_neg)
 
 
-
 class InteractionDataset(Dataset):
-    def __init__(self, csv_path, user_map, item_map, num_neg=0, dynamic=False, exhaustive_eval=False, all_interactions=None, seed=42):
+    def __init__(self, df, user_map, item_map, num_neg=0, dynamic=False, exhaustive_eval=False, all_interactions=None, seed=42):
         """
         Args:
-            csv_path: path to user-item interactions
+            df: DataFrame containing user-item interactions
             user_map: dict {user_id -> int index}
             item_map: dict {item_id -> int index}
             num_neg: number of negatives per positive (for training)
@@ -30,16 +33,16 @@ class InteractionDataset(Dataset):
             exhaustive_eval: if True, build full user->all_items minus positives set (valid/test only)
             all_interactions: dict {user: set(items)} containing ALL known positives (train+valid+test) for exclusion
         """
-        df = pd.read_csv(csv_path)
+        self.df = df
 
         # Ensure numeric labels
-        labels = pd.to_numeric(df["label"], errors="coerce")
+        labels = pd.to_numeric(self.df["label"], errors="coerce")
         if labels.isna().any():
-            bad_rows = df[labels.isna()]
+            bad_rows = self.df[labels.isna()]
             raise ValueError(f"❌ Found NaN in label column in {csv_path} ({len(bad_rows)} rows).")
 
-        self.user = torch.tensor([user_map[u] for u in df["user_id"].astype(str)], dtype=torch.long)
-        self.item = torch.tensor([item_map[i] for i in df["item_id"].astype(str)], dtype=torch.long)
+        self.user = torch.tensor([user_map[u] for u in self.df["user_id"].astype(str)], dtype=torch.long)
+        self.item = torch.tensor([item_map[i] for i in self.df["item_id"].astype(str)], dtype=torch.long)
         self.label = torch.tensor(labels.astype(float).values, dtype=torch.float)
 
         self.user_map = user_map
@@ -61,6 +64,22 @@ class InteractionDataset(Dataset):
             self._build_exhaustive_negatives()
         elif self.sampler:
             self.resample()
+
+        print(self.dataset_description())
+
+    def dataset_description(self):
+        desc = {
+            "num_users": self.num_users,
+            "num_items": self.num_items,
+            "num_positive_interactions": len(self.df),
+            "num_unique_user_in_positive_interactions": self.df["user_id"].nunique(),
+            "num_unique_item_in_positive_interactions": self.df["item_id"].nunique(),
+            "num_negative_interactions": len(self.neg_items) if self.neg_items is not None else "not sampled",
+            "num_neg_per_pos": self.num_neg,
+            "dynamic_neg_sampling": self.dynamic,
+            "exhaustive_eval": self.exhaustive_eval,
+        }
+        return desc
 
     def resample(self):
         if not self.sampler:
