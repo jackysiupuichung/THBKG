@@ -3,7 +3,16 @@ import os
 import argparse
 
 
-def temporal_and_cold_split(
+def evidence_edge_temporal_split(
+    evidence_edges,
+    cutoff: int = 2015,
+    out_dir="data/"
+):
+    # Filter for relevant evidence edges before cutoff
+    evidence_edges = evidence_edges[evidence_edges["year"] <= cutoff]
+    return evidence_edges
+
+def supervision_edge_temporal_and_cold_split(
     parquet_path: str,
     cutoff: int = 2015,
     horizon: int = 5,
@@ -121,7 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("--out-dir", default="data/", help="Output directory for train/valid/test CSVs")
     args = parser.parse_args()
 
-    temporal_and_cold_split(
+    supervision_edge_temporal_and_cold_split(
         parquet_path=args.parquet,
         cutoff=args.cutoff,
         horizon=args.horizon,

@@ -4,75 +4,30 @@ import os
 import datetime
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from omegaconf import OmegaConf
 
-from src.data.split import temporal_and_cold_split
+
+from src.data.split import supervision_edge_temporal_and_cold_split
+from src.pipeline.build_hetero_graph import load_nodes, load_edges, get_most_evidented_edges, build_heterodata_with_cold_split
 from src.data.dataset import InteractionDataset
-from src.models.base_lightning import BaseRecLightning
+from src.models.base_lightning import NCFRecLightning, GraphRecLightning
 from src.models.ncf import NCF
 
-from src.models.utils import initialise_model, collate_variable, collect_predictions
+from src.models.utils import initialise_model, initialise_trainer
 
-def create_datasets(train_df, valid_df, test_df, user_map, item_map, all_interactions, cfg):
-    """Create train, validation, and test datasets."""
-    
-    train_ds = InteractionDataset(
-        train_df,
-        user_map,
-        item_map,
-        num_neg=cfg.model.num_neg if cfg.model.loss_type == "bpr" else 0,
-        dynamic=True
-    )
-
-    valid_ds = InteractionDataset(
-        valid_df,
-        user_map,
-        item_map,
-        exhaustive_eval=True,
-        all_interactions=all_interactions
-    )
-
-    test_ds = InteractionDataset(
-        test_df,
-        user_map,
-        item_map,
-        exhaustive_eval=True,
-        all_interactions=all_interactions
-    )
-
-    return train_ds, valid_ds, test_ds
-
-def create_dataloaders(train_ds, valid_ds, test_ds, cfg):
-    """Create dataloaders for train, validation, and test datasets."""
-    
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=cfg.train.batch_size,
-        shuffle=True,
-        num_workers=4
-    )
-
-    valid_loader = DataLoader(
-        valid_ds,
-        batch_size=cfg.train.batch_size,
-        num_workers=4,
-        collate_fn=collate_variable
-    )
-
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=cfg.train.batch_size,
-        num_workers=4,
-        collate_fn=collate_variable
-    )
-
-    return train_loader, valid_loader, test_loader
+def build_all_interactions(df, user_map, item_map):
+    all_interactions = {}
+    for u, i in zip(df["user_id"], df["item_id"]):
+        uid = user_map[str(u)]
+        iid = item_map[str(i)]
+        all_interactions.setdefault(uid, set()).add(iid)
+    return all_interactions
 
 
 def main(cfg):
+    pl.seed_everything(cfg.train.seed)
     # -----------------------
     # Step 0: Create run directory
     # -----------------------
@@ -86,7 +41,7 @@ def main(cfg):
     print(f"🚀 Starting run → {run_dir}")
 
     # -----------------------
-    # Step 1: Custom split
+    # Step 1: Custom temporal and user split based on pwas
     # -----------------------
     cold_start_diseases = []
     if cfg.data.cold_start_file and os.path.exists(cfg.data.cold_start_file):
@@ -95,7 +50,7 @@ def main(cfg):
         cold_start_diseases = cold_start_df.iloc[:, 0].dropna().astype(str).tolist()
             
 
-    train_df, valid_df, test_df = temporal_and_cold_split(
+    train_df, valid_df, test_df = supervision_edge_temporal_and_cold_split(
         cfg.data.parquet,
         cutoff=cfg.data.cutoff,
         horizon=cfg.data.horizon,
@@ -103,94 +58,81 @@ def main(cfg):
         out_dir=run_dir
     )
 
-    # -----------------------
-    # Step 2: Build global maps
-    # -----------------------
-    # Load node files for targets (users) and diseases (items)
-    disease_nodes = pd.read_parquet(cfg.data.disease_nodes)
-    target_nodes = pd.read_parquet(cfg.data.target_nodes)
-
-    # Check overlap between disease_nodes and cold_start_diseases
-    disease_node_ids = set(disease_nodes["id"].astype(str).unique())
-    cold_start_set = set(cold_start_diseases)
-    overlap = disease_node_ids & cold_start_set
-    print(f"✅ Overlap between disease nodes and cold start diseases: {len(overlap)}")
-    print(f"❗️ Cold start diseases not in disease nodes: {cold_start_set - overlap}")
-    print(f"❗️ Disease nodes not in cold start diseases: {len(disease_node_ids - cold_start_set)}")
-
-    all_users = disease_nodes["id"].astype(str).unique()
-    all_items = target_nodes["id"].astype(str).unique()
-    print(f"✅ Loaded {len(all_users)} users (diseases) and {len(all_items)} items (targets)")
-
-    user_map = {u: idx for idx, u in enumerate(all_users)}
-    item_map = {i: idx for idx, i in enumerate(all_items)}
-
-    # Build all_interactions for exhaustive eval
-    all_interactions = {}
-    for df in [train_df, valid_df, test_df]:
-        for u, i in zip(df["user_id"].astype(str), df["item_id"].astype(str)):
-            uid = user_map[u]
-            iid = item_map[i]
-            all_interactions.setdefault(uid, set()).add(iid)
-
-
-    train_ds, valid_ds, test_ds = create_datasets(train_df, valid_df, test_df, user_map, item_map, all_interactions, cfg)
+    nodes, id_to_type = load_nodes("data/kg_output/nodes/")
+    edges = load_edges("data/kg_output/edges/")
+    # this include all evidence edges before cutoff
+    edges = edges[edges['year'] <= cfg.data.cutoff]
+    # TODO: based on datatype or datasource
+    edges = get_most_evidented_edges(edges)
+    print(edges.head(), "edges", edges.shape)
 
     # -----------------------
-    # Step 3: Build train interactions dict (for ranking exclusion)
+    # Step 3: Generate id_maps
     # -----------------------
-    train_interactions = {}
-    for u, i in zip(train_ds.user.tolist(), train_ds.item.tolist()):
-        train_interactions.setdefault(int(u), set()).add(int(i))
+    user_map = {nid: i for i, nid in enumerate(nodes["diseases"]["id"].astype(str).tolist())}
+    item_map = {nid: i for i, nid in enumerate(nodes["targets"]["id"].astype(str).tolist())}
+    print(f"✅ Built id_maps: {len(user_map)} diseases, {len(item_map)} targets")
+    all_interactions = build_all_interactions(train_df, user_map, item_map)
+    # -----------------------
+    # Step 4: Build hetero graph
+    # -----------------------
+    hetero_graph = build_heterodata_with_cold_split(nodes,
+                                                    edges, 
+                                                    train_df, 
+                                                    valid_df, 
+                                                    test_df, 
+                                                    cfg.data.cutoff, 
+                                                    cfg.data.horizon,
+                                                    supervision_source=cfg.model.supervision_src_type, 
+                                                    supervision_target=cfg.model.supervision_dst_type, 
+                                                    supervision_relation=cfg.model.supervision_relation_type)
+
+    print(hetero_graph)
+    print(hetero_graph.metadata())
 
     # -----------------------
-    # Step 4: Select model
+    # Step 5: Build datasets
     # -----------------------
-    pretrained_embeddings = None  # load here if you want to pass Word2Vec, etc.
-    hetero_data = None  # load here if using graph-based model
-    # add assert statement to ensure graph object is created under the same config as the training process
+    train_ds = InteractionDataset(train_df, user_map, item_map,
+                                  num_neg=cfg.train.num_neg, dynamic=True,
+                                  all_interactions=all_interactions)
+    valid_ds = InteractionDataset(valid_df, user_map, item_map,
+                                  exhaustive_eval=True,
+                                  all_interactions=all_interactions)
+    test_ds = InteractionDataset(test_df, user_map, item_map,
+                                 exhaustive_eval=True,
+                                 all_interactions=all_interactions)
+    # === Build loaders ===
+    if cfg.model.name == "ncf":
+        train_loader = train_ds.build_ncf_loader(batch_size=cfg.train.batch_size, shuffle=True)
+        valid_loader = valid_ds.build_ncf_loader(batch_size=cfg.train.batch_size, shuffle=False)
+        test_loader  = test_ds.build_ncf_loader(batch_size=cfg.train.batch_size, shuffle=False)
+        # TODO: integrate pretrained_embeddings
+        model = initialise_model(cfg, user_map=user_map, item_map=item_map)
 
-    model = initialise_model(cfg, user_map=user_map, item_map=item_map, hetero_data=hetero_data, pretrained_embeddings=pretrained_embeddings)
-
-    lightning_model = BaseRecLightning(
-        model,
-        lr=cfg.train.lr,
-        k=cfg.eval.topk,
-        train_interactions=train_interactions,
-        loss_type=cfg.model.loss_type,
-    )
-
+    else:  # Graph pipeline
+        train_loader = train_ds.build_graph_loader(hetero_graph, batch_size=cfg.train.batch_size, shuffle=True)
+        valid_loader = valid_ds.build_graph_loader(hetero_graph, batch_size=cfg.train.batch_size, shuffle=False)
+        test_loader  = test_ds.build_graph_loader(hetero_graph, batch_size=cfg.train.batch_size, shuffle=False)
+        # TODO: integrate pretrained_embeddings
     # -----------------------
     # Step 5: Dynamic monitor
     # -----------------------
-    if cfg.model.loss_type in ["mse", "bce"]:
-        monitor_metric, mode = "val_loss", "min"
-    else:  # ranking losses
-        monitor_metric, mode = f"val_{cfg.eval.valid_metric}", "max"
-
-    checkpoint_cb = ModelCheckpoint(
-        dirpath=run_dir,
-        filename="best_model",
-        save_top_k=1,
-        monitor=monitor_metric,
-        mode=mode,
-    )
-    earlystop_cb = EarlyStopping(monitor=monitor_metric, patience=3, mode=mode)
-
-    trainer = pl.Trainer(
-        max_epochs=cfg.train.epochs,
-        accelerator="auto",
-        devices=1,
-        default_root_dir=run_dir,
-        log_every_n_steps=10,
-        callbacks=[checkpoint_cb, earlystop_cb],
-    )
+    if cfg.model.name.lower() == "ncf":
+        lightning_model = NCFRecLightning(
+            model=model, lr=cfg.train.lr, k=cfg.eval.topk,
+            loss_type=cfg.model.loss_type,
+        )
+    else:  # graph-based
+        lightning_model = GraphRecLightning(
+            model=model, lr=cfg.train.lr, k=cfg.eval.topk,
+            loss_type=cfg.model.loss_type,
+        )
 
     # -----------------------
     # Step 6: Train
     # -----------------------
-
-    train_loader, valid_loader, test_loader = create_dataloaders(train_ds, valid_ds, test_ds, cfg)
+    trainer, checkpoint_cb = initialise_trainer(cfg, run_dir)
     trainer.fit(lightning_model, train_loader, valid_loader)
 
     # -----------------------
@@ -199,20 +141,22 @@ def main(cfg):
     best_model_path = checkpoint_cb.best_model_path
     print(f"✅ Best model saved at: {best_model_path}")
 
-    best_model = BaseRecLightning.load_from_checkpoint(
-        best_model_path,
-        model=model,
-        lr=cfg.train.lr,
-        k=cfg.eval.topk,
-        train_interactions=train_interactions,
-        loss_type=cfg.model.loss_type,
-    )
+    # best_model = trainer.load_from_checkpoint(
+    #     best_model_path,
+    #     model=model,
+    #     lr=cfg.train.lr,
+    #     k=cfg.eval.topk,
+    #     train_interactions=train_ds if cfg.model.name == "ncf" else None,
+    #     loss_type=cfg.model.loss_type,
+    # )
 
     # -----------------------
     # Step 8: Collect predictions
     # -----------------------
-    valid_preds = BaseRecLightning.serialise(best_model, valid_loader, run_dir, user_map, item_map, stage="val")
-    test_preds = BaseRecLightning.serialise(best_model, test_loader, run_dir, user_map, item_map, stage="test")
+    val_preds, val_users, val_items, val_labels = trainer.predict(best_model, valid_loader)
+    test_preds, test_users, test_items, test_labels = trainer.predict(best_model, test_loader)
+    trainer.serialise(val_preds, val_users, val_items, val_labels, run_dir, user_map, item_map, stage="val")
+    trainer.serialise(test_preds, test_users, test_items, test_labels, run_dir, user_map, item_map, stage="test")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -20,6 +20,9 @@ model:
   embed_dim: 64
   loss_type: bpr   # [bce, mse, bpr]
   num_neg: 5
+  supervision_src_type: diseases
+  supervision_dst_type: targets
+  supervision_relation_type: clinical_trial
 
 # ========================
 # Training settings
@@ -28,6 +31,8 @@ train:
   epochs: 1
   batch_size: 256
   lr: 1e-3
+  seed: 42
+  num_neg: 1
 
 # ========================
 # Evaluation settings

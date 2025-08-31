@@ -3,12 +3,12 @@ set -euo pipefail
 
 source .venv/bin/activate
 
-EDGE_DIR="kg_output/edges"
-NODE_DIR="kg_output/nodes"
-CUTOFF=2010
+EDGE_DIR="data/kg_output/edges"
+NODE_DIR="data/kg_output/nodes"
+CUTOFF=2015
 TEST_HORIZON=5
 RELATION_MODE="datatype"
-OUT="kg_output/hetero_graph_${CUTOFF}_${TEST_HORIZON}.pt"
+OUT="data/kg_output/hetero_graph_${CUTOFF}_${TEST_HORIZON}.pt"
 
 echo "🚀 Building PyG HeteroData..."
 python -m src.pipeline.build_hetero_graph \
@@ -18,4 +18,3 @@ python -m src.pipeline.build_hetero_graph \
   --test-horizon "$TEST_HORIZON" \
   --relation-mode "$RELATION_MODE" \
   --out "$OUT"
-echo "✅ HeteroData saved to $OUT"

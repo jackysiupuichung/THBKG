@@ -6,7 +6,7 @@ from glob import glob
 import traceback
 
 
-REQUIRED_EDGE_COLS = ["source", "target", "relation", "datasourceId", "score", "year"]
+REQUIRED_EDGE_COLS = ["source", "target", "source_type", "target_type", "relation", "datasourceId", "score", "year"]
 YEAR_PRIORITY = ["curationYear", "studyYear", "publicationYear", "studyStartDate"]
 
 
