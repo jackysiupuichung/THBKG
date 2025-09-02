@@ -57,7 +57,8 @@ class InteractionDataset(Dataset):
         if self.exhaustive_eval:
             self._build_exhaustive_samples()
         else:
-            self.resample()
+            # self.resample()
+            print("resample is done at start of epoch")
 
         print("✅ InteractionDataset built:", self.dataset_description())
 

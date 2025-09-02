@@ -119,8 +119,8 @@ def main(cfg):
         out_dir=run_dir
     )
 
-    nodes, id_to_type = load_nodes("data/kg_output/nodes/")
-    edges = load_edges("data/kg_output/edges/")
+    nodes, id_to_type = load_nodes(cfg.data.node_dir)
+    edges = load_edges(cfg.data.edge_dir)
     # this include all evidence edges before cutoff
     edges = edges[edges['year'] <= cfg.data.cutoff]
     # TODO: based on datatype or datasource
@@ -139,16 +139,28 @@ def main(cfg):
     # -----------------------
     # Step 4: Build hetero graph
     # -----------------------
-    hetero_graph = build_heterodata_with_cold_split(nodes,
-                                                    edges, 
-                                                    train_df, 
-                                                    valid_df, 
-                                                    test_df, 
-                                                    cfg.data.cutoff, 
-                                                    cfg.data.horizon,
-                                                    supervision_source=cfg.model.supervision_src_type, 
-                                                    supervision_target=cfg.model.supervision_dst_type, 
-                                                    supervision_relation=cfg.model.supervision_relation_type)
+    hetero_graph = None
+    if getattr(cfg.data, "graph_file", None) and os.path.exists(cfg.data.graph_file):
+        print(f"✅ Loading precomputed hetero graph from {cfg.data.graph_file}")
+        hetero_graph = torch.load(cfg.data.graph_file)
+    else:
+        print("⚙️ Building hetero graph from nodes/edges...")
+        hetero_graph = build_heterodata_with_cold_split(
+            nodes,
+            edges, 
+            train_df, 
+            valid_df, 
+            test_df, 
+            cfg.data.cutoff, 
+            cfg.data.horizon,
+            supervision_source=cfg.model.supervision_src_type, 
+            supervision_target=cfg.model.supervision_dst_type, 
+            supervision_relation=cfg.model.supervision_relation_type
+        )
+        # Save for reuse
+        if getattr(cfg.data, "graph_file", None):
+            torch.save(hetero_graph, cfg.data.graph_file)
+            print(f"💾 Hetero graph saved to {cfg.data.graph_file}")
 
     print(hetero_graph)
     print(hetero_graph.metadata())
@@ -156,6 +168,7 @@ def main(cfg):
     # -----------------------
     # Step 5: Build datasets
     # -----------------------
+    print("✅ Building datasets...")
     train_ds = InteractionDataset(train_df, user_map, item_map,
                                   num_neg=cfg.train.num_neg, dynamic=True,
                                   all_interactions=all_interactions)
