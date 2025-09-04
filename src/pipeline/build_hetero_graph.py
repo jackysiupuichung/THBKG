@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from torch_geometric.data import HeteroData
 
+
 from src import data
 
 
@@ -67,7 +68,6 @@ def get_most_evidented_edges(edges, relation_mode="datatype"):
     return edges
 
 
-
 def temporal_split(edges, cutoff, test_horizon=5):
     """
     Split into:
@@ -83,59 +83,57 @@ def temporal_split(edges, cutoff, test_horizon=5):
 
 
 
-def build_heterodata(nodes, train_edges, test_edges, user_map, item_map):
-    """
-    Build a PyG HeteroData object from nodes and train/test edges.
-    Expects edge DataFrames to include: source, target, relation, source_type, target_type.
-    """
-    data = HeteroData()
+# def build_heterodata(nodes, train_edges, test_edges, user_map, item_map):
+#     """
+#     Build a PyG HeteroData object from nodes and train/test edges.
+#     Expects edge DataFrames to include: source, target, relation, source_type, target_type.
+#     """
+#     data = HeteroData()
 
-    # === Nodes ===
-    id_maps = {}
-    for node_type, node_df in nodes.items():
-        if node_type == "diseases" and user_map:
-            id_map = user_map
-        elif node_type == "targets" and item_map:
-            id_map = item_map
-        else:
-            ids = node_df["id"].astype(str).tolist()
-            id_map = {nid: i for i, nid in enumerate(ids)}
-        id_maps[node_type] = id_map
-        node_df["mapped_id"] = node_df["id"].map(id_map)
-        nodes[node_type] = node_df
-        data[node_type].num_nodes = len(node_df)
+#     # === Nodes ===
+#     id_maps = {}
+#     for node_type, node_df in nodes.items():
+#         if node_type == "diseases" and user_map:
+#             id_map = user_map
+#         elif node_type == "targets" and item_map:
+#             id_map = item_map
+#         else:
+#             ids = node_df["id"].astype(str).tolist()
+#             id_map = {nid: i for i, nid in enumerate(ids)}
+#         id_maps[node_type] = id_map
+#         node_df["mapped_id"] = node_df["id"].map(id_map)
+#         nodes[node_type] = node_df
+#         data[node_type].num_nodes = len(node_df)
 
-    # === Edges ===
-    for split_name, edge_df in [("train", train_edges), ("test", test_edges)]:
-        for (src_type, rel_name, dst_type), group in edge_df.groupby(
-            ["source_type", "rel_key", "target_type"]
-        ):
-            # map IDs to integer indices
-            src_ids = [id_maps[src_type][s] for s in group["source"].astype(str)]
-            dst_ids = [id_maps[dst_type][t] for t in group["target"].astype(str)]
-            edge_index = torch.tensor([src_ids, dst_ids], dtype=torch.long)
+#     # === Edges ===
+#     for split_name, edge_df in [("train", train_edges), ("test", test_edges)]:
+#         for (src_type, rel_name, dst_type), group in edge_df.groupby(
+#             ["source_type", "rel_key", "target_type"]
+#         ):
+#             # map IDs to integer indices
+#             src_ids = [id_maps[src_type][s] for s in group["source"].astype(str)]
+#             dst_ids = [id_maps[dst_type][t] for t in group["target"].astype(str)]
+#             edge_index = torch.tensor([src_ids, dst_ids], dtype=torch.long)
 
-            # add to heterodata
-            data[(src_type, rel_name, dst_type)].edge_index = edge_index
+#             # add to heterodata
+#             data[(src_type, rel_name, dst_type)].edge_index = edge_index
 
-            # add score if available
-            if "score" in group.columns:
-                data[(src_type, rel_name, dst_type)].edge_score = torch.tensor(
-                    group["score"].values, dtype=torch.float
-                )
+#             # add score if available
+#             if "score" in group.columns:
+#                 data[(src_type, rel_name, dst_type)].edge_score = torch.tensor(
+#                     group["score"].values, dtype=torch.float
+#                 )
 
-            # add split mask
-            if split_name == "train":
-                data[(src_type, rel_name, dst_type)].train_mask = torch.ones(edge_index.size(1), dtype=torch.bool)
-                data[(src_type, rel_name, dst_type)].test_mask = torch.zeros(edge_index.size(1), dtype=torch.bool)
-            else:
-                data[(src_type, rel_name, dst_type)].train_mask = torch.zeros(edge_index.size(1), dtype=torch.bool)
-                data[(src_type, rel_name, dst_type)].test_mask = torch.ones(edge_index.size(1), dtype=torch.bool)
+#             # add split mask
+#             if split_name == "train":
+#                 data[(src_type, rel_name, dst_type)].train_mask = torch.ones(edge_index.size(1), dtype=torch.bool)
+#                 data[(src_type, rel_name, dst_type)].test_mask = torch.zeros(edge_index.size(1), dtype=torch.bool)
+#             else:
+#                 data[(src_type, rel_name, dst_type)].train_mask = torch.zeros(edge_index.size(1), dtype=torch.bool)
+#                 data[(src_type, rel_name, dst_type)].test_mask = torch.ones(edge_index.size(1), dtype=torch.bool)
 
-    return data
+#     return data
 
-from torch_geometric.data import HeteroData
-import torch
 
 def build_heterodata_with_cold_split(
     nodes, all_edges, train_df, valid_df, test_df, cutoff: int, horizon: int = 5,
@@ -205,7 +203,7 @@ def build_heterodata_with_cold_split(
 
         if key not in data.edge_types:
             data[key].edge_index = edge_index
-            data[key].edge_score = torch.tensor(df["label"].values, dtype=torch.float)
+            data[key].edge_attr = torch.tensor(df["label"].values, dtype=torch.float)
 
             # initialise masks
             data[key].train_mask = torch.zeros(edge_index.size(1), dtype=torch.bool)
@@ -214,10 +212,10 @@ def build_heterodata_with_cold_split(
         else:
             # append new edges
             old_ei = data[key].edge_index
-            old_score = data[key].edge_score
+            old_attr = data[key].edge_attr
             data[key].edge_index = torch.cat([old_ei, edge_index], dim=1)
-            data[key].edge_score = torch.cat(
-                [old_score, torch.tensor(df["label"].values, dtype=torch.float)]
+            data[key].edge_attr = torch.cat(
+                [old_attr, torch.tensor(df["label"].values, dtype=torch.float)]
             )
 
             # extend masks
@@ -245,11 +243,11 @@ def build_heterodata_with_cold_split(
         edge_index = torch.tensor([src_ids, dst_ids], dtype=torch.long)
         data[(src_type, rel_name, dst_type)].edge_index = edge_index
         if "score" in group.columns:
-            data[(src_type, rel_name, dst_type)].edge_score = torch.tensor(
+            data[(src_type, rel_name, dst_type)].edge_attr = torch.tensor(
                 group["score"].values, dtype=torch.float
             )
 
-    return data
+    return data, id_maps
 
 
 

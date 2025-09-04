@@ -2,8 +2,6 @@ import os
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from torch.nn.utils.rnn import pad_sequence
-
 
 from src.models.ncf import NCF
 from src.models.hetgatv2 import HetGATv2
@@ -23,7 +21,7 @@ def _infer_node_dims(hetero_data):
     return node_in_dims, num_nodes
 
 
-def initialise_model(cfg, user_map, item_map, hetero_data=None, pretrained_embeddings=None):
+def initialise_model(cfg, user_map, item_map, hetero_data=None):
     """
     Initialise the recommender model.
 
@@ -32,7 +30,6 @@ def initialise_model(cfg, user_map, item_map, hetero_data=None, pretrained_embed
         user_map: dict {user_id -> index}, built from ALL disease nodes
         item_map: dict {item_id -> index}, built from ALL target nodes
         hetero_data: PyG HeteroData (for graph models)
-        pretrained_embeddings: optional dict with pretrained embeddings per node type
 
     Returns:
         model (torch.nn.Module)
@@ -47,12 +44,16 @@ def initialise_model(cfg, user_map, item_map, hetero_data=None, pretrained_embed
         num_users = len(user_map)
         num_items = len(item_map)
 
+        # pull embeddings directly from hetero graph
+        user_emb = hetero_data["diseases"].x if "diseases" in hetero_data.node_types else None
+        item_emb = hetero_data["targets"].x if "targets" in hetero_data.node_types else None
+
         return NCF(
             num_users=num_users,
             num_items=num_items,
             embed_dim=cfg.model.embed_dim,
-            user_emb=pretrained_embeddings.get("user") if pretrained_embeddings else None,
-            item_emb=pretrained_embeddings.get("item") if pretrained_embeddings else None,
+            user_emb=user_emb,
+            item_emb=item_emb,
         )
 
     # --------------------
@@ -63,21 +64,19 @@ def initialise_model(cfg, user_map, item_map, hetero_data=None, pretrained_embed
             raise ValueError("Graph model requires hetero_data")
 
         metadata = hetero_data.metadata()
-        _, num_nodes = _infer_node_dims(hetero_data)
 
-        return HetGATv2(
-            metadata=metadata,
+        model = HetGATv2(
+            hetero_data=hetero_data,
             hidden_dim=cfg.model.hidden_dim,
             num_layers=cfg.model.num_layers,
             heads=cfg.model.heads,
-            num_nodes=num_nodes,
-            embedding_dim=getattr(cfg.model, "embedding_dim", cfg.model.hidden_dim),
-            pretrained_embeddings=pretrained_embeddings,
             pair_src_type=cfg.model.supervision_src_type,
             pair_dst_type=cfg.model.supervision_dst_type,
             pair_mlp_hidden=cfg.model.mlp_hidden,
             dropout=cfg.model.dropout,
         )
+        
+        return model
 
     # --------------------
     # Temporal HetGAT
@@ -143,5 +142,3 @@ def initialise_trainer(cfg, run_dir):
 
 def collate_variable(batch):
     return {k: torch.stack([d[k] for d in batch]) for k in batch[0]}
-
-

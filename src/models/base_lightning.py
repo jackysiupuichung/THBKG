@@ -144,51 +144,109 @@ class NCFRecLightning(BaseRecLightning):
 # Graph Wrapper
 # -----------------------
 class GraphRecLightning(BaseRecLightning):
-    def forward(self, batch):
+    def __init__(self, model, lr=1e-3,
+                 supervision_src_type=None,
+                 supervision_relation_type=None,
+                 supervision_dst_type=None,
+                 k=[10, 50],
+                 **kwargs):
+        super().__init__(model, lr=lr, k=k, **kwargs)
+
+        self.supervision_etype = (
+            supervision_src_type,
+            supervision_relation_type,
+            supervision_dst_type,
+        )
+        self.val_outputs = []
+        self.test_outputs = []
+
+    # -----------------------
+    # Helpers
+    # -----------------------
+    def _parse_batch(self, batch):
+        etype = self.supervision_etype
         x_dict = batch.x_dict
         edge_index_dict = batch.edge_index_dict
-        src_ids, dst_ids = batch.edge_label_index
-        return self.model(x_dict, edge_index_dict, pairs=(src_ids, dst_ids))
 
+        # ✅ Build edge_attr_dict safely
+        edge_attr_dict = {
+            et: batch[et].edge_attr
+            for et in batch.edge_types
+            if hasattr(batch[et], "edge_attr")
+        }
+        print(f"[DEBUG] edge_attr_dict keys: {list(edge_attr_dict.keys())}")
+
+        # ✅ Ensure all node types have features, else error
+        for ntype in batch.node_types:
+            if ntype not in x_dict or x_dict[ntype] is None:
+                print(f"[ERROR] Missing features for node type '{ntype}'")
+                raise ValueError(
+                    f"❌ Missing features for node type '{ntype}'. "
+                    f"Expected batch['{ntype}'].x to exist."
+                )
+            else:
+                print(f"[DEBUG] Features found for node type '{ntype}', shape: {x_dict[ntype].shape}")
+
+        src_ids, dst_ids = batch[etype].edge_label_index
+        labels = batch[etype].edge_label.float()
+        print(f"[DEBUG] src_ids shape: {src_ids.shape}, dst_ids shape: {dst_ids.shape}, labels shape: {labels.shape}")
+        return x_dict, edge_index_dict, edge_attr_dict, (src_ids, dst_ids), labels
+
+    # -----------------------
+    # Forward
+    # -----------------------
+    def forward(self, batch):
+        x_dict, edge_index_dict, edge_attr_dict, pairs, _ = self._parse_batch(batch)
+        return self.model(x_dict, edge_index_dict, pairs=pairs, edge_attr_dict=edge_attr_dict)
+
+    # -----------------------
+    # Training
+    # -----------------------
     def training_step(self, batch, batch_idx):
         preds = self(batch).squeeze()
-        labels = batch.edge_label.float()
+        _, _, _, _, labels = self._parse_batch(batch)
         loss = self._compute_loss(preds, labels)
         self.log("train_loss", loss, prog_bar=True)
         return loss
 
+    # -----------------------
+    # Validation
+    # -----------------------
     def validation_step(self, batch, batch_idx):
         preds = self(batch).squeeze()
-        labels = batch.edge_label.float()
+        _, _, _, pairs, labels = self._parse_batch(batch)
         loss = self._compute_loss(preds, labels)
         self.log("val_loss", loss, prog_bar=True, on_epoch=True)
         self.val_outputs.append(
-            {"user": batch.edge_label_index[0].cpu(), "item": batch.edge_label_index[1].cpu(), "label": labels.cpu()}
+            {"user": pairs[0].cpu(), "item": pairs[1].cpu(), "label": labels.cpu()}
         )
         return loss
 
+    # -----------------------
+    # Test
+    # -----------------------
     def test_step(self, batch, batch_idx):
+        _, _, _, pairs, labels = self._parse_batch(batch)
         self.test_outputs.append(
-            {"user": batch.edge_label_index[0].cpu(), "item": batch.edge_label_index[1].cpu(), "label": batch.edge_label.cpu()}
+            {"user": pairs[0].cpu(), "item": pairs[1].cpu(), "label": labels.cpu()}
         )
 
+    # -----------------------
+    # Prediction
+    # -----------------------
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        """Called by trainer.predict"""
         batch = batch.to(self.device)
         return self(batch).squeeze()
 
+    # -----------------------
+    # Epoch End Hooks
+    # -----------------------
     def on_validation_epoch_end(self):
         num_items = self.model.embeddings[self.model.pair_dst_type].num_embeddings
-        self._ranking_eval(
-            self.val_outputs, stage="val", num_items=num_items,
-            forward_fn=lambda u, i: self.model(self.model.embeddings, self.model.convs[0].convs, pairs=(u, i))
-        )
+        self._ranking_eval(self.val_outputs, stage="val", num_items=num_items, forward_fn=self.forward)
         self.val_outputs.clear()
 
     def on_test_epoch_end(self):
         num_items = self.model.embeddings[self.model.pair_dst_type].num_embeddings
-        self._ranking_eval(
-            self.test_outputs, stage="test", num_items=num_items,
-            forward_fn=lambda u, i: self.model(self.model.embeddings, self.model.convs[0].convs, pairs=(u, i))
-        )
+        self._ranking_eval(self.test_outputs, stage="test", num_items=num_items, forward_fn=self.forward)
         self.test_outputs.clear()

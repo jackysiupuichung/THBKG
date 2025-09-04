@@ -9,7 +9,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from omegaconf import OmegaConf
 
 
-from src.data.split import supervision_edge_temporal_and_cold_split
+from src.data.utils import supervision_edge_temporal_and_cold_split, attach_node_features
 from src.pipeline.build_hetero_graph import load_nodes, load_edges, get_most_evidented_edges, build_heterodata_with_cold_split
 from src.data.dataset import InteractionDataset
 from src.models.base_lightning import NCFRecLightning, GraphRecLightning
@@ -126,9 +126,6 @@ def main(cfg):
     # TODO: based on datatype or datasource
     edges = get_most_evidented_edges(edges)
 
-    # TODO: create pretrained_embeddings
-    pretrained_embeddings = None
-
     # -----------------------
     # Step 3: Generate id_maps
     # -----------------------
@@ -143,10 +140,11 @@ def main(cfg):
     hetero_graph = None
     if getattr(cfg.data, "graph_file", None) and os.path.exists(cfg.data.graph_file):
         print(f"✅ Loading precomputed hetero graph from {cfg.data.graph_file}")
-        hetero_graph = torch.load(cfg.data.graph_file)
+        hetero_graph, id_maps = torch.load(cfg.data.graph_file, weights_only=False)
+
     else:
         print("⚙️ Building hetero graph from nodes/edges...")
-        hetero_graph = build_heterodata_with_cold_split(
+        hetero_graph, id_maps = build_heterodata_with_cold_split(
             nodes,
             edges, 
             train_df, 
@@ -161,40 +159,90 @@ def main(cfg):
         # Save for reuse
         if getattr(cfg.data, "graph_file", None):
             os.makedirs(os.path.dirname(cfg.data.graph_file), exist_ok=True)
-            torch.save(hetero_graph, cfg.data.graph_file)
+            torch.save((hetero_graph, id_maps), cfg.data.graph_file)
             print(f"💾 Hetero graph saved to {cfg.data.graph_file}")
 
     print(hetero_graph)
     print(hetero_graph.metadata())
+    
+    print("id_maps:")
+    for k, v in id_maps.items():
+        print(f"  {k}: {len(v)} entries")
+        if len(v) <= 10:
+            print(f"    {v}")
+        else:
+            print(f"    First 5: {dict(list(v.items())[:5])}")
+    
+    # -----------------------
+    # Step 4.5: incorporate node features
+    # -----------------------
+    
+    hetero_graph = attach_node_features(
+        hetero_graph,
+        id_maps,
+        embeddings=None,  # could be path to precomputed embeddings
+        emb_dim=cfg.model.embedding_dim
+    )
+    
+    print("🔎 Node feature dimensions per node type:")
+    for node_type in hetero_graph.node_types:
+        x = hetero_graph[node_type].x
+        print(f"  {node_type}: {x.shape if x is not None else 'No features'}")
+    
 
     # -----------------------
     # Step 5: Build datasets
     # -----------------------
     print("✅ Building datasets...")
-    print(train_df.head())
     train_ds = InteractionDataset(train_df, user_map, item_map,
                                   num_neg=cfg.train.num_neg, dynamic=True,
                                   all_interactions=train_interactions)
+    print(f"   - train: {len(train_ds)} samples ({len(train_df)} positive)")
     valid_ds = InteractionDataset(valid_df, user_map, item_map,
                                  exhaustive_eval=False, num_eval_negs=cfg.eval.num_eval_negs,
                                  all_interactions=train_interactions)
+    print(f"   - valid: {len(valid_ds)} samples ({len(valid_df)} positive)")
     test_ds = InteractionDataset(test_df, user_map, item_map,
                                  exhaustive_eval=True,
                                  all_interactions=train_interactions)
+    print(f"   - test:  {len(test_ds)} samples ({len(test_df)} positive)")
     # === Build loaders ===
     if cfg.model.name == "ncf":
         train_loader = train_ds.build_ncf_loader(batch_size=cfg.train.batch_size, shuffle=True)
         valid_loader = valid_ds.build_ncf_loader(batch_size=cfg.train.batch_size, shuffle=False)
         test_loader  = test_ds.build_ncf_loader(batch_size=cfg.train.batch_size, shuffle=False)
-        # TODO: integrate pretrained_embeddings
-        model = initialise_model(cfg, user_map=user_map, item_map=item_map, pretrained_embeddings=pretrained_embeddings)
 
     else:  # Graph pipeline
         train_loader = train_ds.build_graph_loader(hetero_graph, batch_size=cfg.train.batch_size, shuffle=True)
         valid_loader = valid_ds.build_graph_loader(hetero_graph, batch_size=cfg.train.batch_size, shuffle=False)
         test_loader  = test_ds.build_graph_loader(hetero_graph, batch_size=cfg.train.batch_size, shuffle=False)
-        model = initialise_model(cfg, user_map=user_map, item_map=item_map, hetero_data=hetero_graph, pretrained_embeddings=pretrained_embeddings)
-        # TODO: integrate pretrained_embeddings
+        
+    # === Sanity check on one batch per loader ===
+    def check_loader(loader, name, etype):
+        batch = next(iter(loader))
+        assert hasattr(batch, "x_dict"), f"{name} missing x_dict"
+        assert hasattr(batch, "edge_index_dict"), f"{name} missing edge_index_dict"
+        assert etype in batch.edge_types, f"{name} missing edge type {etype}"
+        assert hasattr(batch[etype], "edge_label_index"), f"{name} batch missing edge_label_index"
+        assert hasattr(batch[etype], "edge_label"), f"{name} batch missing edge_label"
+        print(f"✅ {name} loader check passed: {etype}, "
+            f"{batch[etype].edge_label_index.shape[1]} supervision pairs")
+
+    supervision_etype = (
+        cfg.model.supervision_src_type,
+        cfg.model.supervision_relation_type,
+        cfg.model.supervision_dst_type,
+    )
+
+    check_loader(train_loader, "Train", supervision_etype)
+    check_loader(valid_loader, "Valid", supervision_etype)
+    check_loader(test_loader, "Test", supervision_etype)
+        
+    model = initialise_model(cfg, user_map=user_map, item_map=item_map, hetero_data=hetero_graph)
+    
+    # print("Trainable params:", sum(p.numel() for p in model.parameters() if p.requires_grad))
+    # for name, p in model.named_parameters():
+    #     print(name, p.shape, p.requires_grad)
     # -----------------------
     # Step 5: Dynamic monitor
     # -----------------------
@@ -205,7 +253,11 @@ def main(cfg):
         )
     else:  # graph-based
         lightning_model = GraphRecLightning(
-            model=model, lr=cfg.train.lr, k=cfg.eval.topk,
+            model=model, lr=cfg.train.lr,
+            supervision_src_type=cfg.model.supervision_src_type,
+            supervision_relation_type=cfg.model.supervision_relation_type,
+            supervision_dst_type=cfg.model.supervision_dst_type,
+            k=cfg.eval.topk,
             loss_type=cfg.model.loss_type,
         )
 
