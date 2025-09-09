@@ -231,8 +231,6 @@ class EdgeParser(BaseParser):
                     expanded_edges.append(self._add_props(edge, row, props))
 
                 out = pd.DataFrame(expanded_edges)
-                # if "year" not in out.columns:
-                #     out["year"] = 0
                 return out
 
         # === Case 2: Nested dict expansion (e.g. pathways.id) ===
@@ -267,19 +265,30 @@ class EdgeParser(BaseParser):
                 for t in tgts:
                     if not t:
                         continue
-                    edge = {
-                        "source": row[src_col],
-                        "target": t,
-                        "relation": row[relation_value] if relation_is_column else relation_value,
-                    }
-                    expanded_edges.append(self._add_props(edge, row, props))
 
-            out = pd.DataFrame(expanded_edges)
-            # if "year" not in out.columns:
-            #     out["year"] = 0
-            return out
+                    # --- Case 3a: plain values (string, int, etc.)
+                    if not isinstance(t, dict):
+                        edge = {
+                            "source": row[src_col],
+                            "target": t,
+                            "relation": row[relation_value] if relation_is_column else relation_value,
+                        }
+                        expanded_edges.append(self._add_props(edge, row, props))
+
+                    # --- Case 3b: dict with "id" (GO-style annotations)
+                    elif "id" in t:
+                        edge = {
+                            "source": row[src_col],
+                            "target": t["id"],
+                            "relation": row[relation_value] if relation_is_column else relation_value,
+                        }
+                        expanded_edges.append(self._add_props(edge, row, props))
+            if expanded_edges:
+                return pd.DataFrame(expanded_edges)
 
         raise ValueError(f"Unsupported target {tgt_col} for {name}")
+    
+
 
 
     def output_name(self, name, spec):

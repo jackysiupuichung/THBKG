@@ -33,3 +33,15 @@ diseases:
     source_type=constant:diseases,
     target_type=constant:diseases
   ]
+
+targets:
+  source: id
+  target: go
+  relation_name: gene_ontology_annotation
+  props: [
+    id,
+    datasourceId=constant:gene_ontology,
+    score=constant:1.0,
+    source_type=constant:targets,
+    target_type=constant:go
+  ]
