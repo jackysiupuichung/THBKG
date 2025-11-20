@@ -15,20 +15,24 @@ Useful GitHub links:
 import datetime
 import os
 import time
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
 from datetime import timedelta
-
-from pyspark.sql import functions as F
-from pyspark.sql import SparkSession, Window
-from pyspark.sql import types as T
 
 
 # ----------------------------------------
 # CONFIGURATION
 # ----------------------------------------
 EDGE_DIR = "data/kg_output/edges"
+OUT_DIR = "data/progression_graph"
+DATASOURCE_HARMONIC_NOVELTY_FILE = f"{OUT_DIR}/datasource_harmonic_novelty.parquet"
+DATATYPE_HARMONIC_NOVELTY_FILE = f"{OUT_DIR}/datatype_harmonic_novelty.parquet"
+os.makedirs(OUT_DIR, exist_ok=True)
 
-FIRST_YEAR = 1995
+FIRST_YEAR = 2010
 LAST_YEAR = 2025
+YEARS = np.arange(FIRST_YEAR, LAST_YEAR + 1)
 MAX_HARMONIC = 1.644  # theoretical max sum of 1/i^2
 
 # novelty settings
@@ -36,7 +40,7 @@ NOVELTY_SCALE = 2     # logistic steepness
 NOVELTY_SHIFT = 2     # midpoint
 NOVELTY_WINDOW = 10   # years after peak to decay
 
-data_source = [
+data_sources = [
     {
         "id": "gwas_credible_sets",
         "sectionId": "gwasCredibleSets",
@@ -299,217 +303,171 @@ data_source = [
     # },
 ]
 
-DATA_SOURCE = {
+DATA_SOURCES = {
     ds["id"]: {
         "datatype": ds["aggregationId"],
         "weight": float(ds["weight"]),
     }
-    for ds in data_source
+    for ds in data_sources
 }
 
-spark = SparkSession.builder \
-    .appName("OT-Lightweight-Timeseries") \
-    .getOrCreate()
-
-# ============================================================================
-# 1. LOAD ALL DYNAMIC EVIDENCE (sourceId, targetId, score, year)
-# ============================================================================
+# ----------------------------------------------------
+# 1. LOAD ALL DYNAMIC EVIDENCE
+# ----------------------------------------------------
 def load_dynamic_evidence():
     dfs = []
     for fname in os.listdir(EDGE_DIR):
-        if not fname.endswith(".parquet"):
-            continue
+        if fname.startswith("sourceId=") and fname.endswith(".parquet"):
+            datasource = fname.replace("sourceId=", "").replace(".parquet", "")
+            df = pd.read_parquet(f"{EDGE_DIR}/{fname}")
 
-        datasourceId = fname.replace("sourceId=", "").replace(".parquet", "")
+            df["datasourceId"] = datasource
+            df["year"] = df["year"].astype(int)
 
-        df = (
-            spark.read.parquet(os.path.join(EDGE_DIR, fname))
-            .withColumn("datasourceId", F.lit(datasourceId))
-            .withColumn("year", F.col("year").cast("integer"))
-            .select("sourceId", "targetId", "datasourceId", "score", "year")
-        )
-        dfs.append(df)
+            dfs.append(df[["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]])
 
-    full = dfs[0].unionByName(*dfs[1:])
-    return full.persist()
+    print(f"Loaded {len(dfs)} data sources")
+    return pd.concat(dfs, ignore_index=True)
 
 
-# ============================================================================
-# 2. DATASOURCE-LEVEL HARMONIC SCORE (per year)
-# ============================================================================
+# ----------------------------------------------------
+# UTILITY: harmonic sum of top-50 scores
+# these are based on the implementation in https://github.com/opentargets/timeseries/blob/main/timeseries.py#L449
+# ----------------------------------------------------
+def harmonic_sum(scores):
+    if len(scores) == 0:
+        return 0.0
+
+    s = np.sort(scores)[::-1][:50]  # top 50 descending
+    idx = np.arange(1, len(s) + 1)
+    return np.sum(s / (idx ** 2)) / MAX_HARMONIC
+
+def _compute_novelty(group, score_col):
+    years = group["year"].values
+    scores = group[score_col].values
+
+    diffs = np.diff(scores, prepend=0)
+    peak_years = years[diffs > 0]
+    peaks = diffs[diffs > 0]
+
+    novelty_map = {}
+
+    for py, pv in zip(peak_years, peaks):
+        for t in range(py, py + NOVELTY_WINDOW + 1):
+            nv = pv / (1 + np.exp(NOVELTY_SCALE * (t - py - NOVELTY_SHIFT)))
+            novelty_map[t] = max(nv, novelty_map.get(t, 0))
+
+    result = []
+    for _, row in group.iterrows():
+        y = row["year"]
+        result.append(list(row.values) + [novelty_map.get(y, 0.0)])
+
+    return result
+
+
+# ----------------------------------------------------
+# 2. DATASOURCE-LEVEL HARMONIC SCORE
+# ----------------------------------------------------
 def harmonic_by_datasource(evd):
-    # define complete year range
-    years = spark.createDataFrame([(y,) for y in range(FIRST_YEAR, LAST_YEAR + 1)], ["year"])
+    rows = []
 
-    # Cartesian join ensures all combinations exist
-    grid = (
-        evd.select("datasourceId").distinct()
-        .crossJoin(years)
-        .crossJoin(evd.select("sourceId", "targetId").distinct())
-    )
+    grouped = evd.groupby(["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId"])
 
-    df = (
-        grid.join(evd, ["sourceId","targetId","datasourceId","year"], "left")
-           .fillna(0, subset=["score"])
-    )
+    for (src, tgt, src_type, tgt_type, rel, ds), group in tqdm(grouped, desc="Datasource harmonic"):
+        # group scores by year
+        year_dict = group.groupby("year")["score"].apply(list).to_dict()
 
-    w = (
-        Window.partitionBy("sourceId","targetId","datasourceId")
-              .orderBy("year")
-              .rangeBetween(Window.unboundedPreceding, 0)
-    )
+        collected = []
+        for y in YEARS:
+            if y in year_dict:
+                collected.extend(year_dict[y])
+            hs = harmonic_sum(collected)
+            rows.append([src, tgt, src_type, tgt_type, rel, ds, y, hs])
 
-    out = (
-        df.groupBy("sourceId","targetId","datasourceId","year")
-          .agg(F.collect_list("score").alias("scores_year"))
-          .withColumn("cum", F.flatten(F.collect_list("scores_year").over(w)))
-          .withColumn("clean", F.expr("filter(cum, x -> x > 0)"))
-          .withColumn("sorted", F.reverse(F.array_sort("clean")))
-          .withColumn("top", F.expr("slice(sorted, 1, 50)"))
-          .withColumn("idx", F.sequence(F.lit(1), F.size("top")))
-          .withColumn("wts",
-              F.expr("transform(arrays_zip(top,idx), x -> x.top / pow(x.idx,2))"))
-          .withColumn("hs", F.expr("aggregate(wts, 0D, (acc,x)->acc+x)"))
-          .withColumn("harmonic_score", F.col("hs") / F.lit(MAX_HARMONIC))
-          .select("sourceId","targetId","datasourceId","year","harmonic_score")
-    )
-    return out.persist()
+    return pd.DataFrame(rows, columns=[
+        "sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "year", "datasource_score"
+    ])
 
 
-# ============================================================================
+# ----------------------------------------------------
 # 3. DATASOURCE-LEVEL NOVELTY
-# ============================================================================
-def novelty_by_datasource(hs_df):
-    w = Window.partitionBy("sourceId","targetId","datasourceId").orderBy("year")
+# ----------------------------------------------------
+def novelty_by_datasource(df):
+    rows = []
+    grouped = df.groupby(["sourceId", "targetId", "source_type",
+                          "target_type", "relation", "datasourceId"])
 
-    # detect score increases
-    peaks = (
-        hs_df.fillna(0, subset=["harmonic_score"])
-            .select(
-                "sourceId","targetId","datasourceId",
-                F.col("year").alias("peakYear"),
-                (F.col("harmonic_score") -
-                 F.lag("harmonic_score",1).over(w)).alias("peak")
-            )
-            .filter("peak > 0")
-    )
+    for _, group in tqdm(grouped, desc="Datasource novelty"):
+        group = group.sort_values("year")
+        rows.extend(_compute_novelty(group, "datasource_score"))
 
-    expanded = (
-        peaks.select(
-            "*",
-            F.posexplode(
-                F.sequence(F.col("peakYear"), F.col("peakYear")+F.lit(NOVELTY_WINDOW))
-            ).alias("ix","year")
-        ).drop("ix")
-    )
-
-    novelty = (
-        expanded.groupBy("sourceId","targetId","datasourceId","year")
-            .agg(F.max(
-                F.col("peak") /
-                (1 + F.exp(NOVELTY_SCALE*(F.col("year") - F.col("peakYear") - NOVELTY_SHIFT)))
-            ).alias("novelty"))
-    )
-
-    out = hs_df.join(novelty, ["sourceId","targetId","datasourceId","year"], "left") \
-               .fillna(0, subset=["novelty"])
-    return out.persist()
+    cols = df.columns.tolist() + ["novelty"]
+    return pd.DataFrame(rows, columns=cols)
 
 
-# ============================================================================
-# 4. DATATYPE-LEVEL HARMONIC + NOVELTY
-# ============================================================================
+# ----------------------------------------------------
+# 4. DATATYPE-LEVEL HARMONIC SCORE
+# ----------------------------------------------------
 def harmonic_by_datatype(ds_df):
-    map_df = spark.createDataFrame(
-        [(k, v["datatype"], v["weight"]) for k,v in DATA_SOURCES.items()],
-        ["datasourceId","datatypeId","weight"]
-    )
+    rows = []
 
-    df = (
-        ds_df.join(map_df, "datasourceId", "left")
-             .withColumn("weighted", F.col("harmonic_score") * F.col("weight"))
-    )
+    # attach datatype & weight
+    ds_df["datatypeId"] = ds_df["datasourceId"].map(lambda x: DATA_SOURCES[x]["datatype"])
+    ds_df["weight"] = ds_df["datasourceId"].map(lambda x: DATA_SOURCES[x]["weight"])
+    ds_df["weighted"] = ds_df["datasource_score"] * ds_df["weight"]
 
-    w = (
-        Window.partitionBy("sourceId","targetId","datatypeId")
-              .orderBy("year")
-              .rangeBetween(Window.unboundedPreceding, 0)
-    )
+    grouped = ds_df.groupby(["sourceId", "targetId", "source_type", "target_type", "relation", "datatypeId"])
 
-    out = (
-        df.groupBy("sourceId","targetId","datatypeId","year")
-          .agg(F.collect_list("weighted").alias("scores"))
-          .withColumn("cum", F.flatten(F.collect_list("scores").over(w)))
-          .withColumn("clean", F.expr("filter(cum, x -> x > 0)"))
-          .withColumn("sorted", F.reverse(F.array_sort("clean")))
-          .withColumn("top", F.expr("slice(sorted, 1, 50)"))
-          .withColumn("idx", F.sequence(F.lit(1), F.size("top")))
-          .withColumn("wts",
-              F.expr("transform(arrays_zip(top,idx), x -> x.top / pow(x.idx,2))"))
-          .withColumn("hs", F.expr("aggregate(wts, 0D, (acc,x)->acc+x)"))
-          .withColumn("datatype_score", F.col("hs") / F.lit(MAX_HARMONIC))
-          .select("sourceId","targetId","datatypeId","year","datatype_score")
-    )
-    return out.persist()
+    for (src, tgt, src_type, tgt_type, rel, dt), group in tqdm(grouped, desc="Datatype harmonic"):
+        year_dict = group.groupby("year")["weighted"].apply(list).to_dict()
+        collected = []
+
+        for y in YEARS:
+            if y in year_dict:
+                collected.extend(year_dict[y])
+            hs = harmonic_sum(collected)
+            rows.append([src, tgt, src_type, tgt_type, rel, dt, y, hs])
+
+    return pd.DataFrame(rows, columns=[
+        "sourceId", "targetId", "source_type", "target_type", "relation", "datatypeId", "year", "datatype_score"
+    ])
 
 
-def novelty_by_datatype(dt_df):
-    w = Window.partitionBy("sourceId","targetId","datatypeId").orderBy("year")
+# ----------------------------------------------------
+# 5. DATATYPE-LEVEL NOVELTY
+# ----------------------------------------------------
+def novelty_by_datatype(df):
+    rows = []
+    grouped = df.groupby(["sourceId", "targetId", "datatypeId"])
 
-    peaks = (
-        dt_df.fillna(0, subset=["datatype_score"])
-            .select(
-                "sourceId","targetId","datatypeId",
-                F.col("year").alias("peakYear"),
-                (F.col("datatype_score") -
-                 F.lag("datatype_score",1).over(w)).alias("peak")
-            )
-            .filter("peak > 0")
-    )
+    for _, group in tqdm(grouped, desc="Datatype novelty"):
+        group = group.sort_values("year")
+        rows.extend(_compute_novelty(group, "datatype_score"))
 
-    expanded = (
-        peaks.select(
-            "*",
-            F.posexplode(
-                F.sequence(F.col("peakYear"), F.col("peakYear")+F.lit(NOVELTY_WINDOW))
-            ).alias("ix","year")
-        ).drop("ix")
-    )
-
-    novelty = (
-        expanded.groupBy("sourceId","targetId","datatypeId","year")
-            .agg(F.max(
-                F.col("peak") /
-                (1 + F.exp(NOVELTY_SCALE*(F.col("year") - F.col("peakYear") - NOVELTY_SHIFT)))
-            ).alias("novelty"))
-    )
-
-    out = dt_df.join(novelty, ["sourceId","targetId","datatypeId","year"], "left") \
-               .fillna(0, subset=["novelty"])
-    return out.persist()
+    cols = df.columns.tolist() + ["novelty"]
+    return pd.DataFrame(rows, columns=cols)
 
 
-# ============================================================================
+# ----------------------------------------------------
 # MAIN
-# ============================================================================
+# ----------------------------------------------------
 if __name__ == "__main__":
-    print("🚀 Loading dynamic evidence...")
-    evidence = load_dynamic_evidence()
+    print("Loading evidence...")
+    evd = load_dynamic_evidence()
 
-    print("📌 Computing datasource harmonic...")
-    ds_h = harmonic_by_datasource(evidence)
-    ds_h.write.mode("overwrite").parquet("out/datasource_harmonic")
+    print("Computing datasource harmonic...")
+    ds_h = harmonic_by_datasource(evd)
+    
+    print("Computing datasource novelty...")
+    ds_hn = novelty_by_datasource(ds_h)
+    print("Saving datasource harmonic novelty...")
+    ds_hn.to_parquet(DATASOURCE_HARMONIC_NOVELTY_FILE, index=False)
 
-    print("📌 Computing datasource novelty...")
-    ds_n = novelty_by_datasource(ds_h)
-    ds_n.write.mode("overwrite").parquet("out/datasource_novelty")
+    print("Computing datatype harmonic...")
+    dt_h = harmonic_by_datatype(ds_hn)
 
-    print("📌 Computing datatype harmonic...")
-    dt_h = harmonic_by_datatype(ds_h)
-    dt_h.write.mode("overwrite").parquet("out/datatype_harmonic")
+    print("Computing datatype novelty...")
+    dt_hn = novelty_by_datatype(dt_h)
+    dt_hn.to_parquet(DATATYPE_HARMONIC_NOVELTY_FILE, index=False)
 
-    print("📌 Computing datatype novelty...")
-    dt_n = novelty_by_datatype(dt_h)
-    dt_n.write.mode("overwrite").parquet("out/datatype_novelty")
-
-    print("🎉 Completed dynamic temporal metrics pipeline!")
+    print("🎉 Completed local OT temporal metrics pipeline!")

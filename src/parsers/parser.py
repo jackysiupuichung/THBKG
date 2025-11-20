@@ -6,7 +6,7 @@ from glob import glob
 import traceback
 
 
-REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "timestamp"]
+REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]
 YEAR_PRIORITY = ["curationYear", "studyYear", "publicationYear", "studyStartDate"]
 
 
@@ -15,7 +15,7 @@ class BaseParser:
         self.root_dir = root_dir
         self.output_dir = output_dir
         self.node_store = node_store or {}  # used by EdgeParser validation
-        self.static = False # used by EdgeParser for timestamp handling
+        self.static = static  # used by EdgeParser for year handling
         with open(schema_file, "r") as f:
             self.schema = yaml.safe_load(f)
         os.makedirs(self.output_dir, exist_ok=True)
@@ -163,8 +163,7 @@ class EdgeParser(BaseParser):
             raw_val = [raw_val]
         return raw_val
 
-    @staticmethod
-    def _add_props(edge, row, props, static=False):
+    def _add_props(self, edge, row, props):
         # Add all props first
         for p in props:
             if isinstance(p, str) and "=" in p and "constant:" in p:
@@ -179,26 +178,26 @@ class EdgeParser(BaseParser):
                     val = str(val)
                 edge[p] = val
                 
-        if static:
+        if self.static:
             # Static edges → no timestamps at all
-            edge["timestamp"] = np.nan
+            edge["year"] = np.nan
             return edge
 
-        # Handle timestamp
-        if "timestamp" in props:
-            # Dynamic edges → pick best timestamp candidate
+        # Handle year
+        if "year" in props:
+            # Dynamic edges → pick best year candidate
             for col in YEAR_PRIORITY:
                 if col in row and pd.notnull(row[col]):
                     if col == "studyStartDate":
                         try:
-                            edge["timestamp"] = pd.to_datetime(row[col], errors="coerce").timestamp
+                            edge["year"] = pd.to_datetime(row[col], errors="coerce").year
                             return edge
                         except Exception:
                             continue
                     else:
-                        edge["timestamp"] = row[col]
+                        edge["year"] = row[col]
                         return edge
-            edge["timestamp"] = np.nan  # fallback if no usable column
+            edge["year"] = np.nan  # fallback if no usable column
 
         return edge
 
@@ -231,7 +230,7 @@ class EdgeParser(BaseParser):
                         "targetId": row[tgt_col],
                         "relation": row[relation_value] if relation_is_column else relation_value,
                     }
-                    expanded_edges.append(self._add_props(edge, row, props, static=self.static))
+                    expanded_edges.append(self._add_props(edge, row, props))
 
                 out = pd.DataFrame(expanded_edges)
                 return out
@@ -256,8 +255,8 @@ class EdgeParser(BaseParser):
                             expanded_edges.append(self._add_props(edge, row, props))
 
                 out = pd.DataFrame(expanded_edges)
-                # if "timestamp" not in out.columns:
-                #     out["timestamp"] = 0
+                # if "year" not in out.columns:
+                #     out["year"] = 0
                 return out
 
         # === Case 3: List-like targetId expansion ===
@@ -310,44 +309,57 @@ class EdgeParser(BaseParser):
     
     def serialise(self, df, out_path):
         """
-        Ensure required columns exist for explainability & temporal KG.
-        Skip edges missing critical fields.
+        Save edges to parquet while respecting static/dynamic schemas.
+        Static edges do NOT require a year.
+        Dynamic edges DO require a year.
         """
 
-        # Check required columns
-        missing_cols = [c for c in REQUIRED_EDGE_COLS if c not in df.columns]
+        # -----------------------------------
+        # Determine required columns dynamically
+        # -----------------------------------
+        if self.static:
+            required_cols = [c for c in REQUIRED_EDGE_COLS if c != "year"]
+            print("🔹 Static edges: 'year' column not required.")
+        else:
+            required_cols = REQUIRED_EDGE_COLS
+
+        # -----------------------------------
+        # Check required columns exist
+        # -----------------------------------
+        missing_cols = [c for c in required_cols if c not in df.columns]
         if missing_cols:
             print(f"⚠️ Skipping save for {out_path}, missing columns: {missing_cols}")
             return
 
-        before = len(df)
+        # -----------------------------------
+        # Drop rows missing required fields
+        # -----------------------------------
+        df = df.dropna(subset=required_cols)
+        
+        # # -----------------------------------
+        # # For static edges → completely remove year column
+        # # -----------------------------------
+        # if self.static and "year" in df.columns:
+        #     df = df.drop(columns=["year"])
 
-        # Find rows that would be dropped
-        # dropped = df[df[REQUIRED_EDGE_COLS].isnull().any(axis=1)]
-        # if not dropped.empty:
-        #     print(f"⚠️ Dropping {len(dropped)} edges in {out_path} missing required fields:")
-        #     if "id" in dropped.columns:
-        #         print("   First 5 dropped IDs:", dropped["id"].head(5).tolist())
-        #     else:
-        #         cols_to_show = [c for c in ["sourceId", "targetId", "relation"] if c in dropped.columns]
-        #         print("   First 5 dropped rows:")
-        #         print(dropped[cols_to_show].head(5).to_string(index=False))
+        # -----------------------------------
+        # Normalise list-like props
+        # -----------------------------------
+        if "literature" in df.columns:
+            df["literature"] = df["literature"].apply(self.normalise)
 
-        # Drop rows with missing required fields
-        df = df.dropna(subset=REQUIRED_EDGE_COLS)
+        # -----------------------------------
+        # Build final column order
+        # -----------------------------------
+        col_order = required_cols + \
+                    [c for c in df.columns if c not in required_cols]
 
-        # Normalise list-like props (e.g. literature)
-        for col in df.columns:
-            if col in ["literature"]:
-                df[col] = df[col].apply(self.normalise)
-
-        # Enforce schema ordering
-        col_order = [c for c in REQUIRED_EDGE_COLS if c in df.columns] + \
-                    [c for c in df.columns if c not in REQUIRED_EDGE_COLS]
         df = df[col_order]
 
+        # -----------------------------------
         # Save parquet
-        if not df.empty:
+        # -----------------------------------
+        if len(df):
             df.to_parquet(out_path, index=False)
             print(f"💾 Saved → {out_path} ({len(df)} rows)")
         else:
