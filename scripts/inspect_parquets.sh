@@ -8,26 +8,18 @@ if [ -z "$ROOT_DIR" ]; then
     exit 1
 fi
 
-echo "📂 Inspecting parquet files under: $ROOT_DIR"
+echo "📂 Recursively inspecting parquet files under: $ROOT_DIR"
 echo
 
-# Loop over every subdirectory
-for DIR in "$ROOT_DIR"/*/; do
-    # Check if directory
-    [ -d "$DIR" ] || continue
+# Use find to get ALL parquet files in all subdirectories
+find "$ROOT_DIR" -type f -name "*.parquet" | while read -r FILE; do
 
-    # Get first parquet file
-    FILE=$(ls "$DIR"/*.parquet 2>/dev/null | head -n 1)
-
-    if [ -z "$FILE" ]; then
-        echo "⚠️  No parquet files in $DIR"
-        echo
-        continue
-    fi
+    DIR=$(dirname "$FILE")
+    BASENAME=$(basename "$FILE")
 
     echo "=============================================="
     echo "📁 Directory: $DIR"
-    echo "📄 File: $(basename "$FILE")"
+    echo "📄 File: $BASENAME"
     echo "=============================================="
 
     # Use Python to inspect parquet

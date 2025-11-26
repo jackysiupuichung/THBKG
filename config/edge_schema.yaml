@@ -88,49 +88,49 @@ sourceId=slapenrich:
 sourceId=crispr:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: affected_pathway
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 sourceId=eva_somatic:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: somatic_mutation
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 sourceId=genomics_england:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: genetic_association
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 sourceId=orphanet:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: genetic_association
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 sourceId=sysbio:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: affected_pathway
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 sourceId=cancer_gene_census:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: somatic_mutation
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 sourceId=crispr_screen:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: affected_pathway
   props: [source_type=constant:target, target_type=constant:disease, cellType, datasourceId, score, year, id]
 
 sourceId=expression_atlas:
   sourceId: targetId
   targetId: diseaseId
-  relation_name: datatypeId
+  relation_name: rna_expression
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 # sourceId=progeny:
