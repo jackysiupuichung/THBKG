@@ -30,9 +30,12 @@ from src.parsers.chembl_trial_expander import expand_chembl_clinical_trials
 # EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/edges"
 # OUT_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/progression_graph"
 EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/edges"
+STATIC_EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/static_edges"
+
 OUT_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/progression_graph"
 DATASOURCE_HARMONIC_NOVELTY_FILE = f"{OUT_DIR}/datasource_harmonic_novelty.parquet"
 DATATYPE_HARMONIC_NOVELTY_FILE = f"{OUT_DIR}/datatype_harmonic_novelty.parquet"
+STATIC_SUPP_FILE = f"{OUT_DIR}/static_edges.parquet"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 FIRST_YEAR = 2010
@@ -318,19 +321,17 @@ DATA_SOURCES = {
 
 
 # ----------------------------------------------------
-# 1. LOAD ALL DYNAMIC EVIDENCE
+# 1. LOAD DYNAMIC + STATIC EVIDENCE
 # ----------------------------------------------------
 def load_dynamic_evidence():
     dfs = []
     for fname in os.listdir(EDGE_DIR):
         if fname.startswith("sourceId=") and fname.endswith(".parquet"):
-            datasource = fname.replace("sourceId=", "").replace(".parquet", "")
             df = pd.read_parquet(f"{EDGE_DIR}/{fname}")
-
-            df["datasourceId"] = datasource
             df["year"] = df["year"].astype(int)
             
             # only expand ChEMBL clinical trials
+            datasource = df.iloc[0]['datasourceId']
             if datasource == "chembl":
                 df = expand_chembl_clinical_trials(df)
 
@@ -339,8 +340,21 @@ def load_dynamic_evidence():
     print(f"Loaded {len(dfs)} data sources")
     return pd.concat(dfs, ignore_index=True)
 
+def load_static_evidence():
+    dfs = []
+    for fname in os.listdir(STATIC_EDGE_DIR):
+        if fname.endswith(".parquet"):
+            df = pd.read_parquet(f"{STATIC_EDGE_DIR}/{fname}")
+            df.drop_duplicates()
+            df["year"] = np.NaN
+
+            dfs.append(df[["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]])
+
+    print(f"Loaded {len(dfs)} data sources")
+    return pd.concat(dfs, ignore_index=True)
+
 # ----------------------------------------------------
-# 1.5. SANITY CHECK: UNIQUE NODES + UNIQUE EDGES
+# 1.2. SANITY CHECK: UNIQUE NODES + UNIQUE EDGES
 # ----------------------------------------------------
 def inspect_graph(evd):
     print("\n================ GRAPH SUMMARY ================\n")
@@ -367,10 +381,6 @@ def inspect_graph(evd):
         for row in evd[["sourceId", "relation", "targetId"]].itertuples(index=False, name=None)
     )
     print(f"🔗 Total unique edges      : {len(unique_edges)}")
-
-    # Show top few edges
-    print("\n🔎 Sample edges:")
-    print(evd[["sourceId", "relation", "targetId"]].head(10))
 
     # Relation statistics
     print("\n📚 Edge counts per relation:")
@@ -563,21 +573,25 @@ def filter_temporal_edges(df):
 if __name__ == "__main__":
     print("Loading evidence...")
     evd = load_dynamic_evidence()
+    static_evd = load_static_evidence()
     
     inspect_graph(evd)
+    inspect_graph(static_evd)
 
-    print("Computing datasource harmonic...")
-    ds_h = harmonic_by_datasource(evd)
+    # print("Computing datasource harmonic...")
+    # ds_h = harmonic_by_datasource(evd)
     
-    print("Computing datasource novelty...")
-    ds_hn = novelty_by_datasource(ds_h)
-    # collapse static groups, keep earliest year
-    print("Filtering static edges (keep earliest year)...")
-    ds_hn["datasource_relation"] = ds_hn["datasourceId"] + "::" + ds_hn["relation"]
-    ds_hn_filtered = filter_temporal_edges(ds_hn)
+    # print("Computing datasource novelty...")
+    # ds_hn = novelty_by_datasource(ds_h)
+    # # collapse static groups, keep earliest year
+    # print("Filtering static edges (keep earliest year)...")
+    # ds_hn["datasource_relation"] = ds_hn["datasourceId"] + "::" + ds_hn["relation"]
+    # ds_hn_filtered = filter_temporal_edges(ds_hn)
 
-    print("Saving datasource harmonic novelty (filtered)...")
-    ds_hn_filtered.to_parquet(DATASOURCE_HARMONIC_NOVELTY_FILE, index=False)
+    # print("Saving datasource harmonic novelty (filtered)...")
+    # ds_hn_filtered.to_parquet(DATASOURCE_HARMONIC_NOVELTY_FILE, index=False)
+    
+    
 
     # print("Computing datatype harmonic...")
     # dt_h = harmonic_by_datatype(ds_hn)
