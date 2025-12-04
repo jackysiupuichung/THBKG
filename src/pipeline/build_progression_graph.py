@@ -20,12 +20,17 @@ import pandas as pd
 from tqdm import tqdm
 from datetime import timedelta
 
+from src.parsers.chembl_trial_expander import expand_chembl_clinical_trials
+
+
 
 # ----------------------------------------
 # CONFIGURATION
 # ----------------------------------------
-EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/edges"
-OUT_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/progression_graph"
+# EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/edges"
+# OUT_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/progression_graph"
+EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/edges"
+OUT_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/progression_graph"
 DATASOURCE_HARMONIC_NOVELTY_FILE = f"{OUT_DIR}/datasource_harmonic_novelty.parquet"
 DATATYPE_HARMONIC_NOVELTY_FILE = f"{OUT_DIR}/datatype_harmonic_novelty.parquet"
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -311,6 +316,7 @@ DATA_SOURCES = {
     for ds in data_sources
 }
 
+
 # ----------------------------------------------------
 # 1. LOAD ALL DYNAMIC EVIDENCE
 # ----------------------------------------------------
@@ -323,11 +329,60 @@ def load_dynamic_evidence():
 
             df["datasourceId"] = datasource
             df["year"] = df["year"].astype(int)
+            
+            # only expand ChEMBL clinical trials
+            if datasource == "chembl":
+                df = expand_chembl_clinical_trials(df)
 
             dfs.append(df[["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]])
 
     print(f"Loaded {len(dfs)} data sources")
     return pd.concat(dfs, ignore_index=True)
+
+# ----------------------------------------------------
+# 1.5. SANITY CHECK: UNIQUE NODES + UNIQUE EDGES
+# ----------------------------------------------------
+def inspect_graph(evd):
+    print("\n================ GRAPH SUMMARY ================\n")
+
+    # Unique nodes
+    diseases = set(evd[evd["source_type"] == "disease"]["sourceId"]) | \
+               set(evd[evd["target_type"] == "disease"]["targetId"])
+
+    targets = set(evd[evd["source_type"] == "target"]["sourceId"]) | \
+              set(evd[evd["target_type"] == "target"]["targetId"])
+
+    other_nodes = set(evd["sourceId"]) | set(evd["targetId"])
+    other_nodes = other_nodes - diseases - targets
+
+    print(f"🧬 Unique disease nodes    : {len(diseases)}")
+    print(f"🎯 Unique target nodes     : {len(targets)}")
+    print(f"📦 Other nodes (pathway, drug, GO, etc.) : {len(other_nodes)}")
+    print(f"🌐 Total unique nodes      : {len(set(evd['sourceId']) | set(evd['targetId']))}")
+    print()
+
+    # Unique edges (as tuples)
+    unique_edges = set(
+        tuple(row)
+        for row in evd[["sourceId", "relation", "targetId"]].itertuples(index=False, name=None)
+    )
+    print(f"🔗 Total unique edges      : {len(unique_edges)}")
+
+    # Show top few edges
+    print("\n🔎 Sample edges:")
+    print(evd[["sourceId", "relation", "targetId"]].head(10))
+
+    # Relation statistics
+    print("\n📚 Edge counts per relation:")
+    print(evd["relation"].value_counts())
+
+    # Datasource stats
+    print("\n📦 Edge counts per datasource:")
+    print(evd["datasourceId"].value_counts())
+
+    # Year coverage
+    print("\n📆 Year range:")
+    print(f"Min year = {evd['year'].min()}, Max year = {evd['year'].max()}")
 
 
 # ----------------------------------------------------
@@ -447,6 +502,60 @@ def novelty_by_datatype(df):
     cols = df.columns.tolist() + ["novelty"]
     return pd.DataFrame(rows, columns=cols)
 
+# ----------------------------------------------------
+# 6. TEMPORAL-DEDUPLICATION
+# ----------------------------------------------------
+def filter_temporal_edges(df):
+    """
+    Keep ONLY rows where datasource_score CHANGED from the previous year.
+    Removes:
+      - earliest-year rows unless they start with non-zero score
+      - repeated zeros
+      - repeated constant values
+      - any year with no change in score
+
+    Fully vectorized.
+    """
+
+    df = df.copy()
+
+    # Identify the evidence stream
+    df["datasource_relation"] = df["datasourceId"] + "::" + df["relation"]
+
+    # Sort so diff works correctly
+    df = df.sort_values(["sourceId", "targetId", "datasource_relation", "year"])
+
+    # Group by edge
+    g = df.groupby(["sourceId", "targetId", "datasource_relation"])
+
+    # Previous year's score
+    df["score_prev"] = g["datasource_score"].shift(1)
+
+    # Change occurs ONLY if score differs AND it's not the first row
+    cond_change = (df["datasource_score"] != df["score_prev"]) & (~df["score_prev"].isna())
+
+    # Also keep the FIRST YEAR *if* it starts with a non-zero score
+    # (first appearance of evidence)
+    cond_first_nonzero = df["score_prev"].isna() & (df["datasource_score"] > 0)
+
+    # Final mask
+    keep = cond_change | cond_first_nonzero
+
+    # Filter
+    filtered = df[keep].copy()
+
+    # Clean up
+    filtered = filtered.drop(columns=["score_prev"])
+
+    print(f"Original rows: {len(df)}")
+    print(f"Filtered rows: {len(filtered)}")
+    print(f"Removed rows: {len(df) - len(filtered)}")
+
+    return filtered
+
+
+
+
 
 # ----------------------------------------------------
 # MAIN
@@ -454,20 +563,34 @@ def novelty_by_datatype(df):
 if __name__ == "__main__":
     print("Loading evidence...")
     evd = load_dynamic_evidence()
+    
+    inspect_graph(evd)
 
     print("Computing datasource harmonic...")
     ds_h = harmonic_by_datasource(evd)
     
     print("Computing datasource novelty...")
     ds_hn = novelty_by_datasource(ds_h)
-    print("Saving datasource harmonic novelty...")
-    ds_hn.to_parquet(DATASOURCE_HARMONIC_NOVELTY_FILE, index=False)
+    # collapse static groups, keep earliest year
+    print("Filtering static edges (keep earliest year)...")
+    ds_hn["datasource_relation"] = ds_hn["datasourceId"] + "::" + ds_hn["relation"]
+    ds_hn_filtered = filter_temporal_edges(ds_hn)
 
-    print("Computing datatype harmonic...")
-    dt_h = harmonic_by_datatype(ds_hn)
+    print("Saving datasource harmonic novelty (filtered)...")
+    ds_hn_filtered.to_parquet(DATASOURCE_HARMONIC_NOVELTY_FILE, index=False)
 
-    print("Computing datatype novelty...")
-    dt_hn = novelty_by_datatype(dt_h)
-    dt_hn.to_parquet(DATATYPE_HARMONIC_NOVELTY_FILE, index=False)
+    # print("Computing datatype harmonic...")
+    # dt_h = harmonic_by_datatype(ds_hn)
 
-    print("🎉 Completed local OT temporal metrics pipeline!")
+    # print("Computing datatype novelty...")
+    # dt_hn = novelty_by_datatype(dt_h)
+    
+    # # collapse static groups, keep earliest year
+    # print("Filtering static edges (keep earliest year)...")
+    # dt_hn["datasource_relation"] = dt_hn["datasourceId"] + "::" + dt_hn["relation"]
+    # dt_hn_filtered = filter_temporal_edges(dt_hn)
+
+    # print("Saving datatype harmonic novelty (filtered)...")
+    # dt_hn_filtered.to_parquet(DATATYPE_HARMONIC_NOVELTY_FILE, index=False)
+
+    # print("🎉 Completed OT temporal metrics pipeline")

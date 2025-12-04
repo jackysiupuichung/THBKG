@@ -7,6 +7,8 @@ def run_pipeline(input, node_schema, edge_schema, static_edge_schema, node_outpu
     print("🔹 Parsing nodes...")
     node_parser = NodeParser(input, node_schema, node_output, node_store=None)
     node_data, node_store = node_parser.parse()
+    
+    node_store = {}
 
     print("🔹 Parsing edges...")
     edge_parser = EdgeParser(input, edge_schema, edge_output, node_store=node_store)

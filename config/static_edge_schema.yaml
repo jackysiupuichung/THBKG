@@ -1,4 +1,4 @@
-interaction_evidence:
+interactionEvidence:
   name: protein_protein_interaction
   sourceId: targetA
   targetId: targetB
@@ -40,7 +40,7 @@ diseases:
 targets:
   name: gene_ontology
   sourceId: id
-  targetId: go
+  targetId: go.id
   relation_name: gene_ontology_annotation
   props: [
     id,

@@ -4,6 +4,8 @@ import numpy as np
 import yaml
 from glob import glob
 import traceback
+from src.parsers.edge_extractor import extract_edge_props
+
 
 
 REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]
@@ -164,19 +166,10 @@ class EdgeParser(BaseParser):
         return raw_val
 
     def _add_props(self, edge, row, props):
-        # Add all props first
-        for p in props:
-            if isinstance(p, str) and "=" in p and "constant:" in p:
-                k, v = p.split("=", 1)
-                edge[k] = float(v.split("constant:")[1]) if k == "score" else v.split("constant:")[1]
-                continue
-            if p in row and pd.notnull(row[p]):
-                val = row[p]
-                if isinstance(val, np.ndarray):
-                    val = val.tolist()
-                if isinstance(val, (list, dict)):
-                    val = str(val)
-                edge[p] = val
+        datasource = row.get("datasourceId")
+
+        extracted = extract_edge_props(row, props, datasource)
+        edge.update(extracted)
                 
         if self.static:
             # Static edges → no timestamps at all
@@ -243,21 +236,17 @@ class EdgeParser(BaseParser):
                 for _, row in df.iterrows():
                     tgts = self._expand_targets(row.get(base_col, []))
                     for t in tgts:
-                        if isinstance(t, dict):
-                            t_val = t.get(subfield)
-                            if not t_val:
-                                continue
+                        if isinstance(t, dict) and subfield in t:
                             edge = {
                                 "sourceId": row[src_col],
-                                "targetId": t_val,
+                                "targetId": t[subfield],
                                 "relation": row[relation_value] if relation_is_column else relation_value,
                             }
-                            expanded_edges.append(self._add_props(edge, row, props))
 
-                out = pd.DataFrame(expanded_edges)
-                # if "year" not in out.columns:
-                #     out["year"] = 0
-                return out
+                            edge = self._add_props(edge, row, props)
+                            expanded_edges.append(edge)
+
+                return pd.DataFrame(expanded_edges)
 
         # === Case 3: List-like targetId expansion ===
         if tgt_col in df.columns:
@@ -360,6 +349,15 @@ class EdgeParser(BaseParser):
         # Save parquet
         # -----------------------------------
         if len(df):
+            bad_mask = ~df["targetId"].apply(lambda x: isinstance(x, (str, int, float)))
+            bad_rows = df[bad_mask]
+
+            if len(bad_rows):
+                print("❌ ERROR: Non-scalar targetId detected!")
+                print(bad_rows.head(20))
+                print("Full types:", bad_rows["targetId"].apply(type).value_counts())
+                raise ValueError("Non-scalar targetId encountered. See debug output above.")
+            print(df.head())
             df.to_parquet(out_path, index=False)
             print(f"💾 Saved → {out_path} ({len(df)} rows)")
         else:
