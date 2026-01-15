@@ -1,133 +1,76 @@
 import os
 import csv
 import re
+import pandas as pd
+from src.parsers.parser import EdgeParser
 
-def extract_ensembl_gene_id(xref_string):
-    """
-    Extracts Ensembl Gene ID (ENSG) from the Xref string.
-    Example xref_string: '...|ensembl:ENSG00000099942.13(gene)|...'
-    Returns the first found ENSG ID (without version) or None.
-    """
-    if not xref_string or xref_string == '-':
-        return None
+class IntActParser(EdgeParser):
+    def __init__(self, root_dir, schema_file, output_dir, node_store=None):
+        super().__init__(root_dir, schema_file, output_dir, node_store)
     
-    # Regex to find ensembl:ENSG followed by digits
-    # It might have version number .XX
-    match = re.search(r'ensembl:(ENSG\d+)', xref_string)
-    if match:
-        return match.group(1)
-    return None
+    def extract_ensembl_gene_id(self, xref_string):
+        if not xref_string or xref_string == '-':
+            return None
+        match = re.search(r'ensembl:(ENSG\d+)', xref_string)
+        return match.group(1) if match else None
 
-def extract_pubmed_ids(pub_string):
-    """
-    Extracts PubMed IDs from the Publication Identifier string.
-    Example pub_string: 'pubmed:10022120|mint:MINT-6731034'
-    Returns a list of PubMed IDs.
-    """
-    if not pub_string or pub_string == '-':
-        return []
-    
-    # Find all pubmed:XXXX entries
-    matches = re.findall(r'pubmed:(\d+)', pub_string)
-    return matches
+    def extract_pubmed_ids(self, pub_string):
+        if not pub_string or pub_string == '-':
+            return []
+        matches = re.findall(r'pubmed:(\d+)', pub_string)
+        return list(set(matches))
 
-def is_protein(type_string):
-    """
-    Checks if the interactor type is protein.
-    Example type_string: 'psi-mi:"MI:0326"(protein)'
-    """
-    return 'psi-mi:"MI:0326"(protein)' in type_string
+    def is_protein(self, type_string):
+        return 'psi-mi:"MI:0326"(protein)' in type_string
 
-def parse_intact_file(file_path):
-    """
-    Parses the IntAct PSI-MITAB file and extracts protein-coding gene interactions
-    along with literature references.
-    
-    Yields:
-        dict: {
-            "source_gene": str,
-            "target_gene": str,
-            "pubmed_ids": list[str]
-        }
-    """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        # Verify header
-        header = f.readline()
-        if not header.startswith('#'):
-            f.seek(0) # No header, reset (though MITAB usually has one)
+    def parse(self, file_path=None):
+        """
+        Custom parse for IntAct MITAB format.
+        """
+        if not file_path:
+            intact_dir = os.path.join(self.root_dir, "intact")
+            files = [os.path.join(intact_dir, f) for f in os.listdir(intact_dir) if f.endswith(".txt")]
+            if not files:
+                print(f"⚠️ No IntAct files found in {intact_dir}")
+                return {}
+            file_path = files[0]
+
+        print(f"📦 Parsing IntAct: {file_path}")
+        results = []
+        with open(file_path, 'r', encoding='utf-8') as f:
+            header = f.readline()
+            if not header.startswith('#'): f.seek(0)
+            reader = csv.reader(f, delimiter='\t', quoting=csv.QUOTE_NONE)
+            
+            for row in reader:
+                if not row or len(row) < 24: continue
+                if not (self.is_protein(row[20]) and self.is_protein(row[21])): continue
+                gene_a = self.extract_ensembl_gene_id(row[22])
+                gene_b = self.extract_ensembl_gene_id(row[23])
+                if not gene_a or not gene_b: continue
+                
+                pubmed_ids = self.extract_pubmed_ids(row[8])
+                interaction = {
+                    "sourceId": gene_a,
+                    "targetId": gene_b,
+                    "source_type": "target",
+                    "target_type": "target",
+                    "relation": "interacts_with",
+                    "datasourceId": "intact",
+                    "score": 1.0,
+                    "year": None, # Will be filled by serialise
+                    "literature": pubmed_ids
+                }
+                results.append(interaction)
+
+        df = pd.DataFrame(results)
+        df = self.validate(df, None, "intact")
         
-        # Reader with tab delimiter
-        # We process line by line to handle potential quoting issues manually if needed, 
-        # but csv module is usually robust.
-        # Use QUOTE_NONE to avoid issues with quotes inside fields (common in MITAB)
-        reader = csv.reader(f, delimiter='\t', quoting=csv.QUOTE_NONE)
-        
-        for line_idx, row in enumerate(reader):
-            if not row: 
-                continue
-                
-            # Ensure we have enough columns (at least up to 24 for Xrefs)
-            if len(row) < 24:
-                # print(f"Skipping line {line_idx}: Not enough columns ({len(row)})")
-                continue
-                
-            # Columns (0-indexed):
-            # 8: Publication Identifier(s)
-            # 20: Type(s) interactor A
-            # 21: Type(s) interactor B
-            # 22: Xref(s) interactor A
-            # 23: Xref(s) interactor B
-            
-            type_a = row[20]
-            type_b = row[21]
-            
-            # Filter for protein-protein interactions
-            if not (is_protein(type_a) and is_protein(type_b)):
-                # print(f"Skipping line {line_idx}: Not protein-protein ({type_a}, {type_b})")
-                continue
-                
-            xref_a = row[22]
-            xref_b = row[23]
-            
-            gene_a = extract_ensembl_gene_id(xref_a)
-            gene_b = extract_ensembl_gene_id(xref_b)
-            
-            # Filter for protein-coding genes (must have ENSG extracted)
-            if not gene_a or not gene_b:
-                # print(f"Skipping line {line_idx}: Missing ENSG ID. A: {gene_a}, B: {gene_b}")
-                # print(f"  Xref A: {xref_a}")
-                # print(f"  Xref B: {xref_b}")
-                continue
-            
-            pub_string = row[8]
-            pubmed_ids = extract_pubmed_ids(pub_string)
-            
-            yield {
-                "source_gene": gene_a,
-                "target_gene": gene_b,
-                "pubmed_ids": pubmed_ids,
-                "raw_source_id": row[0], # For debugging/reference
-                "raw_target_id": row[1]
-            }
+        out_path = os.path.join(self.output_dir, "intact.parquet")
+        self.serialise(df, out_path)
+        return {"intact": df}
 
 if __name__ == "__main__":
-    # Example usage (for testing)
-    import sys
-    
-    # Default path for testing if not provided
-    test_file = "/Users/pui.chungsiu/Documents/opentarget_het_graph/data/test_intact_human.txt"
-    if len(sys.argv) > 1:
-        test_file = sys.argv[1]
-        
-    print(f"Parsing {test_file}...")
-    try:
-        count = 0
-        for interaction in parse_intact_file(test_file):
-            print(interaction)
-            count += 1
-            if count >= 5:
-                print("...")
-                break
-        print(f"Parsed partial results shown above.")
-    except Exception as e:
-        print(f"Error: {e}")
+    test_file = "/Users/pui.chungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/intact/test_intact_human.txt"
+    parser = IntActParser(root_dir="data", schema_file="config/edge_schema.yaml", output_dir="output")
+    parser.parse(file_path=test_file)

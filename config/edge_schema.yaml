@@ -1,5 +1,18 @@
 # TODO: what about edges with no temporal information? e.g. intogen, progeny (supp file temporal trend)
 
+targets:
+  name: target_gene_ontology_go
+  sourceId: id
+  targetId: go.id
+  relation_name: has_function_in
+  props: [
+    datasourceId=constant:gene_ontology,
+    score=constant:1.0,
+    source_type=constant:target,
+    target_type=constant:go,
+    year
+  ]
+
 sourceId=cancer_biomarkers:
   name: cancer_biomarker
   sourceId: targetId

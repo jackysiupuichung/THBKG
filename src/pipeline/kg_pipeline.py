@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from src.parsers.parser import NodeParser, EdgeParser
+from src.parsers.intact.parser import IntActParser
 import pandas as pd
 
 
@@ -10,12 +11,18 @@ def run_pipeline(input, node_schema, edge_schema, static_edge_schema, node_outpu
     node_data, node_store = node_parser.parse()
     
     print("🔹 Parsing edges...")
-    # edge_parser = EdgeParser(input, edge_schema, edge_output, node_store=node_store)
-    # edge_data = edge_parser.parse()
+    edge_parser = EdgeParser(input, edge_schema, edge_output, node_store=node_store)
+    edge_parser.parse()
+
+    print("🔹 Parsing intact edges...")
+    # IntAct data might be in a different directory or file, 
+    # but here we pass the same root input and output
+    intact_parser = IntActParser(input, edge_schema, edge_output, node_store=node_store)
+    intact_parser.parse()
 
     print("🔹 Parsing static edges...")
     static_edge_parser = EdgeParser(input, static_edge_schema, static_edge_output, node_store=node_store, static=True)
-    static_edge_data = static_edge_parser.parse()
+    static_edge_parser.parse()
 
     print("✅ Pipeline finished.")
 

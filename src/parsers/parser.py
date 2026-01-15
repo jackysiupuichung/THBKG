@@ -4,12 +4,76 @@ import numpy as np
 import yaml
 from glob import glob
 import traceback
+import requests
+import time
+import re
+import urllib3
+import xml.etree.ElementTree as ET
 from src.parsers.edge_extractor import extract_edge_props
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+PUBMED_CACHE = {}
 
 
 
 REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]
 YEAR_PRIORITY = ["curationYear", "studyYear", "publicationYear", "studyStartDate"]
+
+
+def fetch_pubmed_years(pubmed_ids):
+    """
+    Fetch publication years for a list of PubMed IDs using NCBI E-utils.
+    Results are cached in the global PUBMED_CACHE.
+    """
+    ids_to_fetch = [pid for pid in pubmed_ids if pid not in PUBMED_CACHE]
+    ids_to_fetch = ids_to_fetch[:100]
+    if not ids_to_fetch:
+        return PUBMED_CACHE
+    
+    EPOST_CHUNK_SIZE = 10000
+    EFETCH_BATCH_SIZE = 500
+    
+    for i in range(0, len(ids_to_fetch), EPOST_CHUNK_SIZE):
+        chunk = ids_to_fetch[i : i + EPOST_CHUNK_SIZE]
+        print(f"📡 Uploading {len(chunk)} PMIDs to NCBI epost...")
+        try:
+            epost_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/epost.fcgi"
+            epost_res = requests.post(epost_url, data={"db": "pubmed", "id": ",".join(chunk)}, verify=False)
+            epost_res.raise_for_status()
+            root = ET.fromstring(epost_res.text)
+            webenv = root.findtext("WebEnv")
+            query_key = root.findtext("QueryKey")
+            
+            for j in range(0, len(chunk), EFETCH_BATCH_SIZE):
+                # print(f"📡 Fetching batch {j//EFETCH_BATCH_SIZE + 1} for PMIDs...")
+                efetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+                params = {"db": "pubmed", "query_key": query_key, "WebEnv": webenv, "retstart": j, "retmax": EFETCH_BATCH_SIZE, "retmode": "xml"}
+                efetch_res = requests.get(efetch_url, params=params, verify=False)
+                efetch_res.raise_for_status()
+                
+                fetch_root = ET.fromstring(efetch_res.content)
+                for article in fetch_root.findall(".//PubmedArticle"):
+                    pmid = article.findtext(".//PMID")
+                    year = None
+                    year_elem = article.find(".//PubDate/Year")
+                    if year_elem is not None:
+                        year = year_elem.text
+                    else:
+                        medline_date_elem = article.find(".//PubDate/MedlineDate")
+                        if medline_date_elem is not None:
+                            match = re.search(r'(\d{4})', medline_date_elem.text)
+                            if match: year = match.group(1)
+                    if pmid: PUBMED_CACHE[pmid] = year
+                time.sleep(0.4)
+            
+            for pid in chunk:
+                if pid not in PUBMED_CACHE: PUBMED_CACHE[pid] = None
+        except Exception as e:
+            print(f"❌ Error in PubMed API flow: {e}")
+            for pid in chunk:
+                if pid not in PUBMED_CACHE: PUBMED_CACHE[pid] = None
+    return PUBMED_CACHE
 
 
 class BaseParser:
@@ -156,6 +220,30 @@ class NodeParser(BaseParser):
 
 
 class EdgeParser(BaseParser):
+    def _extract_literature(self, obj):
+        """
+        Extract PMID list from a nested object.
+        Checks keys: literature, source, pubmedId.
+        """
+        lit_val = obj.get("literature") or obj.get("source") or obj.get("pubmedId")
+        if not lit_val:
+            return None
+        
+        def _clean(v):
+            v_str = str(v).strip()
+            if v_str.isdigit():
+                return v_str
+            # Handles PMID:123, pubmed: 123, PMID 123, etc.
+            m = re.search(r'(?:PMID|pubmed)[\s:]*(\d+)', v_str, re.IGNORECASE)
+            return m.group(1) if m else None
+
+        if isinstance(lit_val, (list, np.ndarray, tuple)):
+            pmids = [_clean(l) for l in lit_val if _clean(l)]
+            return pmids if pmids else None
+        
+        pmid = _clean(lit_val)
+        return [pmid] if pmid else None
+
     @staticmethod
     def _expand_targets(raw_val):
         """Ensure targets are iterable list"""
@@ -242,6 +330,11 @@ class EdgeParser(BaseParser):
                             }
 
                             edge = self._add_props(edge, row, props)
+                            
+                            lit = self._extract_literature(t)
+                            if lit:
+                                edge["literature"] = lit
+
                             expanded_edges.append(edge)
 
                 return pd.DataFrame(expanded_edges)
@@ -271,6 +364,11 @@ class EdgeParser(BaseParser):
                             "targetId": t["id"],
                             "relation": row[relation_value] if relation_is_column else relation_value,
                         }
+                        
+                        lit = self._extract_literature(t)
+                        if lit:
+                            edge["literature"] = lit
+
                         expanded_edges.append(self._add_props(edge, row, props))
             if expanded_edges:
                 return pd.DataFrame(expanded_edges)
@@ -335,6 +433,35 @@ class EdgeParser(BaseParser):
             print("🔹 Static edges: 'year' column not required.")
         else:
             required_cols = REQUIRED_EDGE_COLS
+
+        # -----------------------------------
+        # Build final column order
+        # -----------------------------------
+        if "literature" in df.columns:
+            df["literature"] = df["literature"].apply(self.normalise)
+
+        # -----------------------------------
+        # Generalised PMID -> Year conversion
+        # -----------------------------------
+        if "literature" in df.columns:
+            if "year" not in df.columns:
+                df["year"] = np.nan
+            
+            mask = (df["year"].isna() | (df["year"] == 0)) & df["literature"].notna()
+            if mask.any():
+                all_pmids = set()
+                for lits in df.loc[mask, "literature"]:
+                    all_pmids.update(str(l) for l in lits if str(l).isdigit())
+                
+                if all_pmids:
+                    fetch_pubmed_years(list(all_pmids))
+                    
+                    def get_min_year(lits):
+                        years = [PUBMED_CACHE.get(str(l)) for l in lits if str(l) in PUBMED_CACHE]
+                        int_years = [int(y) for y in years if y and str(y).isdigit()]
+                        return min(int_years) if int_years else np.nan
+                    
+                    df.loc[mask, "year"] = df.loc[mask, "literature"].apply(get_min_year)
 
         # -----------------------------------
         # Check required columns exist

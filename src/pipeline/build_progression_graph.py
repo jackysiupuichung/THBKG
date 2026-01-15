@@ -27,12 +27,12 @@ from src.parsers.chembl_trial_expander import expand_chembl_clinical_trials
 # ----------------------------------------
 # CONFIGURATION
 # ----------------------------------------
-EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/edges"
-STATIC_EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/static_edges"
-OUT_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/progression_graph"
-# EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/edges"
-# STATIC_EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/static_edges"
-# OUT_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/progression_graph"
+# EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/edges"
+# STATIC_EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/static_edges"
+# OUT_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/progression_graph"
+EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/edges"
+STATIC_EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/static_edges"
+OUT_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/progression_graph"
 DATASOURCE_HARMONIC_FILE = f"{OUT_DIR}/datasource_harmonic.parquet"
 DATATYPE_HARMONIC_FILE = f"{OUT_DIR}/datatype_harmonic.parquet"
 STATIC_SUPP_FILE = f"{OUT_DIR}/static_edges.parquet"
