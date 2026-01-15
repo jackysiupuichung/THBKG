@@ -24,15 +24,14 @@ reactome:
     target_type=constant:reactome
   ]
 
-# added for static GO integration (targets -> go.id)
-gene_ontology:
-  input_dir: targets
+gene_ontology_hierarchy:
+  input_dir: go_ontology
   sourceId: id
-  targetId: go.id
-  relation_name: has_function_in
+  targetId: is_a
+  relation_name: is_subtype_of
   props: [
     datasourceId=constant:gene_ontology,
     score=constant:1.0,
-    source_type=constant:target,
+    source_type=constant:go,
     target_type=constant:go
   ]

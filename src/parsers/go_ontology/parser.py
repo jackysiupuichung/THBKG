@@ -95,14 +95,16 @@ class GOOntologyParser(EdgeParser):
         print(f"💾 Saved GO Nodes → {nodes_out} ({len(df_nodes)} rows)")
         
         # Save Edges
-        out_name = self.output_name("go_hierarchy", {
+        # Use schema entry if possible
+        spec = self.schema.get("gene_ontology_hierarchy", {
             "relation_name": "is_subtype_of",
             "props": [
                 "datasourceId=constant:gene_ontology",
                 "source_type=constant:go",
                 "target_type=constant:go"
             ]
-        }, df_edges)
+        })
+        out_name = self.output_name("gene_ontology_hierarchy", spec, df_edges)
         out_path = os.path.join(self.output_dir, f"{out_name}.parquet")
         self.serialise(df_edges, out_path)
         

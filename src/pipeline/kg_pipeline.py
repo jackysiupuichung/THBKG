@@ -16,8 +16,6 @@ def run_pipeline(input, node_schema, edge_schema, static_edge_schema, node_outpu
     edge_parser.parse()
 
     print("🔹 Parsing intact edges...")
-    # IntAct data might be in a different directory or file, 
-    # but here we pass the same root input and output
     intact_parser = IntActParser(input, edge_schema, edge_output, node_store=node_store)
     intact_parser.parse()
 
