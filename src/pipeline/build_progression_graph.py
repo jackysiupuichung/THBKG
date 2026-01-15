@@ -1,677 +1,279 @@
-#!/usr/bin/env python
-
-__author__ = "Cote Falaguera (mjfalagueramata@gmail.com)"
-__date__ = "02 Jul 2025"
-
-"""
-timeseries.py: Assess the evolution over time of evidence supporting target-disease associations in the Open Targets Platform.
-
-Useful GitHub links:
-- https://github.com/opentargets/timeseries
-- https://github.com/opentargets/issues/issues/2739
-"""
-
-
-import datetime
+#!/usr/bin/env python3
 import os
-import time
+import yaml
+import argparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from datetime import timedelta
-
-from src.parsers.chembl_trial_expander import expand_chembl_clinical_trials
-
-
-
-# ----------------------------------------
-# CONFIGURATION
-# ----------------------------------------
-# EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/edges"
-# STATIC_EDGE_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/kg_output/static_edges"
-# OUT_DIR = "/data/scratch/bty414/opentarget_evidences/23.06/progression_graph"
-EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/edges"
-STATIC_EDGE_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/static_edges"
-OUT_DIR = "/Users/pchungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/kg_output/progression_graph"
-DATASOURCE_HARMONIC_FILE = f"{OUT_DIR}/datasource_harmonic.parquet"
-DATATYPE_HARMONIC_FILE = f"{OUT_DIR}/datatype_harmonic.parquet"
-STATIC_SUPP_FILE = f"{OUT_DIR}/static_edges.parquet"
-os.makedirs(OUT_DIR, exist_ok=True)
-
-FIRST_YEAR = 2000
-LAST_YEAR = 2025
-YEARS = np.arange(FIRST_YEAR, LAST_YEAR + 1)
-MAX_HARMONIC = 1.644  # theoretical max sum of 1/i^2
-
-# novelty settings
-NOVELTY_SCALE = 2     # logistic steepness
-NOVELTY_SHIFT = 2     # midpoint
-NOVELTY_WINDOW = 10   # years after peak to decay
-
-data_sources = [
-    {
-        "id": "gwas_credible_sets",
-        "sectionId": "gwasCredibleSets",
-        "label": "GWAS associations",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,  # needs to be a float
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#gwas-associations",
-    },
-    {
-        "id": "eva",
-        "sectionId": "eva",
-        "label": "ClinVar",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#clinvar",
-    },
-    {
-        "id": "gene_burden",
-        "sectionId": "geneBurden",
-        "label": "Gene Burden",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#gene-burden",
-    },
-    {
-        "id": "genomics_england",
-        "sectionId": "genomicsEngland",
-        "label": "GEL PanelApp",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#genomics-england-panelapp",
-    },
-    {
-        "id": "gene2phenotype",
-        "sectionId": "gene2Phenotype",
-        "label": "Gene2phenotype",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#gene2phenotype",
-    },
-    {
-        "id": "uniprot_literature",
-        "sectionId": "uniprotLiterature",
-        "label": "UniProt literature",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#uniprot-literature",
-    },
-    {
-        "id": "uniprot_variants",
-        "sectionId": "uniprotVariants",
-        "label": "UniProt curated variants",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#uniprot-variants",
-    },
-    {
-        "id": "orphanet",
-        "sectionId": "orphanet",
-        "label": "Orphanet",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#orphanet",
-    },
-    {
-        "id": "clingen",
-        "sectionId": "clinGen",
-        "label": "Clingen",
-        "aggregation": "Genetic association",
-        "aggregationId": "genetic_association",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#clingen",
-    },
-    {
-        "id": "cancer_gene_census",
-        "sectionId": "cancerGeneCensus",
-        "label": "Cancer Gene Census",
-        "aggregation": "Somatic mutations",
-        "aggregationId": "somatic_mutation",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#cancer-gene-census",
-    },
-    {
-        "id": "intogen",
-        "sectionId": "intOgen",
-        "label": "IntOGen",
-        "aggregation": "Somatic mutations",
-        "aggregationId": "somatic_mutation",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#intogen",
-    },
-    {
-        "id": "eva_somatic",
-        "sectionId": "evaSomatic",
-        "label": "ClinVar (somatic)",
-        "aggregation": "Somatic mutations",
-        "aggregationId": "somatic_mutation",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#clinvar-somatic",
-    },
-    {
-        "id": "cancer_biomarkers",
-        "sectionId": "cancerBiomarkers",
-        "label": "Cancer Biomarkers",
-        "aggregation": "Somatic mutations",
-        "aggregationId": "somatic_mutation",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#cancer-biomarkers",
-    },
-    {
-        "id": "chembl",
-        "sectionId": "chembl",
-        "label": "ChEMBL",
-        "aggregation": "Known drug",
-        "aggregationId": "known_drug",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#chembl",
-    },
-    {
-        "id": "crispr_screen",
-        "sectionId": "crispr_screen",
-        "label": "CRISPR Screens",
-        "aggregation": "Affected pathway",
-        "aggregationId": "affected_pathway",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#project-score",
-    },
-    {
-        "id": "crispr",
-        "sectionId": "crispr",
-        "label": "Project Score",
-        "aggregation": "Affected pathway",
-        "aggregationId": "affected_pathway",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#project-score",
-    },
-    {
-        "id": "slapenrich",
-        "sectionId": "slapEnrich",
-        "label": "SLAPenrich",
-        "aggregation": "Affected pathway",
-        "aggregationId": "affected_pathway",
-        "weight": 0.5,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#slapenrich",
-    },
-    {
-        "id": "progeny",
-        "sectionId": "progeny",
-        "label": "PROGENy",
-        "aggregation": "Affected pathway",
-        "aggregationId": "affected_pathway",
-        "weight": 0.5,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#slapenrich",
-    },
-    {
-        "id": "reactome",
-        "sectionId": "reactome",
-        "label": "Reactome",
-        "aggregation": "Affected pathway",
-        "aggregationId": "affected_pathway",
-        "weight": 1.0,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#reactome",
-    },
-    {
-        "id": "sysbio",
-        "sectionId": "sysBio",
-        "label": "Gene signatures",
-        "aggregation": "Affected pathway",
-        "aggregationId": "affected_pathway",
-        "weight": 0.5,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#gene-signatures",
-    },
-    {
-        "id": "europepmc",
-        "sectionId": "europePmc",
-        "label": "Europe PMC",
-        "aggregation": "Literature",
-        "aggregationId": "literature",
-        "weight": 0.2,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#europe-pmc",
-    },
-    {
-        "id": "expression_atlas",
-        "sectionId": "expression",
-        "label": "Expression Atlas",
-        "aggregation": "RNA expression",
-        "aggregationId": "rna_expression",
-        "weight": 0.2,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#expression-atlas",
-    },
-    {
-        "id": "impc",
-        "sectionId": "impc",
-        "label": "IMPC",
-        "aggregation": "Animal model",
-        "aggregationId": "animal_model",
-        "weight": 0.2,
-        "isPrivate": False,
-        "docsLink": "https://platform-docs.opentargets.org/evidence#impc",
-    },
-    # {
-    #     "id": "ot_crispr",
-    #     "sectionId": "otCrispr",
-    #     "label": "OT CRISPR",
-    #     "aggregation": "Partner-only",
-    #     "aggregationId": "partner_only",
-    #     "weight": 0.5,
-    #     "isPrivate": True,
-    #     "docsLink": "https://partner-platform.opentargets.org/projects",
-    # },
-    # {
-    #     "id": "encore",
-    #     "sectionId": "encore",
-    #     "label": "ENCORE",
-    #     "aggregation": "Partner-only",
-    #     "aggregationId": "partner_only",
-    #     "weight": 0.5,
-    #     "isPrivate": True,
-    #     "docsLink": "https://partner-platform.opentargets.org/projects",
-    # },
-    # {
-    #     "id": "ot_crispr_validation",
-    #     "sectionId": "validationlab",
-    #     "label": "OT Validation",
-    #     "aggregation": "Partner-only",
-    #     "aggregationId": "partner_only",
-    #     "weight": 0.5,
-    #     "isPrivate": True,
-    #     "docsLink": "https://partner-platform.opentargets.org/projects",
-    # },
-]
-
-DATA_SOURCES = {
-    ds["id"]: {
-        "datatype": ds["aggregationId"],
-        "weight": float(ds["weight"]),
-    }
-    for ds in data_sources
-}
-
+from glob import glob
+from datetime import datetime
 
 # ----------------------------------------------------
-# 1. LOAD DYNAMIC + STATIC EVIDENCE
+# 1. UTILITIES & CONFIG
 # ----------------------------------------------------
-def load_dynamic_evidence():
-    dfs = []
-    for fname in os.listdir(EDGE_DIR):
-        if fname.startswith("sourceId=") and fname.endswith(".parquet"):
-            df = pd.read_parquet(f"{EDGE_DIR}/{fname}")
-            df["year"] = df["year"].astype(int)
-            
-            # only expand ChEMBL clinical trials
-            datasource = df.iloc[0]['datasourceId']
-            if datasource == "chembl":
-                df = expand_chembl_clinical_trials(df)
 
-            dfs.append(df[["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]])
+def load_config(config_path):
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
 
-    print(f"Loaded {len(dfs)} data sources")
-    return pd.concat(dfs, ignore_index=True)
-
-def load_static_evidence():
-    dfs = []
-    for fname in os.listdir(STATIC_EDGE_DIR):
-        if fname.endswith(".parquet"):
-            df = pd.read_parquet(f"{STATIC_EDGE_DIR}/{fname}").copy()
-            df["relation_key"] = df["datasourceId"] + "::" + df["relation"]
-            keep = ["sourceId", "targetId", "source_type", "target_type",
-                    "relation", "datasourceId", "score", "year", "relation_key"]
-            dfs.append(df[keep])
-
-    print(f"Loaded {len(dfs)} static sources")
-    return pd.concat(dfs, ignore_index=True)
-
-
-# ----------------------------------------------------
-# 1.2. SANITY CHECK: UNIQUE NODES + UNIQUE EDGES
-# ----------------------------------------------------
-def inspect_graph(evd):
-    print("\n================ EVIDENCE SUMMARY ================\n")
-
-    # ---------------------------------------------------------
-    # 1. COLLECT ALL NODES BY TYPE (DYNAMIC)
-    # ---------------------------------------------------------
-    node_type_map = {}
-
-    # From source side
-    for node, t in evd[["sourceId", "source_type"]].drop_duplicates().itertuples(index=False):
-        node_type_map.setdefault(t, set()).add(node)
-
-    # From target side
-    for node, t in evd[["targetId", "target_type"]].drop_duplicates().itertuples(index=False):
-        node_type_map.setdefault(t, set()).add(node)
-
-    # ---------------------------------------------------------
-    # 2. PRINT SUMMARY OF EACH NODE TYPE
-    # ---------------------------------------------------------
-    total_unique_nodes = set(evd["sourceId"]) | set(evd["targetId"])
-
-    for t, nodes in node_type_map.items():
-        print(f"🟦 Node type '{t}' : {len(nodes)}")
-
-    # Nodes that appear but have no explicit type (rare)
-    typed_nodes = set().union(*node_type_map.values()) if node_type_map else set()
-    untyped_nodes = total_unique_nodes - typed_nodes
-
-    if untyped_nodes:
-        print(f"⚠️ Untyped nodes found : {len(untyped_nodes)}")
-
-    print(f"\n🌐 Total unique nodes : {len(total_unique_nodes)}")
-
-    # ---------------------------------------------------------
-    # 3. UNIQUE EDGE COUNT
-    # ---------------------------------------------------------
-    unique_edges = set(
-        tuple(row)
-        for row in evd[["sourceId", "relation", "targetId"]]
-        .itertuples(index=False, name=None)
-    )
-    print(f"🔗 Total unique edges : {len(unique_edges)}")
-
-    # ---------------------------------------------------------
-    # 4. RELATION STATISTICS
-    # ---------------------------------------------------------
-    print("\n📚 Edge counts per relation:")
-    print(evd["relation"].value_counts())
-
-    # ---------------------------------------------------------
-    # 5. DATASOURCE STATISTICS
-    # ---------------------------------------------------------
-    print("\n📦 Edge counts per datasource:")
-    print(evd["datasourceId"].value_counts())
-
-    # ---------------------------------------------------------
-    # 6. YEAR RANGE
-    # ---------------------------------------------------------
-    print("\n📆 Year range:")
-    print(f"Min year = {evd['year'].min()}, Max year = {evd['year'].max()}")
-
-
-
-# ----------------------------------------------------
-# UTILITY: harmonic sum of top-50 scores
-# these are based on the implementation in https://github.com/opentargets/timeseries/blob/main/timeseries.py#L449
-# ----------------------------------------------------
-def harmonic_sum(scores):
+def harmonic_sum(scores, max_harmonic=1.644):
+    """
+    Compute harmonic sum of top-50 scores (Open Targets standard).
+    """
     if len(scores) == 0:
         return 0.0
-
-    s = np.sort(scores)[::-1][:50]  # top 50 descending
+    s = np.sort(scores)[::-1][:50]
     idx = np.arange(1, len(s) + 1)
-    return np.sum(s / (idx ** 2)) / MAX_HARMONIC
+    return np.sum(s / (idx ** 2)) / max_harmonic
 
-def _compute_novelty(group, score_col):
-    years = group["year"].values
-    scores = group[score_col].values
-
-    diffs = np.diff(scores, prepend=0)
-    peak_years = years[diffs > 0]
-    peaks = diffs[diffs > 0]
-
-    novelty_map = {}
-
-    for py, pv in zip(peak_years, peaks):
-        for t in range(py, py + NOVELTY_WINDOW + 1):
-            nv = pv / (1 + np.exp(NOVELTY_SCALE * (t - py - NOVELTY_SHIFT)))
-            novelty_map[t] = max(nv, novelty_map.get(t, 0))
-
-    result = []
-    for _, row in group.iterrows():
-        y = row["year"]
-        result.append(list(row.values) + [novelty_map.get(y, 0.0)])
-
-    return result
-
-
-# ----------------------------------------------------
-# 2. DATASOURCE-LEVEL HARMONIC SCORE
-# ----------------------------------------------------
-def harmonic_by_datasource(evd):
-    rows = []
-    grouped = evd.groupby(["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId"])
-
-    for (src, tgt, src_type, tgt_type, rel, ds), group in tqdm(grouped, desc="Datasource harmonic"):
-        year_dict = group.groupby("year")["score"].apply(list).to_dict()
-        collected = []
-        for y in YEARS:
-            if y in year_dict:
-                collected.extend(year_dict[y])
-            hs = harmonic_sum(collected)
-            rows.append([src, tgt, src_type, tgt_type, rel, ds, y, hs])
-
-    df = pd.DataFrame(rows, columns=[
-        "sourceId", "targetId", "source_type", "target_type",
-        "relation", "datasourceId", "year", "datasource_score"
-    ])
-    df.rename(columns={"datasource_score": "score"}, inplace=True)
-    return df
-
-
-
-
-# # ----------------------------------------------------
-# # 3. DATASOURCE-LEVEL NOVELTY
-# # ----------------------------------------------------
-# def novelty_by_datasource(df):
-#     rows = []
-#     grouped = df.groupby(["sourceId", "targetId", "source_type",
-#                           "target_type", "relation", "datasourceId"])
-
-#     for _, group in tqdm(grouped, desc="Datasource novelty"):
-#         group = group.sort_values("year")
-#         rows.extend(_compute_novelty(group, "datasource_score"))
-
-#     cols = df.columns.tolist() + ["novelty"]
-#     return pd.DataFrame(rows, columns=cols)
-
-
-# ----------------------------------------------------
-# 4. DATATYPE-LEVEL HARMONIC SCORE
-# ----------------------------------------------------
-def harmonic_by_datatype(ds_df):
-    rows = []
-
-    ds_df["datatypeId"] = ds_df["datasourceId"].map(lambda x: DATA_SOURCES[x]["datatype"])
-    ds_df["weight"] = ds_df["datasourceId"].map(lambda x: DATA_SOURCES[x]["weight"])
-    ds_df["weighted"] = ds_df["score"] * ds_df["weight"]
-
-    grouped = ds_df.groupby(["sourceId", "targetId", "source_type", "target_type", "relation", "datatypeId"])
-
-    for (src, tgt, src_type, tgt_type, rel, dt), group in tqdm(grouped, desc="Datatype harmonic"):
-        year_dict = group.groupby("year")["weighted"].apply(list).to_dict()
-        collected = []
-        for y in YEARS:
-            if y in year_dict:
-                collected.extend(year_dict[y])
-            hs = harmonic_sum(collected)
-            rows.append([src, tgt, src_type, tgt_type, rel, dt, y, hs])
-
-    df = pd.DataFrame(rows, columns=[
-        "sourceId", "targetId", "source_type", "target_type",
-        "relation", "datatypeId", "year", "datatype_score"
-    ])
-    df.rename(columns={"datatype_score": "score"}, inplace=True)
-    return df
-
-
-
-# ----------------------------------------------------
-# 5. DATATYPE-LEVEL NOVELTY
-# ----------------------------------------------------
-def novelty_by_datatype(df):
-    rows = []
-    grouped = df.groupby(["sourceId", "targetId", "datatypeId"])
-
-    for _, group in tqdm(grouped, desc="Datatype novelty"):
-        group = group.sort_values("year")
-        rows.extend(_compute_novelty(group, "datatype_score"))
-
-    cols = df.columns.tolist() + ["novelty"]
-    return pd.DataFrame(rows, columns=cols)
-
-# ----------------------------------------------------
-# 6. TEMPORAL-DEDUPLICATION
-# ----------------------------------------------------
-def filter_temporal_edges(df):
+def load_evidence(directory, is_static=False):
     """
-    Keep only meaningful harmonic changes.
-
-    Automatically detects whether the input df is:
-      - datasource harmonic   → expects datasourceId
-      - datatype harmonic     → expects datatypeId
+    Load all parquet files from a directory.
     """
+    dfs = []
+    # Search for all parquets in the directory
+    parquet_files = glob(os.path.join(directory, "*.parquet"))
+    
+    for pq in parquet_files:
+        try:
+            df = pd.read_parquet(pq)
+            if df.empty:
+                continue
+            
+            # For dynamic files, ensure 'year' is numeric and handled
+            if not is_static and "year" in df.columns:
+                if df["year"].isnull().any():
+                    raise ValueError(f"⚠️ {pq} has null values in 'year' column. Cannot build progression graph.")
+                df["year"] = pd.to_numeric(df["year"], errors="coerce").astype(int)
+            
+            dfs.append(df)
+        except Exception as e:
+            print(f"⚠️ Error reading {pq}: {e}")
+    
+    if not dfs:
+        return pd.DataFrame()
+    return pd.concat(dfs, ignore_index=True)
 
-    df = df.copy()
+# ----------------------------------------------------
+# 2. INSPECTION LOGIC
+# ----------------------------------------------------
 
-    # Determine grouping key automatically
-    if "datasourceId" in df.columns:
-        df["relation_key"] = df["datasourceId"] + "::" + df["relation"]
-        group_cols = ["sourceId", "targetId", "relation_key"]
-    elif "datatypeId" in df.columns:
-        df["relation_key"] = df["datatypeId"] + "::" + df["relation"]
-        group_cols = ["sourceId", "targetId", "relation_key"]
-    else:
-        raise ValueError("df must contain either 'datasourceId' or 'datatypeId'")
+def inspect_evidence_graph(dynamic_evd, static_evd):
+    """
+    Summarize raw input evidence.
+    """
+    print("\n🔍 ================ EVIDENCE GRAPH SUMMARY ================")
+    
+    all_evd = pd.concat([dynamic_evd, static_evd], ignore_index=True)
+    if all_evd.empty:
+        print("Empty evidence graph.")
+        return
 
-    # Sort properly
-    df = df.sort_values(["sourceId", "targetId", "relation_key", "year"])
+    # Node summary
+    unique_sources = set(all_evd["sourceId"].unique())
+    unique_targets = set(all_evd["targetId"].unique())
+    all_nodes = unique_sources | unique_targets
+    
+    print(f"🌐 Total uniquely identified nodes: {len(all_nodes)}")
+    
+    # Node types
+    source_types = all_evd.groupby("source_type")["sourceId"].nunique()
+    target_types = all_evd.groupby("target_type")["targetId"].nunique()
+    
+    print("\n🟦 Node counts by type:")
+    for t, count in source_types.items():
+        print(f"  - {t} (as source): {count}")
+    for t, count in target_types.items():
+        print(f"  - {t} (as target): {count}")
 
-    # Group
-    g = df.groupby(group_cols)
+    # Edge summary
+    print(f"\n🔗 Total edges (raw evidence records): {len(all_evd)}")
+    print(f"📦 Dynamic edges: {len(dynamic_evd)}")
+    print(f"📦 Static edges: {len(static_evd)}")
+    
+    # DataSource stats
+    print("\n📚 Edge counts per datasource:")
+    print(all_evd["datasourceId"].value_counts().head(10))
 
-    # Previous year's score
-    df["score_prev"] = g["score"].shift(1)
+    if not dynamic_evd.empty:
+        print(f"\n📆 Evidence Year range: {dynamic_evd['year'].min()} - {dynamic_evd['year'].max()}")
+    print("============================================================\n")
 
-    # First appearance of evidence (first non-zero)
-    cond_first_nonzero = df["score_prev"].isna() & (df["score"] > 0)
+def inspect_progression_graph(df_dynamic, df_static):
+    """
+    Summarize aggregated progression data.
+    """
+    print("\n📈 ================ PROGRESSION GRAPH SUMMARY ================")
+    
+    if not df_dynamic.empty:
+        print(f"🚀 Dynamic progression records: {len(df_dynamic)}")
+        unique_dynamic_edges = df_dynamic.groupby(["sourceId", "targetId", "relation", "datasourceId"]).ngroups
+        print(f"🔗 Unique dynamic relationships tracked: {unique_dynamic_edges}")
+        
+        # Temporal growth
+        year_growth = df_dynamic.groupby("year").size()
+        print("\n⏳ Progression growth over time (top 5 years by count):")
+        print(year_growth.sort_index(ascending=False).head(5))
+        
+    if not df_static.empty:
+        print(f"\n✅ Static progression records: {len(df_static)}")
+        print(f"🔗 Unique static relationships: {len(df_static)}")
+    
+    print("==============================================================\n")
 
-    # Keep only increases (no decreases allowed in harmonic)
-    cond_increase = df["score"] > df["score_prev"]
+# ----------------------------------------------------
+# 3. PROGRESSION BUILD
+# ----------------------------------------------------
 
-    # Final keep mask
-    keep = cond_first_nonzero | cond_increase
+def build_progression(dynamic_evd, static_evd, config, output_dir, use_weights=True):
+    """
+    Build progression graph by aggregating scores to (source, target, relation, datasourceId) level.
+    """
+    ds_config = config.get("data_sources", {})
+    years_range = config.get("time_range", {"first_year": 2000, "last_year": 2025})
+    years = np.arange(years_range["first_year"], years_range["last_year"] + 1)
 
-    filtered = df[keep].copy()
-    filtered.drop(columns=["score_prev"], inplace=True)
+    # --- Process Dynamic Edges ---
+    dynamic_progression = []
+    if not dynamic_evd.empty:
+        print(f"📊 Aggregating dynamic progression (Use weights: {use_weights})...")
+        
+        # 1. Map weights from config
+        if use_weights:
+            dynamic_evd["weight"] = dynamic_evd["datasourceId"].map(lambda x: ds_config.get(x, {}).get("weight", 1.0))
+        else:
+            dynamic_evd["weight"] = 1.0
+            
+        dynamic_evd["weighted_score"] = dynamic_evd["score"] * dynamic_evd["weight"]
+        
+        # 2. Group by edge identity
+        # Aggregate on: sourceId, targetId, source_type, target_type, relation, datasourceId
+        group_keys = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId"]
+        grouped = dynamic_evd.groupby(group_keys)
+        
+        for keys, group in tqdm(grouped, desc="Processing Dynamic Edges"):
+            src, tgt, src_t, tgt_t, rel, ds = keys
+            
+            # Get specific cutoff for this datasource
+            cutoff = ds_config.get(ds, {}).get("cutoff", 0.0)
+            
+            # Group scores by year for this specific edge
+            year_dict = group.groupby("year")["weighted_score"].apply(list).to_dict()
+            collected_scores = []
+            
+            # Compute cumulative harmonic sum year-by-year
+            prev_hs = -1.0
+            for y in years:
+                if y in year_dict:
+                    collected_scores.extend(year_dict[y])
+                
+                if not collected_scores:
+                    continue
+                    
+                hs = harmonic_sum(collected_scores)
+                
+                # Filter by datasource-specific cutoff
+                if hs < cutoff:
+                    continue
 
-    print(f"\n🔍 Temporal filtering")
-    print(f"Original rows: {len(df)}")
-    print(f"Filtered rows: {len(filtered)}")
-    print(f"Removed rows:  {len(df) - len(filtered)}\n")
+                # Monotonic filter: only store if the score increases (or first appearance)
+                if hs > prev_hs:
+                    dynamic_progression.append({
+                        "sourceId": src,
+                        "targetId": tgt,
+                        "source_type": src_t,
+                        "target_type": tgt_t,
+                        "relation": rel,
+                        "datasourceId": ds,
+                        "year": y,
+                        "score": hs
+                    })
+                    prev_hs = hs
 
-    return filtered
+    df_dynamic = pd.DataFrame(dynamic_progression)
+    
+    # --- Process Static Edges ---
+    # Static edges are simply unique relationships without temporal progression
+    df_static = pd.DataFrame()
+    if not static_evd.empty:
+        print("📌 Processing static edges...")
+        df_static = static_evd[["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score"]].drop_duplicates()
+        
+        # Apply datasource-specific cutoffs to static edges
+        def _filter_static(row):
+            ds = row["datasourceId"]
+            cutoff = ds_config.get(ds, {}).get("cutoff", 0.0)
+            return row["score"] >= cutoff
+            
+        if not df_static.empty:
+            df_static = df_static[df_static.apply(_filter_static, axis=1)]
 
+    # --- Save Outputs ---
+    os.makedirs(output_dir, exist_ok=True)
+    dynamic_path = os.path.join(output_dir, "source_level_progression_dynamic.parquet")
+    static_path = os.path.join(output_dir, "source_level_progression_static.parquet")
+    
+    df_dynamic.to_parquet(dynamic_path, index=False)
+    df_static.to_parquet(static_path, index=False)
+    
+    print(f"💾 Saved Dynamic: {dynamic_path}")
+    print(f"💾 Saved Static:  {static_path}")
 
+    # --- Metadata Tracking ---
+    metadata = {
+        "metadata": {
+            "version": "1.0",
+            "timestamp": datetime.now().isoformat(),
+            "config_source": "progression_config.yaml",
+            "use_weights": use_weights,
+            "data_source_configs": ds_config
+        },
+        "tracking": {
+            "dynamic_file": "source_level_progression_dynamic.parquet",
+            "static_file": "source_level_progression_static.parquet",
+            "dynamic_edge_count": len(df_dynamic),
+            "static_edge_count": len(df_static)
+        }
+    }
+    
+    metadata_path = os.path.join(output_dir, "progression_metadata.yaml")
+    with open(metadata_path, "w") as f:
+        yaml.dump(metadata, f, default_flow_style=False)
+    print(f"📄 Metadata Tracking: {metadata_path}")
 
+    return df_dynamic, df_static
+
+# ----------------------------------------------------
+# 4. EXECUTION
+# ----------------------------------------------------
 
 if __name__ == "__main__":
-    print("==============================================")
-    print("🚀 Loading evidence sources")
-    print("==============================================")
+    parser = argparse.ArgumentParser(description="Build Progression Graph Pipeline")
+    parser.add_argument("--dynamic-dir", required=True, help="Directory with dynamic edges")
+    parser.add_argument("--static-dir", required=True, help="Directory with static edges")
+    parser.add_argument("--config-file", required=True, help="Path to progression_config.yaml")
+    parser.add_argument("--output-dir", required=True, help="Directory for output parquets and metadata")
+    parser.add_argument("--use-weights", action="store_true", default=False, help="Whether to apply data source weights from config")
 
-    # -------------------------
-    # Load static + dynamic
-    # -------------------------
-    print("Loading dynamic evidence...")
-    dynamic_evd = load_dynamic_evidence()
+    args = parser.parse_args()
 
-    print("Loading static evidence...")
-    static_evd = load_static_evidence()
-
-    print("\n🔍 Inspecting dynamic evidence")
-    inspect_graph(dynamic_evd)
-
-    print("\n🔍 Inspecting static evidence")
-    inspect_graph(static_evd)
-
-    # ======================================================
-    # 1. DATASOURCE-LEVEL HARMONIC  (dynamic only)
-    # ======================================================
-    print("\n==============================================")
-    print("📊 Computing datasource-level harmonic (dynamic)")
-    print("==============================================")
-
-    ds_h = harmonic_by_datasource(dynamic_evd)   # returns column "score"
-    print(f"Datasource harmonic rows: {len(ds_h)}")
-
-    # ----------------------------------------------
-    # Apply monotonic temporal filtering
-    # ----------------------------------------------
-    print("\n⏳ Applying temporal monotonic filtering to datasource harmonic...")
-    ds_filtered = filter_temporal_edges(ds_h)  # uses score not datasource_score
-    print(f"Filtered datasource harmonic rows: {len(ds_filtered)}")
-
-
-    # ======================================================
-    # 2. Add static edges (raw score = 1)
-    # ======================================================
-    print("\n==============================================")
-    print("➕ Merging static edges into datasource harmonic output")
-    print("==============================================")
-
-    # Merge dynamic_filtered + static_raw
-    ds_merged = pd.concat([ds_filtered, static_evd], ignore_index=True)
-
-    # Save output
-    print(f"💾 Saving datasource harmonic merged file to:\n{DATASOURCE_HARMONIC_FILE}")
-    ds_merged.to_parquet(DATASOURCE_HARMONIC_FILE, index=False)
-
-
-    # ======================================================
-    # 3. DATATYPE-LEVEL HARMONIC (dynamic only)
-    # ======================================================
-    print("\n==============================================")
-    print("📚 Computing datatype-level harmonic (dynamic)")
-    print("==============================================")
-
-    dt_h = harmonic_by_datatype(ds_h)
-    print(f"Datatype harmonic rows: {len(dt_h)}")
-
-    # ----------------------------------------------
-    # Apply monotonic temporal filtering
-    # ----------------------------------------------
-    print("\n⏳ Applying temporal monotonic filtering to datatype harmonic...")
-    dt_filtered = filter_temporal_edges(dt_h)
-    print(f"Filtered datatype harmonic rows: {len(dt_filtered)}")
-
-    # Save datatype harmonic
-    print(f"💾 Saving datatype harmonic file to:\n{DATATYPE_HARMONIC_FILE}")
-    dt_filtered.to_parquet(DATATYPE_HARMONIC_FILE, index=False)
-
-
-    # ======================================================
-    # COMPLETED
-    # ======================================================
-    print("\n🎉 COMPLETED OPEN TARGETS TEMPORAL PIPELINE")
+    print("\n🚀 ================ STARTING PROGRESSION PIPELINE ================")
+    
+    # Load config
+    config = load_config(args.config_file)
+    
+    # Load data
+    print("📂 Loading input evidence...")
+    dynamic_evd = load_evidence(args.dynamic_dir, is_static=False)
+    static_evd = load_evidence(args.static_dir, is_static=True)
+    
+    # Inspect evidence
+    inspect_evidence_graph(dynamic_evd, static_evd)
+    
+    # Build progression
+    df_dyn, df_stat = build_progression(dynamic_evd, static_evd, config, args.output_dir, use_weights=args.use_weights)
+    
+    # Inspect progression
+    inspect_progression_graph(df_dyn, df_stat)
+    
+    print("✅ ================ PIPELINE COMPLETED SUCCESSFULLY ================\n")
