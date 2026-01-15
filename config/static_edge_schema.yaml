@@ -23,3 +23,16 @@ reactome:
     source_type=constant:reactome,
     target_type=constant:reactome
   ]
+
+# added for static GO integration (targets -> go.id)
+gene_ontology:
+  input_dir: targets
+  sourceId: id
+  targetId: go.id
+  relation_name: has_function_in
+  props: [
+    datasourceId=constant:gene_ontology,
+    score=constant:1.0,
+    source_type=constant:target,
+    target_type=constant:go
+  ]

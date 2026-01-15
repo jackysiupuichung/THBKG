@@ -2,6 +2,7 @@
 import argparse
 from src.parsers.parser import NodeParser, EdgeParser
 from src.parsers.intact.parser import IntActParser
+from src.parsers.go_ontology.parser import GOOntologyParser
 import pandas as pd
 
 
@@ -19,6 +20,10 @@ def run_pipeline(input, node_schema, edge_schema, static_edge_schema, node_outpu
     # but here we pass the same root input and output
     intact_parser = IntActParser(input, edge_schema, edge_output, node_store=node_store)
     intact_parser.parse()
+
+    print("🔹 Parsing go ontology edges...")
+    go_ontology_parser = GOOntologyParser(input, static_edge_schema, static_edge_output, node_store=node_store, static=True)
+    go_ontology_parser.parse()
 
     print("🔹 Parsing static edges...")
     static_edge_parser = EdgeParser(input, static_edge_schema, static_edge_output, node_store=node_store, static=True)
