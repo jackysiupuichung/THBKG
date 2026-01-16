@@ -24,16 +24,22 @@ cancer_biomarkers:
 chembl:
   - input_dir: sourceId=chembl
     name: chembl
-    sourceId: targetId
-    targetId: diseaseId
+    sourceId: diseaseId
+    targetId: targetId
     relation_name: clinical_trial
     props: [source_type=constant:disease, target_type=constant:target, clinicalStatus, studyStopReasonCategories, datasourceId, score, year, id]
 
   - name: chembl
-    sourceId: drugId
-    targetId: targetId
+    sourceId: targetId
+    targetId: drugId
     relation_name: modulated_by
-    props: [source_type=constant:molecule, target_type=constant:target, datasourceId, score=constant:1.0, year, id]
+    props: [source_type=constant:target, target_type=constant:molecule, datasourceId, score=constant:1.0, year, id]
+
+  - name: chembl
+    sourceId: drugId
+    targetId: diseaseId
+    relation_name: treats
+    props: [source_type=constant:molecule, target_type=constant:disease, datasourceId, score, year, id]
 
 reactome:
   - input_dir: sourceId=reactome
