@@ -77,14 +77,18 @@ def inspect_evidence_graph(dynamic_evd, static_evd):
     print(f"🌐 Total uniquely identified nodes: {len(all_nodes)}")
     
     # Node types
-    source_types = all_evd.groupby("source_type")["sourceId"].nunique()
-    target_types = all_evd.groupby("target_type")["targetId"].nunique()
+    # Combine sources and targets into a single dataframe to count unique nodes by type
+    nodes = pd.concat([
+        all_evd[["sourceId", "source_type"]].rename(columns={"sourceId": "id", "source_type": "type"}),
+        all_evd[["targetId", "target_type"]].rename(columns={"targetId": "id", "target_type": "type"})
+    ])
+    
+    # Deduplicate by ID to ensure we don't double count nodes that appear as both source and target
+    node_counts = nodes.drop_duplicates("id").groupby("type").size()
     
     print("\n🟦 Node counts by type:")
-    for t, count in source_types.items():
-        print(f"  - {t} (as source): {count}")
-    for t, count in target_types.items():
-        print(f"  - {t} (as target): {count}")
+    for t, count in node_counts.items():
+        print(f"  - {t}: {count}")
 
     # Edge summary
     print(f"\n🔗 Total edges (raw evidence records): {len(all_evd)}")
@@ -116,8 +120,9 @@ def inspect_progression_graph(df_dynamic, df_static):
         print(year_growth.sort_index(ascending=False).head(5))
         
     if not df_static.empty:
+        unique_static_edges = df_static.groupby(["sourceId", "targetId", "relation", "datasourceId"]).ngroups
         print(f"\n✅ Static progression records: {len(df_static)}")
-        print(f"🔗 Unique static relationships: {len(df_static)}")
+        print(f"🔗 Unique static relationships: {unique_static_edges}")
     
     print("==============================================================\n")
 
