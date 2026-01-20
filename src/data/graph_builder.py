@@ -95,165 +95,94 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict[str, Dict[
     Build heterogeneous graph from edges - RELATION::SOURCE LEVEL ONLY.
     
     Always uses (source_type, "relation::datasource", target_type) format with scores.
+    Supports temporal attributes: edge_time and edge_weight.
     
     Args:
         edges: DataFrame with edges (sourceId, targetId, source_type, target_type, 
                relation, datasourceId, score)
+               Optional: edge_time (year/timestamp), edge_weight (for events)
         
     Returns:
-        data: HeteroData object
-        id_maps: Dictionary mapping node type to {node_id: index}
+        hetero_data: HeteroData object
+        id_maps: Dictionary mapping node_type -> {node_id_str -> internal_idx}
     """
-    data = HeteroData()
-    id_maps = {}
+    print("\n🔨 Building HeteroData (relation::source level)...")
     
-    # Required columns
-    required_cols = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score"]
-    for col in required_cols:
-        if col not in edges.columns:
-            raise ValueError(f"Edges DataFrame missing required column: {col}")
-    
-    # ============================================================
-    # 1. Extract and add nodes
-    # ============================================================
+    # Extract nodes
     print("📊 Extracting nodes from edges...")
     nodes, id_to_type = extract_nodes_from_edges(edges)
     
-    for node_type, node_ids in nodes.items():
-        # Create ID mapping
-        id_map = {nid: i for i, nid in enumerate(node_ids)}
-        id_maps[node_type] = id_map
-        
-        # Store number of nodes
-        data[node_type].num_nodes = len(node_ids)
-        
-        print(f"✅ Added {len(node_ids)} {node_type} nodes")
+    # Create ID mappings
+    id_maps = {}
+    for node_type, node_list in nodes.items():
+        id_maps[node_type] = {node_id: idx for idx, node_id in enumerate(node_list)}
+        print(f"   {node_type}: {len(node_list)} nodes")
     
-    # ============================================================
-    # 2. Add edges - ALWAYS relation::datasource level
-    # ============================================================
-    if not edges.empty:
-        print("\n🔗 Building edges (relation::datasource level)...")
-        
-        # Group by: source_type, relation, datasourceId, target_type
-        edge_groups = edges.groupby(["source_type", "relation", "datasourceId", "target_type"])
-        
-        for edge_key, edge_df in edge_groups:
-            src_type, relation, datasource, dst_type = edge_key
-            
-            # Edge type: (src_type, "relation::datasource", dst_type)
-            edge_type = (src_type, f"{relation}::{datasource}", dst_type)
-            
-            # Get ID mappings
-            if src_type not in id_maps or dst_type not in id_maps:
-                print(f"⚠️ Skipping edge type {edge_type}: missing node type")
-                continue
-            
-            src_map = id_maps[src_type]
-            dst_map = id_maps[dst_type]
-            
-            # Map source and target IDs to indices
-            src_ids = edge_df["sourceId"].astype(str).tolist()
-            dst_ids = edge_df["targetId"].astype(str).tolist()
-            scores = edge_df["score"].values
-            
-            # Filter out edges with unknown nodes
-            valid_edges = []
-            valid_scores = []
-            for src_id, dst_id, score in zip(src_ids, dst_ids, scores):
-                if src_id in src_map and dst_id in dst_map:
-                    valid_edges.append((src_map[src_id], dst_map[dst_id]))
-                    valid_scores.append(score)
-            
-            if not valid_edges:
-                continue
-            
-            # Create edge_index tensor
-            edge_index = torch.tensor(valid_edges, dtype=torch.long).t().contiguous()
-            data[edge_type].edge_index = edge_index
-            
-            # ALWAYS add edge scores as edge_attr
-            edge_attr = torch.tensor(valid_scores, dtype=torch.float).unsqueeze(1)
-            data[edge_type].edge_attr = edge_attr
-            
-            print(f"✅ Added {edge_index.size(1)} edges for {edge_type}")
+    # Build HeteroData
+    hetero_data = HeteroData()
     
-    return data, id_maps
-
-
-def add_supervision_labels(
-    data: HeteroData,
-    train_edges: pd.DataFrame,
-    val_edges: pd.DataFrame,
-    test_edges: pd.DataFrame,
-    id_maps: Dict[str, Dict[str, int]],
-    supervision_src_type: str = "disease",
-    supervision_relation: str = "clinical_trial",
-    supervision_dst_type: str = "target",
-) -> HeteroData:
-    """
-    Add train/val/test edge labels to HeteroData for link prediction.
+    # Add nodes
+    print("\n🔗 Adding nodes...")
+    for node_type, node_list in nodes.items():
+        hetero_data[node_type].num_nodes = len(node_list)
+        print(f"✅ Added {len(node_list)} {node_type} nodes")
     
-    Note: This aggregates across all datasources for the supervision relation.
+    # Build edges
+    print("\n🔗 Building edges (relation::datasource level)...")
     
-    Args:
-        data: HeteroData object
-        train_edges: Training edges DataFrame
-        val_edges: Validation edges DataFrame
-        test_edges: Test edges DataFrame
-        id_maps: Node ID to index mappings
-        supervision_src_type: Source node type
-        supervision_relation: Relation type
-        supervision_dst_type: Destination node type
-        
-    Returns:
-        data: HeteroData with edge labels added
-    """
-    src_map = id_maps[supervision_src_type]
-    dst_map = id_maps[supervision_dst_type]
+    # Check for temporal attributes
+    has_edge_time = 'edge_time' in edges.columns
+    has_edge_weight = 'edge_weight' in edges.columns
+    has_score = 'score' in edges.columns and not has_edge_weight
     
-    def map_edges(edge_df: pd.DataFrame, split: str):
-        """Map edges to indices and add to data."""
-        if edge_df.empty:
-            return
-        
-        # Filter to supervision relation
-        supervision_df = edge_df[
-            (edge_df["source_type"] == supervision_src_type) &
-            (edge_df["target_type"] == supervision_dst_type) &
-            (edge_df["relation"] == supervision_relation)
-        ]
-        
-        if supervision_df.empty:
-            return
-        
-        src_ids = supervision_df["sourceId"].astype(str).tolist()
-        dst_ids = supervision_df["targetId"].astype(str).tolist()
-        
-        valid_edges = []
-        for src_id, dst_id in zip(src_ids, dst_ids):
-            if src_id in src_map and dst_id in dst_map:
-                valid_edges.append((src_map[src_id], dst_map[dst_id]))
-        
-        if valid_edges:
-            # Remove duplicates (same edge from multiple datasources)
-            valid_edges = list(set([(s, d) for s, d in valid_edges]))
-            
-            edge_index = torch.tensor(valid_edges, dtype=torch.long).t().contiguous()
-            
-            # Store as edge_label_index for each datasource edge type
-            # We'll use the first datasource edge type we find
-            for edge_type in data.edge_types:
-                if (edge_type[0] == supervision_src_type and 
-                    edge_type[2] == supervision_dst_type and
-                    supervision_relation in edge_type[1]):
-                    data[edge_type][f"{split}_edge_label_index"] = edge_index
-                    data[edge_type][f"{split}_edge_label"] = torch.ones(edge_index.size(1), dtype=torch.float)
-                    print(f"✅ Added {edge_index.size(1)} {split} supervision edges to {edge_type}")
-                    break
+    # Group by edge type
+    edge_groups = edges.groupby(['source_type', 'relation', 'target_type', 'datasourceId'])
     
-    map_edges(train_edges, "train")
-    map_edges(val_edges, "val")
-    map_edges(test_edges, "test")
+    for (src_type, relation, dst_type, datasource), group in edge_groups:
+        # Create edge type key
+        edge_type_key = (src_type, f"{relation}::{datasource}", dst_type)
+        
+        # Map node IDs to indices
+        src_indices = [id_maps[src_type][str(sid)] for sid in group['sourceId']]
+        dst_indices = [id_maps[dst_type][str(tid)] for tid in group['targetId']]
+        
+        # Create edge_index
+        edge_index = torch.tensor(
+            [src_indices, dst_indices],
+            dtype=torch.long
+        )
+        
+        hetero_data[edge_type_key].edge_index = edge_index
+        
+        # Add edge attributes
+        if has_edge_weight:
+            # Event-based: use edge_weight
+            hetero_data[edge_type_key].edge_attr = torch.tensor(
+                group['edge_weight'].values,
+                dtype=torch.float
+            ).unsqueeze(-1)
+        elif has_score:
+            # Snapshot-based: use score
+            hetero_data[edge_type_key].edge_attr = torch.tensor(
+                group['score'].values,
+                dtype=torch.float
+            ).unsqueeze(-1)
+        
+        # Add temporal attribute
+        if has_edge_time:
+            hetero_data[edge_type_key].edge_time = torch.tensor(
+                group['edge_time'].values,
+                dtype=torch.float
+            )
+        
+        num_edges = edge_index.size(1)
+        attrs_str = []
+        if has_edge_weight or has_score:
+            attrs_str.append("edge_attr")
+        if has_edge_time:
+            attrs_str.append("edge_time")
+        
+        attr_info = f" ({', '.join(attrs_str)})" if attrs_str else ""
+        print(f"✅ Added {num_edges} edges for {edge_type_key}{attr_info}")
     
-    return data
+    return hetero_data, id_maps

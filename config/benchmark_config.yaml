@@ -6,17 +6,17 @@ experiment_name: "hgt_source_benchmark"
 
 # Data configuration
 data:
-  edge_dir: "output/edges"  # Directory with edge parquet files
+  # Temporal event graph
+  temporal_graph_file: "output/progression/temporal_graph.pt"
   
   # Temporal split configuration
   temporal_split:
-    cutoff_year: 2020  # Training data up to this year
-    horizon: 2         # Total prediction window (years)
-    val_years: 1       # Years for validation
-  
-  # Graph configuration
+    train_year: 2020   # Train on edges <= 2020
+    val_year: 2021     # Validate on edges in 2021 (excl. 2020)
+    test_year: 2022    # Test on edges in 2022 (excl. 2021)
+    
   graph:
-    mode: "static"  # Static snapshot (temporal mode for future)
+    mode: "temporal"  # Changed to temporal
     
     # Supervision task (link prediction target)
     supervision:

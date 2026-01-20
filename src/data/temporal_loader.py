@@ -1,144 +1,127 @@
 #!/usr/bin/env python3
 """
-Temporal graph loader utilities.
+Temporal graph loader utilities for event-based graphs.
 
-Load pre-built temporal graph snapshots by year for efficient testing.
+Handles loading of event-based HeteroData and creating temporal masks.
 """
 
 import torch
 from torch_geometric.data import HeteroData
-from typing import Dict, List, Optional
+from typing import Dict, Tuple, Optional
 from pathlib import Path
 
 
-def load_snapshot(
+def load_event_graph(
     filepath: str,
-    year: int,
     attach_features: bool = False,
     embedding_dim: int = 128,
     seed: int = 42
 ) -> HeteroData:
     """
-    Load a specific year snapshot from temporal graph.
+    Load event-based temporal graph (HeteroData).
     
     Args:
-        filepath: Path to temporal graph file
-        year: Year to load
+        filepath: Path to temporal graph file (.pt)
         attach_features: Whether to attach random node features
         embedding_dim: Embedding dimension
         seed: Random seed
         
     Returns:
-        HeteroData for specified year
+        HeteroData object with edge_time and edge_weight attributes
     """
     if not Path(filepath).exists():
         raise FileNotFoundError(f"Temporal graph file not found: {filepath}")
     
+    # Load HeteroData object
     data = torch.load(filepath, weights_only=False)
     
-    if year not in data['graphs']:
-        available = data['timestamps']
-        raise ValueError(
-            f"Year {year} not found in temporal graph. "
-            f"Available years: {available}"
-        )
-    
-    hetero_data = data['graphs'][year]
+    if not isinstance(data, HeteroData):
+        raise TypeError(f"Expected HeteroData, got {type(data)}")
     
     # Optionally attach features
     if attach_features:
         from .utils import attach_node_features
         # Create dummy id_maps (nodes already indexed in graph)
         id_maps = {}
-        for node_type in hetero_data.node_types:
-            num_nodes = hetero_data[node_type].num_nodes
+        for node_type in data.node_types:
+            num_nodes = data[node_type].num_nodes
             id_maps[node_type] = {str(i): i for i in range(num_nodes)}
         
-        hetero_data = attach_node_features(
-            hetero_data,
+        data = attach_node_features(
+            data,
             id_maps,
             init_method="random",
             embedding_dim=embedding_dim,
             seed=seed
         )
     
-    return hetero_data
+    return data
 
 
-def load_temporal_graph(filepath: str) -> Dict:
+def get_temporal_masks(
+    data: HeteroData,
+    train_year: int,
+    val_year: int
+) -> Dict[str, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     """
-    Load entire temporal graph with all snapshots.
+    Create train/val/test masks based on edge_time.
     
     Args:
-        filepath: Path to temporal graph file
+        data: HeteroData object with edge_time
+        train_year: Max year for training (inclusive)
+        val_year: Max year for validation (inclusive)
         
     Returns:
-        Dictionary with 'timestamps', 'graphs', 'metadata', 'config'
+        Dictionary mapping edge_type -> (train_mask, val_mask, test_mask)
     """
-    if not Path(filepath).exists():
-        raise FileNotFoundError(f"Temporal graph file not found: {filepath}")
+    masks = {}
     
-    return torch.load(filepath, weights_only=False)
-
-
-def get_metadata(filepath: str, year: Optional[int] = None) -> Dict:
-    """
-    Get metadata for temporal graph.
-    
-    Args:
-        filepath: Path to temporal graph file
-        year: Optional specific year (if None, returns all metadata)
+    for edge_type in data.edge_types:
+        if 'edge_time' not in data[edge_type]:
+            # If no time, assume context (all train)
+            num_edges = data[edge_type].edge_index.size(1)
+            train_mask = torch.ones(num_edges, dtype=torch.bool)
+            val_mask = torch.zeros(num_edges, dtype=torch.bool)
+            test_mask = torch.zeros(num_edges, dtype=torch.bool)
+        else:
+            edge_time = data[edge_type].edge_time
+            
+            # Allow scalar comparison even if edge_time is float
+            train_mask = edge_time <= train_year
+            val_mask = (edge_time > train_year) & (edge_time <= val_year)
+            test_mask = edge_time > val_year
+            
+        masks[edge_type] = (train_mask, val_mask, test_mask)
         
-    Returns:
-        Metadata dict or dict of metadata per year
-    """
-    data = torch.load(filepath, weights_only=False)
-    
-    if year is not None:
-        if year not in data['metadata']:
-            available = list(data['metadata'].keys())
-            raise ValueError(
-                f"Year {year} not found. Available: {available}"
-            )
-        return data['metadata'][year]
-    else:
-        return data['metadata']
+    return masks
 
 
-def list_available_years(filepath: str) -> List[int]:
+def print_temporal_summary(data: HeteroData):
     """
-    List available years in temporal graph.
+    Print summary of temporal graph events.
     
     Args:
-        filepath: Path to temporal graph file
-        
-    Returns:
-        List of available years
+        data: HeteroData object
     """
-    data = torch.load(filepath, weights_only=False)
-    return data['timestamps']
-
-
-def print_temporal_summary(filepath: str):
-    """
-    Print summary of temporal graph.
-    
-    Args:
-        filepath: Path to temporal graph file
-    """
-    data = torch.load(filepath, weights_only=False)
-    
     print(f"\n📊 Temporal Graph Summary")
     print(f"{'='*80}")
-    print(f"File: {filepath}")
-    print(f"Years: {data['timestamps']}")
-    print(f"Config: {data['config']}")
     
-    print(f"\n📈 Growth Over Time:")
-    print(f"{'Year':<8} {'Nodes':<10} {'Edges':<12} {'Edge Types':<12}")
-    print(f"{'-'*80}")
-    
-    for year in data['timestamps']:
-        meta = data['metadata'][year]
-        print(f"{year:<8} {meta['num_nodes']:<10,} "
-              f"{meta['total_edges']:<12,} {meta['num_edge_types']:<12}")
+    print(f"Nodes:")
+    for nt in data.node_types:
+        print(f"   {nt}: {data[nt].num_nodes:,}")
+        
+    print(f"\nEdges:")
+    for et in data.edge_types:
+        num_edges = data[et].edge_index.size(1)
+        has_time = 'edge_time' in data[et]
+        has_weight = 'edge_weight' in data[et] or 'edge_attr' in data[et]
+        
+        info = []
+        if has_time: 
+            min_t = int(data[et].edge_time.min())
+            max_t = int(data[et].edge_time.max())
+            info.append(f"Time: {min_t}-{max_t}")
+        if has_weight: 
+            info.append("Weighted")
+            
+        print(f"   {et}: {num_edges:,} {' | '.join(info)}")
