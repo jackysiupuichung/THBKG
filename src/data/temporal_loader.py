@@ -58,6 +58,39 @@ def load_event_graph(
     return data
 
 
+def filter_graph_by_time(data: HeteroData, year: int) -> HeteroData:
+    """
+    Filter graph to include only edges up to a specific year.
+    Creates a snapshot view of the graph.
+    
+    Args:
+        data: HeteroData object with edge_time
+        year: Max year to include (inclusive)
+        
+    Returns:
+        New HeteroData object with filtered edges
+    """
+    new_data = data.clone()
+    
+    for et in new_data.edge_types:
+        if 'edge_time' in new_data[et]:
+            edge_time = new_data[et].edge_time
+            mask = edge_time <= year
+            
+            # Filter edge_index
+            new_data[et].edge_index = new_data[et].edge_index[:, mask]
+            
+            # Filter attributes
+            for key in ['edge_time', 'edge_weight', 'edge_attr']:
+                if key in new_data[et]:
+                    new_data[et][key] = new_data[et][key][mask]
+        else:
+            # Keep static edges as is
+            pass
+            
+    return new_data
+
+
 def get_temporal_masks(
     data: HeteroData,
     train_year: int,
