@@ -83,8 +83,6 @@ def apply_cutoffs(edges, config):
 def build_event_list(
     input_dir: str,
     config_path: str,
-    start_year: int,
-    end_year: int,
     output_file: str,
 ):
     """
@@ -95,8 +93,6 @@ def build_event_list(
     Args:
         input_dir: Directory with raw edges
         config_path: Path to progression config
-        start_year: Start year (inclusive)
-        end_year: End year (inclusive)
         output_file: Output parquet file
     """
     print("\n" + "="*80)
@@ -106,6 +102,15 @@ def build_event_list(
     # Load config
     print(f"\n📄 Loading config from {config_path}...")
     config = load_config(config_path)
+    
+    # Get time range from config
+    if 'time_range' not in config:
+        print("❌ No 'time_range' found in config!")
+        return
+    
+    start_year = config['time_range']['first_year']
+    end_year = config['time_range']['last_year']
+    print(f"✅ Time range from config: {start_year} - {end_year}")
     
     # Load raw edges
     print(f"\n📂 Loading raw edges from {input_dir}...")
@@ -125,48 +130,63 @@ def build_event_list(
     dynamic_edges = edges[edges['year'].notna()].copy()
     print(f"📊 Dynamic edges: {len(dynamic_edges):,}")
     
-    # Filter year range
-    print(f"\n⏰ Filtering to year range: {start_year} - {end_year}")
-    dynamic_edges = dynamic_edges[
-        (dynamic_edges['year'] >= start_year) &
-        (dynamic_edges['year'] <= end_year)
-    ]
-    print(f"✅ {len(dynamic_edges):,} edges in range")
-    
     # Apply cutoffs
     print(f"\n✂️ Applying datasource cutoffs...")
     dynamic_edges = apply_cutoffs(dynamic_edges, config)
     print(f"✅ {len(dynamic_edges):,} edges after cutoffs")
     
-    # Aggregate scores per (source, target, relation, datasource, year)
-    print(f"\n🔢 Aggregating scores (harmonic sum)...")
+    # Build cumulative temporal events
+    print(f"\n🔢 Building cumulative temporal events...")
+    print(f"   For each year {start_year}-{end_year}: include all evidences up to that year")
     
+    # Group columns (without year)
     group_cols = ['sourceId', 'targetId', 'source_type', 'target_type', 
-                  'relation', 'datasourceId', 'year']
+                  'relation', 'datasourceId']
     
-    events = dynamic_edges.groupby(group_cols, as_index=False).agg({
-        'score': lambda x: harmonic_sum(x.values)
-    })
+    # Store all year-score combinations
+    all_events = []
     
-    print(f"✅ {len(events):,} events after aggregation")
+    # For each year, calculate cumulative harmonic sum
+    for year in tqdm(range(start_year, end_year + 1), desc="Processing years"):
+        # Get all edges up to and including this year (CUMULATIVE)
+        cumulative_edges = dynamic_edges[dynamic_edges['year'] <= year].copy()
+        
+        if cumulative_edges.empty:
+            continue
+        
+        # Group by combination and aggregate scores with harmonic sum
+        year_scores = cumulative_edges.groupby(group_cols, as_index=False).agg({
+            'score': lambda x: harmonic_sum(x.values)
+        })
+        
+        # Add year column
+        year_scores['year'] = year
+        
+        all_events.append(year_scores)
     
-    # Keep only score-change events (optional compression)
-    # For each (source, target, relation, datasource), keep events where score changes
-    print(f"\n🗜️ Removing duplicate scores...")
+    if not all_events:
+        print("❌ No events generated!")
+        return
     
-    events = events.sort_values(['sourceId', 'targetId', 'relation', 'datasourceId', 'year'])
+    # Combine all years
+    events = pd.concat(all_events, ignore_index=True)
+    print(f"✅ Generated {len(events):,} year-score combinations")
+    
+    # Keep only score-change events
+    # For each combination, keep first year and years where score changes
+    print(f"\n🗜️ Filtering to score-change events only...")
+    
+    events = events.sort_values(group_cols + ['year'])
     
     # Group and filter
     compressed = []
-    for (src, tgt, rel, ds), group in events.groupby(
-        ['sourceId', 'targetId', 'relation', 'datasourceId']
-    ):
-        # Keep first event and events where score changed
+    for combo, group in events.groupby(group_cols):
+        # Keep first event and events where score changed from previous year
         keep_mask = group['score'].diff().fillna(1.0) != 0
         compressed.append(group[keep_mask])
     
     events = pd.concat(compressed, ignore_index=True)
-    print(f"✅ {len(events):,} events after compression")
+    print(f"✅ {len(events):,} events after filtering (score changes only)")
     
     # Rename for clarity
     events = events.rename(columns={
@@ -217,18 +237,6 @@ def main():
         help="Path to progression config YAML"
     )
     parser.add_argument(
-        "--start-year",
-        type=int,
-        required=True,
-        help="Start year (inclusive)"
-    )
-    parser.add_argument(
-        "--end-year",
-        type=int,
-        required=True,
-        help="End year (inclusive)"
-    )
-    parser.add_argument(
         "--output",
         type=str,
         default="output/progression/events.parquet",
@@ -240,8 +248,6 @@ def main():
     build_event_list(
         input_dir=args.input_dir,
         config_path=args.config,
-        start_year=args.start_year,
-        end_year=args.end_year,
         output_file=args.output,
     )
 
