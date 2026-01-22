@@ -180,28 +180,48 @@ def main(config_path: str):
     # 6. Loaders
     print("\n🚚 Creating Loaders...")
     
+    # Extract edge times for temporal sampling
+    if 'edge_time' in train_context[supervision_edge_type]:
+        train_edge_times = train_context[supervision_edge_type].edge_time
+    else:
+        # Fallback: use zeros if no temporal info
+        train_edge_times = torch.zeros(train_edge_index.size(1))
+    
     train_loader = LinkNeighborLoader(
         data=train_context,
         num_neighbors=[20, 10],
         edge_label_index=(supervision_edge_type, train_edge_index),
         edge_label=train_labels,
-        neg_sampling=dict(mode='triplet', amount=1.0),
+        edge_label_time=train_edge_times - 1,  # Sample neighbors BEFORE this edge
+        time_attr='edge_time',  # Attribute name for temporal filtering
+        temporal_strategy='last',  # Use most recent neighbors within time window
+        neg_sampling=dict(mode='binary', amount=1.0),
         batch_size=cfg.train.batch_size,
         shuffle=True,
-        num_workers=4
+        num_workers=4,
+        persistent_workers=True  # Keep workers alive between epochs
     )
     
     # Validation Loader (Regression)
     # Context: train_context. Labels: val_edge_index
+    if 'edge_time' in hetero_data[supervision_edge_type]:
+        val_edge_times = hetero_data[supervision_edge_type].edge_time[val_mask]
+    else:
+        val_edge_times = torch.zeros(val_edge_index.size(1))
+    
     val_loader = LinkNeighborLoader(
         data=train_context,
         num_neighbors=[20, 10],
         edge_label_index=(supervision_edge_type, val_edge_index),
         edge_label=val_labels,
-        neg_sampling=dict(mode='triplet', amount=1.0), # Also validate on negatives? Yes for regression.
+        edge_label_time=val_edge_times - 1,  # Sample neighbors BEFORE this edge
+        time_attr='edge_time',
+        temporal_strategy='last',
+        neg_sampling=dict(mode='binary', amount=1.0),
         batch_size=cfg.train.batch_size,
         shuffle=False,
-        num_workers=4
+        num_workers=4,
+        persistent_workers=True
     )
     
     # 7. Model

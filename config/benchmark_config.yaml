@@ -21,7 +21,7 @@ data:
     # Supervision task (link prediction target)
     supervision:
       src_type: "disease"
-      relation: "clinical_trial"
+      relation: "clinical_trial::chembl"
       dst_type: "target"
 
 # Model configuration
@@ -54,7 +54,7 @@ train:
 
 # Evaluation configuration
 eval:
-  k_values: [10, 20, 50, 100]  # Top-k values for metrics
+  k_values: [200, 500]
   
   # Cold start evaluation
   cold_start:
