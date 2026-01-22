@@ -4,78 +4,110 @@ time_range:
   first_year: 2000
   last_year: 2025
 
-data_sources:
-  gwas_credible_sets:
-    datatype: genetic_association
-    weight: 1.0
-  eva:
+datasources:
+  # Genetic Association (target -> disease)
+  genetic_association::eva:
     datatype: genetic_association
     weight: 1.0
     cutoff: 0.6
-  gene_burden:
+  genetic_association::gene_burden:
     datatype: genetic_association
     weight: 1.0
-  genomics_england:
+  genetic_association::genomics_england:
     datatype: genetic_association
     weight: 1.0
-  gene2phenotype:
+  genetic_association::gene2phenotype:
     datatype: genetic_association
     weight: 1.0
-  uniprot_literature:
+  genetic_association::uniprot_literature:
     datatype: genetic_association
     weight: 1.0
-  uniprot_variants:
+  genetic_association::uniprot_variants:
     datatype: genetic_association
     weight: 1.0
-  orphanet:
+  genetic_association::orphanet:
     datatype: genetic_association
     weight: 1.0
-  clingen:
+  genetic_association::clingen:
     datatype: genetic_association
     weight: 1.0
-  cancer_gene_census:
+  
+  # Somatic Mutation (target -> disease)
+  somatic_mutation::cancer_gene_census:
     datatype: somatic_mutation
     weight: 1.0
-  intogen:
+  somatic_mutation::eva_somatic:
     datatype: somatic_mutation
     weight: 1.0
-  eva_somatic:
+  somatic_mutation::cancer_biomarkers:
     datatype: somatic_mutation
     weight: 1.0
-  cancer_biomarkers:
-    datatype: somatic_mutation
-    weight: 1.0
-  chembl:
+  
+  # Clinical Trial (disease -> target)
+  clinical_trial::chembl:
     datatype: known_drug
     weight: 1.0
-  crispr_screen:
+  
+  # Affected Pathway (target -> disease)
+  affected_pathway::crispr_screen:
     datatype: affected_pathway
     weight: 1.0
-  crispr:
+  affected_pathway::crispr:
     datatype: affected_pathway
     weight: 1.0
-  slapenrich:
+  affected_pathway::slapenrich:
     datatype: affected_pathway
     weight: 0.5
-  progeny:
-    datatype: affected_pathway
-    weight: 0.5
-  reactome:
+  affected_pathway::reactome:
     datatype: affected_pathway
     weight: 1.0
-  sysbio:
+  affected_pathway::sysbio:
     datatype: affected_pathway
     weight: 0.5
-  europepmc:
+  
+  # Literature (target -> disease)
+  literature::europepmc:
     datatype: literature
     weight: 0.2
     cutoff: 0.3
-  expression_atlas:
+  
+  # RNA Expression (target -> disease)
+  rna_expression::expression_atlas:
     datatype: rna_expression
     weight: 0.2
-  impc:
+  
+  # Animal Model (target -> disease)
+  animal_model::impc:
     datatype: animal_model
     weight: 0.2
-  gene_ontology:
+  
+  # Functional Annotation (target -> go)
+  has_function_in::gene_ontology:
     datatype: functional_annotation
     weight: 1.0
+  
+  # Protein Interaction (target -> target)
+  interacts_with::intact:
+    datatype: protein_interaction
+    weight: 1.0
+  
+  # Target modulation (target -> molecule)
+  modulated_by::chembl:
+    datatype: known_drug
+    weight: 1.0
+  
+  # Pathway involvement (target -> reactome)
+  involved_in::reactome:
+    datatype: affected_pathway
+    weight: 1.0
+  involved_in::slapenrich:
+    datatype: affected_pathway
+    weight: 0.5
+  
+  # Disease-pathway association (disease -> reactome)
+  associated_with::reactome:
+    datatype: affected_pathway
+    weight: 1.0
+  associated_with::slapenrich:
+    datatype: affected_pathway
+    weight: 0.5

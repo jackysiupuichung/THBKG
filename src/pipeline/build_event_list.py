@@ -32,8 +32,38 @@ def harmonic_sum(scores, max_harmonic=1.644):
     return np.sum(s / (idx ** 2)) / max_harmonic
 
 
-def load_all_edges(directory):
-    """Load all parquet files from directory."""
+def max_score(scores):
+    """Return the maximum score."""
+    if len(scores) == 0:
+        return 0.0
+    return np.max(scores)
+
+
+def aggregate_scores(scores, method='harmonic_sum'):
+    """Aggregate scores using specified method.
+    
+    Args:
+        scores: Array of scores
+        method: 'harmonic_sum' or 'max'
+    
+    Returns:
+        Aggregated score
+    """
+    if method == 'harmonic_sum':
+        return harmonic_sum(scores)
+    elif method == 'max':
+        return max_score(scores)
+    else:
+        raise ValueError(f"Unknown aggregation method: {method}. Use 'harmonic_sum' or 'max'")
+
+
+def load_all_edges(directory, sample_ratio=None):
+    """Load all parquet files from directory.
+    
+    Args:
+        directory: Directory containing parquet files
+        sample_ratio: Optional float (0.0-1.0) to sample each file (e.g., 0.01 for 1:100)
+    """
     dfs = []
     parquet_files = glob(os.path.join(directory, "*.parquet"))
     
@@ -41,6 +71,9 @@ def load_all_edges(directory):
         try:
             df = pd.read_parquet(pq)
             if not df.empty:
+                # Sample if ratio specified
+                if sample_ratio is not None and 0 < sample_ratio < 1.0:
+                    df = df.sample(frac=sample_ratio, random_state=42)
                 dfs.append(df)
         except Exception as e:
             print(f"⚠️ Error reading {pq}: {e}")
@@ -49,14 +82,18 @@ def load_all_edges(directory):
 
 
 def apply_cutoffs(edges, config):
-    """Apply datasource-specific cutoffs."""
+    """Apply datasource-specific cutoffs using relation::datasource format."""
     if 'datasources' not in config:
         return edges
     
+    # Create composite key: relation::datasourceId
+    edges = edges.copy()
+    edges['relation_datasource'] = edges['relation'] + '::' + edges['datasourceId']
+    
     filtered = []
     
-    for datasource, params in config['datasources'].items():
-        ds_edges = edges[edges['datasourceId'] == datasource].copy()
+    for relation_datasource, params in config['datasources'].items():
+        ds_edges = edges[edges['relation_datasource'] == relation_datasource].copy()
         
         if ds_edges.empty:
             continue
@@ -64,29 +101,37 @@ def apply_cutoffs(edges, config):
         if 'cutoff' in params and 'score' in ds_edges.columns:
             cutoff = params['cutoff']
             ds_edges = ds_edges[ds_edges['score'] >= cutoff]
-            print(f"   {datasource}: {len(ds_edges):,} edges (cutoff >= {cutoff})")
+            print(f"   {relation_datasource}: {len(ds_edges):,} edges (cutoff >= {cutoff})")
         else:
-            print(f"   {datasource}: {len(ds_edges):,} edges")
+            print(f"   {relation_datasource}: {len(ds_edges):,} edges")
         
         filtered.append(ds_edges)
     
     # Include unconfigured datasources
     configured = set(config['datasources'].keys())
-    unconfigured = edges[~edges['datasourceId'].isin(configured)]
+    unconfigured = edges[~edges['relation_datasource'].isin(configured)]
     if not unconfigured.empty:
-        print(f"   Other datasources: {len(unconfigured):,} edges")
+        print(f"   Other relation::datasource combinations: {len(unconfigured):,} edges")
         filtered.append(unconfigured)
     
-    return pd.concat(filtered, ignore_index=True) if filtered else pd.DataFrame()
+    result = pd.concat(filtered, ignore_index=True) if filtered else pd.DataFrame()
+    
+    # Drop the temporary column
+    if not result.empty and 'relation_datasource' in result.columns:
+        result = result.drop(columns=['relation_datasource'])
+    
+    return result
 
 
 def build_event_list(
     input_dir: str,
     config_path: str,
     output_file: str,
+    aggregation_method: str = 'harmonic_sum',
+    sample_ratio: float = None,
 ):
     """
-    Build temporal event graph from raw edges.
+    Build temporal event graph from raw edges using cumulative aggregation.
     
     Creates single event list with edge_time and edge_weight.
     
@@ -94,9 +139,12 @@ def build_event_list(
         input_dir: Directory with raw edges
         config_path: Path to progression config
         output_file: Output parquet file
+        aggregation_method: 'harmonic_sum' or 'max' (default: 'harmonic_sum')
+        sample_ratio: Optional float (0.0-1.0) to sample edges (e.g., 0.01 for 1:100 test)
     """
     print("\n" + "="*80)
-    print("BUILDING TEMPORAL EVENT GRAPH")
+    sample_info = f" [SAMPLE: {sample_ratio*100:.1f}%]" if sample_ratio else ""
+    print(f"BUILDING TEMPORAL EVENT GRAPH (aggregation: {aggregation_method}){sample_info}")
     print("="*80)
     
     # Load config
@@ -114,7 +162,9 @@ def build_event_list(
     
     # Load raw edges
     print(f"\n📂 Loading raw edges from {input_dir}...")
-    edges = load_all_edges(input_dir)
+    if sample_ratio:
+        print(f"   📊 Sampling {sample_ratio*100:.1f}% of each file for testing")
+    edges = load_all_edges(input_dir, sample_ratio=sample_ratio)
     
     if edges.empty:
         print("❌ No edges found!")
@@ -154,9 +204,9 @@ def build_event_list(
         if cumulative_edges.empty:
             continue
         
-        # Group by combination and aggregate scores with harmonic sum
+        # Group by combination and aggregate scores
         year_scores = cumulative_edges.groupby(group_cols, as_index=False).agg({
-            'score': lambda x: harmonic_sum(x.values)
+            'score': lambda x: aggregate_scores(x.values, method=aggregation_method)
         })
         
         # Add year column
@@ -242,12 +292,27 @@ def main():
         default="output/progression/events.parquet",
         help="Output parquet file"
     )
+    parser.add_argument(
+        "--aggregation-method",
+        type=str,
+        default="harmonic_sum",
+        choices=["harmonic_sum", "max"],
+        help="Score aggregation method: 'harmonic_sum' (default) or 'max'"
+    )
+    parser.add_argument(
+        "--sample-ratio",
+        type=float,
+        default=None,
+        help="Sample ratio for testing (e.g., 0.01 for 1:100 sample). Default: None (use all data)"
+    )
     
     args = parser.parse_args()
     
     build_event_list(
         input_dir=args.input_dir,
         config_path=args.config,
+        aggregation_method=args.aggregation_method,
+        sample_ratio=args.sample_ratio,
         output_file=args.output,
     )
 
