@@ -16,10 +16,10 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from torch_geometric.loader import LinkNeighborLoader
-from data.temporal_loader import load_event_graph, get_temporal_masks, filter_graph_by_time, to_time_agnostic
-from models.utils import build_model
-from benchmark.evaluator import Evaluator
-from data.evaluation_prep import build_evaluation_sets
+from src.data.temporal_loader import load_event_graph, get_temporal_masks, filter_graph_by_time, to_time_agnostic
+from src.models.utils import build_model
+from src.benchmark.evaluator import Evaluator
+from src.data.evaluation_prep import build_evaluation_sets
 
 
 def train_one_epoch(model, loader, optimizer, device, supervision_edge_type, src_type, dst_type):
