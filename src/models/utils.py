@@ -69,6 +69,8 @@ def build_model(
             hidden_dim=hidden_dim,
             out_dim=out_dim,
             num_heads=num_heads,
+            num_layers=num_layers,
+            metadata=metadata,
             dropout=dropout
         )
     elif model_name == 'gatv3':
@@ -76,6 +78,8 @@ def build_model(
             hidden_dim=hidden_dim,
             out_dim=out_dim,
             num_heads=num_heads,
+            num_layers=num_layers,
+            metadata=metadata,
             dropout=dropout
         )
     else:
