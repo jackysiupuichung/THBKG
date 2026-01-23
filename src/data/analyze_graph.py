@@ -27,7 +27,7 @@ def setup_plotting():
     plt.rcParams["figure.figsize"] = (10, 6)
     plt.rcParams["font.size"] = 12
 
-def plot_counts(counts_dict, title, ylabel, filename, color='skyblue'):
+def plot_counts(counts_dict, title, ylabel, filename, color='skyblue', log_scale=False):
     plt.figure()
     keys = list(counts_dict.keys())
     values = list(counts_dict.values())
@@ -40,6 +40,8 @@ def plot_counts(counts_dict, title, ylabel, filename, color='skyblue'):
     sns.barplot(x=values, y=keys, color=color)
     plt.title(title)
     plt.xlabel(ylabel)
+    if log_scale:
+        plt.xscale('log')
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
@@ -79,7 +81,7 @@ def analyze_graph(data: HeteroData, output_dir: str, prefix: str):
     
     # 2. Edge Counts
     edge_counts = {f"{et[0]}-{et[1]}-{et[2]}": data[et].edge_index.size(1) for et in data.edge_types}
-    plot_counts(edge_counts, f"{prefix}: Edge Counts", "Count", f"{output_dir}/{prefix}_edge_counts.png")
+    plot_counts(edge_counts, f"{prefix}: Edge Counts", "Count", f"{output_dir}/{prefix}_edge_counts.png", log_scale=True)
     
     # 3. Degree Distribution (Target Nodes - Central Hubs)
     # Calculate total degree for 'target' nodes across all relations

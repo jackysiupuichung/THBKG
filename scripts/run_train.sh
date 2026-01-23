@@ -8,6 +8,12 @@
 
 set -euo pipefail
 
+# Activate virtual environment
 source .venv/bin/activate
 
-python -m src.train --config src/configs/test_GAT.yaml
+echo "================================================================================"
+echo "RUNNING GATv2 TIME-AGNOSTIC TRAINING"
+echo "================================================================================"
+
+# Run Training
+python -m src.train_time_agnostic --config config/experiments/gatv2_agnostic.yaml
