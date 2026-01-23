@@ -121,16 +121,36 @@ def main(config_path: str):
     # Val Loader Context: train_snapshot (<= 2020) -> Predicts 2021 edges
     # Test Inference Context: val_snapshot (<= 2021) -> Predicts 2022 edges
     
-    # Time-Agnostic Handling
-    is_time_agnostic = cfg.data.graph.get('time_agnostic', False)
-    if is_time_agnostic:
-        print("\nUsing Time-Agnostic Graph (Collapsed)...")
+    # 4. Graph Mode Selection
+    mode = cfg.data.graph.get('mode', 'event')
+    print(f"\n📊 Graph Mode: {mode.upper()}")
+    
+    train_snapshots_list = None
+    test_snapshots_list = None
+    
+    if mode == 'time_agnostic':
+        print("   Collapsing temporal graph into static view...")
         train_context = to_time_agnostic(train_snapshot)
         test_context = to_time_agnostic(val_snapshot)
-    else:
+    elif mode == 'temporal_snapshot':
+        window_size = cfg.model.get('window_size', 5)
+        print(f"   Materializing yearly snapshots (window={window_size})...")
+        train_snapshots_dict = to_temporal_snapshots(hetero_data, start_year=train_year - window_size + 1, end_year=train_year)
+        train_snapshots_list = [train_snapshots_dict[y].edge_index_dict for y in sorted(train_snapshots_dict.keys())]
+        
+        test_snapshots_dict = to_temporal_snapshots(hetero_data, start_year=val_year - window_size + 1, end_year=val_year)
+        test_snapshots_list = [test_snapshots_dict[y].edge_index_dict for y in sorted(test_snapshots_dict.keys())]
+        
+        # For snapshot models, the "context" is technically the sequence,
+        # but the schema init can use the single snapshot.
         train_context = train_snapshot
-        test_context = val_snapshot 
-    
+        test_context = val_snapshot
+    elif mode == 'event':
+        print("   Using event-based temporal graph (HGT+RTE ready).")
+        train_context = train_snapshot
+        test_context = val_snapshot
+    else:
+        raise ValueError(f"Unknown graph mode: {mode}. Use 'event', 'time_agnostic', or 'temporal_snapshot'.")    
     # 4. Supervision Edge Info
     src_type = cfg.data.graph.supervision.src_type
     dst_type = cfg.data.graph.supervision.dst_type

@@ -16,7 +16,7 @@ data:
     test_year: 2022    # Test on edges in 2022 (excl. 2021)
     
   graph:
-    mode: "temporal"  # Changed to temporal
+    mode: "event"  # Options: event, time_agnostic, temporal_snapshot
     
     # Supervision task (link prediction target)
     supervision:
