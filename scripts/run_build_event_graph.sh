@@ -12,7 +12,8 @@ source .venv/bin/activate
 
 # === Configuration ===
 CONFIG="config/event_graph_config.yaml"
-RAW_EDGES_DIR="/data/scratch/bty414/opentarget_evidences/23.06/evidenceDated/kg_output/edges" # Example path, adjust as needed
+# RAW_EDGES_DIR="/data/scratch/bty414/opentarget_evidences/23.06/evidenceDated/kg_output/edges" # Example path, adjust as needed
+RAW_EDGES_DIR="output/edges"
 EVENTS_OUTPUT="output/progression/events.parquet"
 GRAPH_OUTPUT="output/progression/temporal_graph.pt"
 
