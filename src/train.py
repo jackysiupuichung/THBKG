@@ -187,68 +187,66 @@ def main(config_path: str):
     print(f"  Val edges   ({train_year} < t <= {val_year}): {val_edge_index.size(1):,}")
     print(f"  Test edges  (> {val_year}): {test_mask.sum():,}")
     
-    # # 6. Loaders
-    # print("\n🚚 Creating Loaders...")
+    # 6. Loaders
+    print("\n🚚 Creating Loaders...")
     
-    # # Extract edge times for temporal sampling
-    # # Extract edge times for temporal sampling (if not time_agnostic)
-    # train_edge_times = None
-    # if not is_time_agnostic:
-    #     if 'edge_time' in train_context[supervision_edge_type]:
-    #         train_edge_times = train_context[supervision_edge_type].edge_time
-    #     else:
-    #         # Fallback for temporal graph without explicit time? Should not happen in this flow.
-    #         train_edge_times = torch.zeros(train_edge_index.size(1), dtype=torch.long)
+    # Extract edge times for temporal sampling
+    # Extract edge times for temporal sampling (if not time_agnostic)
+    train_edge_times = None
+    if mode == 'event':
+        if 'edge_time' in train_context[supervision_edge_type]:
+            train_edge_times = train_context[supervision_edge_type].edge_time
+        else:
+            # Fallback for temporal graph without explicit time? Should not happen in this flow.
+            train_edge_times = torch.zeros(train_edge_index.size(1), dtype=torch.long)
     
-    # train_loader = LinkNeighborLoader(
-    #     data=train_context,
-    #     num_neighbors=[20, 10],
-    #     edge_label_index=(supervision_edge_type, train_edge_index),
-    #     edge_label=train_labels,
-    #     edge_label_time=train_edge_times - 1 if train_edge_times is not None else None, 
-    #     time_attr='edge_time' if not is_time_agnostic else None,  # disable temporal sampling if agnostic
-    #     temporal_strategy='last',  # ignored if time_attr is None
-    #     neg_sampling=dict(mode='binary', amount=1.0),
-    #     batch_size=cfg.train.batch_size,
-    #     shuffle=True,
-    #     num_workers=4,
-    #     persistent_workers=True  # Keep workers alive between epochs
-    # )
+    train_loader = LinkNeighborLoader(
+        data=train_context,
+        num_neighbors=[20, 10],
+        edge_label_index=(supervision_edge_type, train_edge_index),
+        edge_label=train_labels,
+        edge_label_time=train_edge_times - 1 if train_edge_times is not None else None, 
+        time_attr='edge_time' if mode == 'event' else None,  # disable temporal sampling if agnostic
+        temporal_strategy='last',  # ignored if time_attr is None
+        neg_sampling=dict(mode='binary', amount=1.0),
+        batch_size=cfg.train.batch_size,
+        shuffle=True,
+        num_workers=4,
+        persistent_workers=True  # Keep workers alive between epochs
+    )
     
-    # # Validation Loader (Regression)
-    # # Context: train_context. Labels: val_edge_index
-    # # Validation Loader (Regression)
-    # # Context: train_context. Labels: val_edge_index
-    # # For Time Agnostic: Labels should probably be collapsed too?
-    # # BUT val_edge_index comes from 'hetero_data' via 'val_mask'.
-    # # 'val_mask' was computed on ORIGINAL temporal data.
-    # # So 'val_edge_index' are EVENTS.
-    # # predicting EVENTS using STATIC graph?
-    # # User said: "Edge-level regression ... future evidence strength".
-    # # If we are time-agnostic, maybe we just predict the *Event* score using the *Static* embedding?
-    # # This seems fine. We don't collapse the Validation SET, just the Input Graph.
+    # Validation Loader (Regression)
+    # Context: train_context. Labels: val_edge_index
+    # For Time Agnostic: Labels should probably be collapsed too?
+    # BUT val_edge_index comes from 'hetero_data' via 'val_mask'.
+    # 'val_mask' was computed on ORIGINAL temporal data.
+    # So 'val_edge_index' are EVENTS.
+    # predicting EVENTS using STATIC graph?
+    # User said: "Edge-level regression ... future evidence strength".
+    # If we are time-agnostic, maybe we just predict the *Event* score using the *Static* embedding?
+    # This seems fine. We don't collapse the Validation SET, just the Input Graph.
     
-    # val_edge_times = None
-    # if not is_time_agnostic:
-    #     if 'edge_time' in hetero_data[supervision_edge_type]:
-    #         val_edge_times = hetero_data[supervision_edge_type].edge_time[val_mask]
-    #     else:
-    #         val_edge_times = torch.zeros(val_edge_index.size(1), dtype=torch.long)
+    val_edge_times = None
+    if mode == 'event':
+        if 'edge_time' in hetero_data[supervision_edge_type]:
+            val_edge_times = hetero_data[supervision_edge_type].edge_time[val_mask]
+        else:
+            val_edge_times = torch.zeros(val_edge_index.size(1), dtype=torch.long)
     
-    # val_loader = LinkNeighborLoader(
-    #     data=train_context,
-    #     num_neighbors=[20, 10],
-    #     edge_label_index=(supervision_edge_type, val_edge_index),
-    #     edge_label=val_labels,
-    #     edge_label_time=val_edge_times - 1 if val_edge_times is not None else None,
-    #     time_attr='edge_time' if not is_time_agnostic else None,
-    #     temporal_strategy='last',
-    #     neg_sampling=dict(mode='binary', amount=1.0),
-    #     batch_size=cfg.train.batch_size,
-    #     shuffle=False,
-    #     num_workers=4,
-    #     persistent_workers=True
-    # )
+    val_loader = LinkNeighborLoader(
+        data=train_context,
+        num_neighbors=[20, 10],
+        edge_label_index=(supervision_edge_type, val_edge_index),
+        edge_label=val_labels,
+        edge_label_time=val_edge_times - 1 if val_edge_times is not None else None,
+        time_attr='edge_time' if mode == 'event' else None,
+        temporal_strategy='last',
+        neg_sampling=dict(mode='binary', amount=1.0),
+        batch_size=cfg.train.batch_size,
+        shuffle=False,
+        num_workers=4,
+        persistent_workers=True
+    )
     
     # 7. Model
     model = build_model(
