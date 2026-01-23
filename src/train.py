@@ -90,11 +90,16 @@ def main(config_path: str):
     print("="*80 + "\n")
     
     # 1. Config
-    cfg = OmegaConf.load(config_path)
-    if "defaults" in cfg:
-        project_root = os.path.dirname(os.path.dirname(__file__))
-        base_cfg = OmegaConf.load(os.path.join(project_root, "config/benchmark_config.yaml"))
-        cfg = OmegaConf.merge(base_cfg, cfg)
+    # 1. Config
+    # Load base config first
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    base_cfg = OmegaConf.load(os.path.join(project_root, "config/benchmark_config.yaml"))
+    
+    # Load experiment config
+    exp_cfg = OmegaConf.load(config_path)
+    
+    # Merge: Base <- Experiment (Experiment overrides Base)
+    cfg = OmegaConf.merge(base_cfg, exp_cfg)
         
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
