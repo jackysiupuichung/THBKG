@@ -222,6 +222,40 @@ def attach_node_features(
                  print(f"⚠️ Disease embeddings not found at {feature_path}. Using random.")
                  data[node_type].x = torch.randn(num_nodes, embedding_dim)
 
+        elif init_method == "pretrained" and node_type == "molecule" and node_ids is not None:
+             # Try loading Morgan fingerprints
+             feature_path = "data/node_features/processed/drug_morgan_fingerprints.pt"
+             if torch.cuda.is_available(): map_loc = "cuda"
+             else: map_loc = "cpu"
+             
+             import os
+             if os.path.exists(feature_path):
+                 print(f"Loading molecule fingerprints from {feature_path}...")
+                 # Format {id: tensor}
+                 emb_dict = torch.load(feature_path, map_location=map_loc)
+                 
+                 # Align
+                 aligned = []
+                 missing = 0
+                 dim = embedding_dim
+                 if len(emb_dict) > 0:
+                     dim = next(iter(emb_dict.values())).shape[0]
+                     
+                 zero_vec = torch.zeros(dim)
+                 
+                 for mid in node_ids:
+                     if mid in emb_dict:
+                         aligned.append(emb_dict[mid].float()) # Ensure float
+                     else:
+                         aligned.append(zero_vec)
+                         missing += 1
+                 
+                 data[node_type].x = torch.stack(aligned)
+                 print(f"✅ Loaded molecule features: {data[node_type].x.shape} (Missing: {missing})")
+             else:
+                 print(f"⚠️ Molecule features not found at {feature_path}. Using random.")
+                 data[node_type].x = torch.randn(num_nodes, embedding_dim)
+
         elif init_method == "pretrained" and pretrained_embeddings and node_type in pretrained_embeddings:
             data[node_type].x = pretrained_embeddings[node_type]
             print(f"✅ Loaded pretrained features for {node_type}: {data[node_type].x.shape}")

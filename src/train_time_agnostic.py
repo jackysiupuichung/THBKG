@@ -95,17 +95,12 @@ def main(config_path: str):
     )
     
     # 3. Splits & Collapsing
-    # 3. Splits & Collapsing
-    # Support new explicit range config: train: [start, end], val: [start, end], test: [start, end]
-    
     train_end = cfg.data.temporal_split.train[1]
     val_end = cfg.data.temporal_split.val[1]
     split_config = cfg.data.temporal_split
     
     # Create Snapshots (Context)
-    # Train context is everything UP TO train_end
     train_snapshot = filter_graph_by_time(hetero_data, train_end)
-    # Test context is everything UP TO val_end
     val_snapshot = filter_graph_by_time(hetero_data, val_end)
     
     print("   Collapsing temporal graph into static view...")
@@ -205,6 +200,17 @@ def main(config_path: str):
     print("\n🔄 Starting Training...")
     best_val_loss = float('inf')
     
+    # Early Stopping
+    patience = cfg.train.get('early_stopping', {}).get('patience', 10)
+    enabled = cfg.train.get('early_stopping', {}).get('enabled', False)
+    
+    if enabled:
+        from src.utils.early_stopping import EarlyStopper
+        early_stopper = EarlyStopper(patience=patience, verbose=True)
+        print(f"🛑 Early stopping enabled with patience {patience}")
+    else:
+        early_stopper = None
+
     for epoch in range(cfg.train.num_epochs):
         train_loss = train_one_epoch(model, train_loader, optimizer, device, supervision_edge_type, src_type, dst_type)
         val_loss = evaluator.validate_regression(model, val_loader, device, supervision_edge_type, src_type, dst_type)
@@ -231,6 +237,12 @@ def main(config_path: str):
             # Log Validation Metrics to WandB
             if cfg.wandb.enabled:
                 wandb.log({f"val_{k}": v for k, v in val_metrics.items()})
+
+        # Early Stopping Check
+        if early_stopper:
+            if early_stopper(val_loss):
+                print(f"🛑 Early stopping triggered at epoch {epoch+1}")
+                break
             
     print(f"✅ Training Complete. Best Val Loss: {best_val_loss:.4f}")
     

@@ -4,7 +4,6 @@
 experiment_name: "hgt_agnostic"
 
 data:
-  temporal_graph_file: "output/progression/temporal_graph.pt"
   graph:
     mode: "time_agnostic"  # COLLAPSE TEMPORAL EDGES
     supervision:

@@ -14,7 +14,7 @@ wandb:
 # Data configuration
 data:
   # Temporal event graph
-  temporal_graph_file: "output/progression/temporal_graph.pt"
+  temporal_graph_file: "output/graph/hetero_graph_with_features.pt"
   
   # Temporal split configuration
   temporal_split:
@@ -56,7 +56,7 @@ train:
   # Early stopping
   early_stopping:
     enabled: true
-    patience: 5
+    patience: 10
     monitor: "val_loss"
 
 # Evaluation configuration
