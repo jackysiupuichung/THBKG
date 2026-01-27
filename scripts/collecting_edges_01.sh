@@ -27,10 +27,9 @@ RAW_NODES_DIR="${KG_OUTPUT_DIR}/nodes"
 STATIC_EDGES_DIR="${KG_OUTPUT_DIR}/static_edges"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
 EVENTS_FILE="${EVENT_OUTPUT_DIR}/events.parquet"
-GRAPH_STRUCT_FILE="${EVENT_OUTPUT_DIR}/temporal_graph.pt"
 
 # === 0. KG Pipeline (Raw Evidence -> Nodes/Edges) ===
-echo "🚀 [1/3] Running KG Pipeline..."
+echo "🚀 [1/2] Running KG Pipeline..."
 echo "   Input: $INPUT_EVIDENCE_DIR"
 echo "   Output: $KG_OUTPUT_DIR"
 
@@ -52,13 +51,3 @@ python -m src.pipeline.build_event_list \
   --config "$CONFIG" \
   --output "$EVENTS_FILE" \
   --aggregation-method "harmonic_sum"
-
-# === 2. Build Graph Structure ===
-echo "🚀 [3/3] Building Graph Structure (Nodes + Edges)..."
-python -m src.pipeline.build_event_graph \
-  --input "$EVENTS_FILE" \
-  --output "$GRAPH_STRUCT_FILE" \
-  --static-edges "$STATIC_EDGES_DIR"
-
-echo "✅ Edge Collection Complete!"
-echo "   Graph Structure: $GRAPH_STRUCT_FILE"

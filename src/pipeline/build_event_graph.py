@@ -6,6 +6,9 @@ Loads single event list (from build_event_list.py), builds HeteroData
 with edge_time and edge_weight, and saves to .pt file.
 """
 
+# does the static edges need to be confined to the nodes that have been included in the dynamic edges?
+# this depends on the ratio between static and dynamic edges
+
 import os
 import sys
 import argparse
@@ -168,7 +171,6 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
             - node_mapping: {node_type: {node_id_str: index}}
             - node_type_mapping: {node_type: type_index}
             - edge_type_mapping: {edge_type_tuple: type_index}
-            - edge_mapping: {edge_type_tuple: original_indices_tensor}
     """
     print("\n🔨 Building HeteroData (relation::source level)...")
     
@@ -207,8 +209,6 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
     edge_groups = edges.groupby(['source_type', 'relation', 'target_type', 'datasourceId'])
     
     edge_type_mapping = {}
-    edge_mapping = {}
-    
     edge_type_idx = 0
     
     for (src_type, relation, dst_type, datasource), group in edge_groups:
@@ -219,9 +219,6 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
         if edge_type_key not in edge_type_mapping:
             edge_type_mapping[edge_type_key] = edge_type_idx
             edge_type_idx += 1
-            
-        # Store original indices
-        edge_mapping[str(edge_type_key)] = torch.tensor(group.index.values, dtype=torch.long)
         
         # Map node IDs to indices
         src_indices = [node_mapping[src_type][str(sid)] for sid in group['sourceId']]
@@ -269,8 +266,7 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
     mappings = {
         "node_mapping": node_mapping,
         "node_type_mapping": node_type_mapping,
-        "edge_type_mapping": edge_type_mapping,
-        "edge_mapping": edge_mapping
+        "edge_type_mapping": edge_type_mapping
     }
     
     return hetero_data, mappings
@@ -286,6 +282,7 @@ def build_event_graph(
     Args:
         event_file: Path to events parquet file
         output_file: Output .pt file
+        static_edges_dir: Optional directory with static edges
     """
     print("\n" + "="*80)
     print("BUILDING EVENT-BASED TEMPORAL GRAPH")
@@ -366,6 +363,9 @@ def build_event_graph(
     print(f"{'='*80}\n")
 
 
+
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build event-based temporal graph")
     parser.add_argument(
@@ -389,6 +389,7 @@ def main():
     
     args = parser.parse_args()
     
+    # Build graph
     build_event_graph(
         event_file=args.input,
         output_file=args.output,

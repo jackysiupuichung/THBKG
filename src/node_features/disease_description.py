@@ -19,6 +19,7 @@ def load_disease_parquets(
     parquet_glob: str,
     id_col: str,
     text_col: str,
+    kg_ids: list = None,
 ) -> pd.DataFrame:
     parquet_files = sorted(Path(disease_dir).glob(parquet_glob))
     if not parquet_files:
@@ -35,6 +36,12 @@ def load_disease_parquets(
     df[text_col] = df[text_col].astype(str).str.strip()
     df = df[df[text_col] != ""]
     df = df.drop_duplicates(subset=[id_col], keep="first")
+    
+    # Filter to KG IDs if provided
+    if kg_ids:
+        kg_set = set(kg_ids)
+        df = df[df[id_col].isin(kg_set)]
+        print(f"   Filtered to {len(df):,} diseases (from {len(kg_ids):,} KG IDs)")
 
     return df.reset_index(drop=True)
 
@@ -65,12 +72,13 @@ def encode_batch_mean_pool(
 # -------------------------------------------------
 # MAIN PIPELINE
 # -------------------------------------------------
-def build_disease_embeddings(args: argparse.Namespace) -> Dict[str, np.ndarray]:
+def build_disease_embeddings(args: argparse.Namespace, kg_ids: list = None) -> Dict[str, np.ndarray]:
     df = load_disease_parquets(
         disease_dir=args.disease_dir,
         parquet_glob=args.parquet_glob,
         id_col=args.id_col,
         text_col=args.text_col,
+        kg_ids=kg_ids,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
@@ -141,8 +149,9 @@ def parse_args() -> argparse.Namespace:
         description="Build GPT-based disease embeddings from parquet directory"
     )
 
-    parser.add_argument("--disease-dir", required=True)
+    parser.add_argument("--disease-dir", required=True, help="Evidence directory with disease parquets")
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--kg-ids-file", default=None, help="Parquet file with KG disease IDs to filter to")
 
     parser.add_argument("--parquet-glob", default="part-*.parquet")
     parser.add_argument("--id-col", default="id")
@@ -166,7 +175,16 @@ def parse_args() -> argparse.Namespace:
 # -------------------------------------------------
 def main():
     args = parse_args()
-    embeddings = build_disease_embeddings(args)
+    
+    # Load KG IDs if provided
+    kg_ids = None
+    if args.kg_ids_file and Path(args.kg_ids_file).exists():
+        print(f"Loading KG disease IDs from {args.kg_ids_file}")
+        kg_df = pd.read_parquet(args.kg_ids_file)
+        kg_ids = kg_df['id'].tolist()
+        print(f"Filtering to {len(kg_ids):,} KG disease IDs")
+    
+    embeddings = build_disease_embeddings(args, kg_ids=kg_ids)
     save_outputs(embeddings, args)
 
 

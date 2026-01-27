@@ -12,6 +12,10 @@ from pathlib import Path
 from scipy.stats import entropy
 from scipy.spatial.distance import jensenshannon
 
+target_prioritisation_features = [
+        'tissueDistribution', 'geneticConstraint', 'mouseOrthologMaxIdentityPercentage'
+    ]
+
 def build_target_prioritisation_features(
     input_path: str
 ) -> dict:
@@ -24,16 +28,9 @@ def build_target_prioritisation_features(
 
     df = pd.read_parquet(input_path)
     print(f"   Loaded shape: {df.shape}")
-    
-    # Select features
-    cols = [
-        'isInMembrane', 'isSecreted', 'maxClinicalTrialPhase', 
-        'tissueSpecificity', 'tissueDistribution', 
-        'geneticConstraint', 'mouseOrthologMaxIdentityPercentage'
-    ]
-    
+        
     # Filter to available columns
-    available_cols = [c for c in cols if c in df.columns]
+    available_cols = [c for c in target_prioritisation_features if c in df.columns]
     print(f"   Using columns: {available_cols}")
     
     df_feats = df.set_index('targetId')[available_cols]
@@ -128,17 +125,40 @@ def build_rna_expression_features(
 
 
 
-def build_integrated_features(base_dir: Path, output_path: str):
+def build_integrated_features(base_dir: Path, output_path: str, target_ids: list = None):
     print(f"\n🔗 Building INTEGRATED TARGET FEATURES...")
     
     # 1. Load Prio (Dict[str, Tensor])
-    prio_feats = build_target_prioritisation_features(
-        input_path=str(base_dir / "target_prioritisation/subset.parquet")
-    )
+    prio_path = str(base_dir / "target_prioritisation")
+    # Check if it's a directory with parquet files or a single file
+    if Path(prio_path).is_dir():
+        from glob import glob
+        prio_files = glob(f"{prio_path}/part-*.parquet")
+        if prio_files:
+            print(f"   Loading {len(prio_files)} prioritisation files...")
+            import pandas as pd
+            prio_dfs = [pd.read_parquet(f) for f in prio_files]
+            prio_df = pd.concat(prio_dfs, ignore_index=True)
+            # Convert to dict format
+            prio_feats = {}
+            for _, row in prio_df.iterrows():
+                target_id = str(row['targetId'])
+                # Extract feature columns (exclude targetId)
+                feat_cols = [c for c in prio_df.columns if c != 'targetId']
+                feat_vals = row[feat_cols].values.astype(float)  # Convert to float first
+                prio_feats[target_id] = torch.tensor(feat_vals, dtype=torch.float)
+            print(f"   Loaded {len(prio_feats)} targets from prioritisation")
+        else:
+            raise ValueError(f"No prioritisation files found at {prio_path}")
+    else:
+        raise ValueError(f"Prioritisation path {prio_path} is not a directory")
 
     # 2. Load RNA (Dict[str, Tensor])
+    rna_path = str(base_dir / "rna_expression/rna_single_cell_type_group.tsv.zip")
+    if not os.path.exists(rna_path):
+        raise ValueError(f"RNA path {rna_path} does not exist")
     rna_feats = build_rna_expression_features(
-        input_path=str(base_dir / "rna_expression/rna_single_cell_type_group.tsv.zip")
+        input_path=rna_path
     )
     
     if not prio_feats and not rna_feats:
@@ -156,14 +176,10 @@ def build_integrated_features(base_dir: Path, output_path: str):
         
     print(f"   Combining: Prio ({dim_prio}) + RNA ({dim_rna}) -> Total ({dim_prio + dim_rna})")
     
-    # Analyze Overlap
-    keys_prio = set(prio_feats.keys())
-    keys_rna = set(rna_feats.keys())
-    all_keys = keys_prio | keys_rna
-    
-    print(f"\n📊 ID Overlap Analysis:")
-    print(f"   Total Unique IDs: {len(all_keys)}")
-    print(f"   Common (Both):    {len(keys_prio & keys_rna)}")
+    # Filter to requested target IDs
+    target_set = set(target_ids)
+    all_keys = target_set
+    print(f"\n📊 Filtering to {len(target_set):,} requested target IDs")
     
     # Compute Global Means for Imputation
     print(f"\n   Computing global means for imputation...")
@@ -182,15 +198,30 @@ def build_integrated_features(base_dir: Path, output_path: str):
         
     # Construct Integrated Dict
     integrated_dict = {}
+    missing_prio = 0
+    missing_rna = 0
     
     for key in all_keys:
         # Get Prio (or Mean)
-        v_prio = prio_feats.get(key, mean_prio)
+        if key in prio_feats:
+            v_prio = prio_feats[key]
+        else:
+            v_prio = mean_prio
+            missing_prio += 1
+            
         # Get RNA (or Mean)
-        v_rna = rna_feats.get(key, mean_rna)
+        if key in rna_feats:
+            v_rna = rna_feats[key]
+        else:
+            v_rna = mean_rna
+            missing_rna += 1
         
         combined = torch.cat([v_prio, v_rna])
         integrated_dict[key] = combined
+    
+    print(f"\n   Feature Coverage:")
+    print(f"   - Missing Prio: {missing_prio}/{len(all_keys)} ({missing_prio/len(all_keys)*100:.1f}%)")
+    print(f"   - Missing RNA:  {missing_rna}/{len(all_keys)} ({missing_rna/len(all_keys)*100:.1f}%)")
         
     # Save
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -199,12 +230,24 @@ def build_integrated_features(base_dir: Path, output_path: str):
 
 if __name__ == "__main__":
     import argparse
+    import pandas as pd
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-dir", default="data/node_features")
     parser.add_argument("--output-dir", default="data/node_features/processed")
+    parser.add_argument("--target-ids-file", default=None, help="Parquet file with target IDs to filter to")
     args = parser.parse_args()
+    
+    # Load target IDs if provided
+    target_ids = None
+    if args.target_ids_file and Path(args.target_ids_file).exists():
+        print(f"Loading target IDs from {args.target_ids_file}")
+        df = pd.read_parquet(args.target_ids_file)
+        target_ids = df['id'].tolist()
+        print(f"Filtering to {len(target_ids):,} target IDs")
     
     build_integrated_features(
         base_dir=Path(args.base_dir),
-        output_path=str(Path(args.output_dir) / "integrated_target_features.pt")
+        output_path=str(Path(args.output_dir) / "integrated_target_features.pt"),
+        target_ids=target_ids
     )
+

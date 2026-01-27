@@ -1,0 +1,38 @@
+#!/bin/bash
+#$ -pe smp 4
+#$ -l h_vmem=32G
+#$ -l h_rt=12:0:0
+#$ -cwd
+#$ -j y
+
+set -euo pipefail
+
+# Activate venv
+source .venv/bin/activate
+
+# === Configuration ===
+OUTPUT_BASE="output"
+MAPPINGS_FILE="${OUTPUT_BASE}/progression/temporal_graph_mappings.pt"
+EVIDENCE_DIR="data/evidenceDated_subset/23.06"
+FEATURE_DATA_DIR="data/node_features"
+FEATURE_OUTPUT_DIR="${OUTPUT_BASE}/features/processed"
+TEMP_NODE_DIR="${OUTPUT_BASE}/features/temp_nodes"
+
+# === Build Node Features ===
+echo "🚀 Building Node Features from Graph Mappings..."
+echo "   Mappings: $MAPPINGS_FILE"
+echo "   Evidence: $EVIDENCE_DIR"
+echo "   Raw Feature Data: $FEATURE_DATA_DIR"
+echo "   Output: $FEATURE_OUTPUT_DIR"
+
+python -m src.node_features.build_all_features \
+  --mappings-file "$MAPPINGS_FILE" \
+  --evidence-dir "$EVIDENCE_DIR" \
+  --feature-data-dir "$FEATURE_DATA_DIR" \
+  --output-dir "$FEATURE_OUTPUT_DIR" \
+  --temp-dir "$TEMP_NODE_DIR"
+
+echo ""
+echo "✅ Node Feature Collection Complete!"
+echo "   Features saved to: $FEATURE_OUTPUT_DIR"
+echo "   Temp nodes: $TEMP_NODE_DIR"
