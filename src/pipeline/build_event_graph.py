@@ -318,18 +318,40 @@ def build_event_graph(
     all_edges = events
     
     if not static_edges.empty:
-        print("\n➕ Merging static edges...")
-        # Align columns
-        common_cols = ['sourceId', 'targetId', 'source_type', 'target_type', 'relation', 'datasourceId']
+        print("\n➕ Filtering and merging static edges...")
         
-        # Ensure static has score mapped to edge_weight or score?
-        # events has edge_weight. static has score.
-        # Let's map static score to edge_weight for consistency if feasible, OR keep them separate?
-        # build_hetero_graph handles both edge_weight and score.
+        # Get all node IDs from events (dynamic edges)
+        event_node_ids = set()
+        event_node_ids.update(events['sourceId'].astype(str).unique())
+        event_node_ids.update(events['targetId'].astype(str).unique())
+        
+        print(f"   Unique nodes in events: {len(event_node_ids):,}")
+        print(f"   Static edges before filtering: {len(static_edges):,}")
+        
+        # Filter static edges: keep only if BOTH source and target exist in events
+        static_edges['sourceId_str'] = static_edges['sourceId'].astype(str)
+        static_edges['targetId_str'] = static_edges['targetId'].astype(str)
+        
+        valid_mask = (
+            static_edges['sourceId_str'].isin(event_node_ids) & 
+            static_edges['targetId_str'].isin(event_node_ids)
+        )
+        
+        filtered_static = static_edges[valid_mask].copy()
+        
+        # Drop temporary string columns
+        filtered_static = filtered_static.drop(columns=['sourceId_str', 'targetId_str'])
+        
+        print(f"   Static edges after filtering: {len(filtered_static):,}")
+        print(f"   Filtered out: {len(static_edges) - len(filtered_static):,} edges (nodes not in events)")
         
         # Concat
-        all_edges = pd.concat([events, static_edges], ignore_index=True)
-        print(f"   Combined Total: {len(all_edges):,} edges")
+        if not filtered_static.empty:
+            all_edges = pd.concat([events, filtered_static], ignore_index=True)
+            print(f"   Combined Total: {len(all_edges):,} edges")
+        else:
+            print(f"   ⚠️  No static edges remain after filtering")
+            all_edges = events
     
     # Build graph
     # build_hetero_graph now supports edge_time and edge_weight
