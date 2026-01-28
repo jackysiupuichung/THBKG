@@ -10,7 +10,7 @@ diseases:
 
 molecule:
   id: id
-  props: [maximumClinicalTrialPhase, canonicalSmiles]
+  props: [maximumClinicalTrialPhase, canonicalSmiles, drugType]
 
 reactome:
   id: id
