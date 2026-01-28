@@ -20,6 +20,43 @@ def run_script(script_path: str, args: list):
         # We don't exit here, to allow partial completion if needed
 
 
+def subset_embeddings(
+    full_embeddings_path: str,
+    node_ids_file: str,
+    output_path: str,
+    entity_type: str
+):
+    """
+    Subset learned embeddings to only include nodes in the graph.
+    
+    Args:
+        full_embeddings_path: Path to full embeddings .pt file
+        node_ids_file: Path to parquet with node IDs in graph
+        output_path: Path to save subset embeddings
+        entity_type: "go" or "reactome" (for logging)
+    """
+    print(f"\n   📊 Subsetting {entity_type} embeddings to graph nodes...")
+    
+    # Load full embeddings
+    full_emb = torch.load(full_embeddings_path, weights_only=False)
+    print(f"      Full embeddings: {len(full_emb):,} nodes")
+    
+    # Load graph node IDs
+    df = pd.read_parquet(node_ids_file)
+    graph_ids = set(df['id'].tolist())
+    print(f"      Graph nodes: {len(graph_ids):,} nodes")
+    
+    # Subset embeddings
+    subset_emb = {nid: emb for nid, emb in full_emb.items() if nid in graph_ids}
+    print(f"      Subset embeddings: {len(subset_emb):,} nodes")
+    
+    # Save subset
+    torch.save(subset_emb, output_path)
+    print(f"      ✅ Saved to {output_path}")
+    
+    return len(subset_emb)
+
+
 def extract_node_ids_from_mappings(mappings_file: str, output_dir: str):
     """
     Extract node IDs from graph mappings and save as parquet files.
@@ -85,44 +122,110 @@ def main():
     # Extract node IDs from mappings
     node_files = extract_node_ids_from_mappings(mappings_file, temp_dir)
     
-    # # 1. Target Features (Static + RNA) - ALIGNED TO GRAPH NODES
-    # print(f"\n{'='*60}")
-    # print("1. TARGET FEATURES")
-    # print(f"{'='*60}") 
-    
-    # if 'target' in node_files:
-    #     target_args = [
-    #         "--base-dir", feature_dir,
-    #         "--output-dir", output_dir,
-    #         "--target-ids-file", node_files['target']
-    #     ]
-    #     print(f"✅ Using {node_files['target']}")
-    #     run_script("src/node_features/target_features.py", target_args)
-    # else:
-    #     print("⚠️  No target nodes in graph")
-    
-    # # 2. Disease Features (Text) - ALIGNED TO GRAPH NODES
-    # print(f"\n{'='*60}")
-    # print("2. DISEASE FEATURES")
-    # print(f"{'='*60}")
-    
-    # if 'disease' in node_files:
-    #     disease_args = [
-    #         "--disease-dir", f"{evidence_dir}/diseases",
-    #         "--output-dir", output_dir,
-    #         "--parquet-glob", "part-*.parquet",
-    #         "--batch-size", "128",
-    #         "--kg-ids-file", node_files['disease']
-    #     ]
-    #     print(f"✅ Using {node_files['disease']}")
-    #     print(f"   Looking up data in: {evidence_dir}/diseases")
-    #     run_script("src/node_features/disease_description.py", disease_args)
-    # else:
-    #     print("⚠️  No disease nodes in graph")
-    
-    # 3. Molecule Features (Morgan Fingerprints) - ALIGNED TO GRAPH NODES
+    # 1. Target Features (Static + RNA) - ALIGNED TO GRAPH NODES
     print(f"\n{'='*60}")
-    print("3. MOLECULE FEATURES")
+    print("1. TARGET FEATURES")
+    print(f"{'='*60}") 
+    
+    if 'target' in node_files:
+        target_args = [
+            "--base-dir", feature_dir,
+            "--output-dir", output_dir,
+            "--target-ids-file", node_files['target']
+        ]
+        print(f"✅ Using {node_files['target']}")
+        run_script("src/node_features/target_features.py", target_args)
+    else:
+        print("⚠️  No target nodes in graph")
+    
+    # 2. Disease Features (Text) - ALIGNED TO GRAPH NODES
+    print(f"\n{'='*60}")
+    print("2. DISEASE FEATURES")
+    print(f"{'='*60}")
+    
+    if 'disease' in node_files:
+        disease_args = [
+            "--disease-dir", f"{evidence_dir}/diseases",
+            "--output-dir", output_dir,
+            "--parquet-glob", "part-*.parquet",
+            "--batch-size", "128",
+            "--kg-ids-file", node_files['disease']
+        ]
+        print(f"✅ Using {node_files['disease']}")
+        print(f"   Looking up data in: {evidence_dir}/diseases")
+        run_script("src/node_features/disease_description.py", disease_args)
+    else:
+        print("⚠️  No disease nodes in graph")
+    
+    # 3. GO and Reactome Embeddings (Autoencoder) - TRAIN ON FULL GRAPH
+    print(f"\n{'='*60}")
+    print("3. GO & REACTOME AUTOENCODER EMBEDDINGS")
+    print(f"{'='*60}")
+    
+    # Determine static edges directory from mappings file path
+    mappings_path = Path(mappings_file)
+    base_output = mappings_path.parent.parent
+    static_edges_dir = base_output / "evidences" / "static_edges"
+    
+    print(f"   Static edges directory: {static_edges_dir}")
+    
+    # Train GO embeddings
+    go_edges_file = static_edges_dir / "go_is_subtype_of_go_gene_ontology.parquet"
+    if go_edges_file.exists():
+        print(f"\n   🧬 Training GO autoencoder on full graph...")
+        go_full_path = f"{output_dir}/go_embeddings_full.pt"
+        go_args = [
+            "--edges-file", str(go_edges_file),
+            "--output-path", go_full_path,
+            "--entity-type", "go",
+            "--embedding-dim", "64",
+            "--num-epochs", "100",
+        ]
+        run_script("src/node_features/pathway_go_autoencoder.py", go_args)
+        
+        # Subset to graph nodes if GO nodes exist in graph
+        if 'go' in node_files:
+            subset_embeddings(
+                full_embeddings_path=go_full_path,
+                node_ids_file=node_files['go'],
+                output_path=f"{output_dir}/go_embeddings.pt",
+                entity_type="go"
+            )
+        else:
+            print(f"   ⚠️  No GO nodes in graph, skipping subset")
+    else:
+        print(f"   ⚠️  GO edges not found: {go_edges_file}")
+    
+    # Train Reactome embeddings
+    reactome_edges_file = static_edges_dir / "reactome_is_subpathway_of_reactome_reactome.parquet"
+    if reactome_edges_file.exists():
+        print(f"\n   🧬 Training Reactome autoencoder on full graph...")
+        reactome_full_path = f"{output_dir}/reactome_embeddings_full.pt"
+        reactome_args = [
+            "--edges-file", str(reactome_edges_file),
+            "--output-path", reactome_full_path,
+            "--entity-type", "reactome",
+            "--embedding-dim", "64",
+            "--num-epochs", "100",
+        ]
+        run_script("src/node_features/pathway_go_autoencoder.py", reactome_args)
+        
+        # Subset to graph nodes if Reactome nodes exist in graph
+        if 'reactome' in node_files:
+            subset_embeddings(
+                full_embeddings_path=reactome_full_path,
+                node_ids_file=node_files['reactome'],
+                output_path=f"{output_dir}/reactome_embeddings.pt",
+                entity_type="reactome"
+            )
+        else:
+            print(f"   ⚠️  No Reactome nodes in graph, skipping subset")
+    else:
+        print(f"   ⚠️  Reactome edges not found: {reactome_edges_file}")
+    
+    # 4. Molecule Features (Morgan Fingerprints) - ALIGNED TO GRAPH NODES
+    print(f"\n{'='*60}")
+    print("4. MOLECULE FEATURES")
     print(f"{'='*60}")
     
     if 'molecule' in node_files:
