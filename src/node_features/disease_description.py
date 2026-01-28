@@ -82,6 +82,12 @@ def build_disease_embeddings(args: argparse.Namespace, kg_ids: list = None) -> D
     )
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    
+    # Configure padding token if not present (e.g., GPT-2)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        print(f"   ⚠️  No pad_token found, using eos_token: '{tokenizer.eos_token}'")
+    
     model = AutoModel.from_pretrained(args.model_name).to(args.device)
     model.eval()
 
@@ -157,7 +163,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--id-col", default="id")
     parser.add_argument("--text-col", default="description")
 
-    parser.add_argument("--model-name", default="gpt2")
+    parser.add_argument("--model-name", default="microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext") 
     parser.add_argument("--embedding-dim", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--max-length", type=int, default=128)
