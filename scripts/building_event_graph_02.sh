@@ -11,7 +11,7 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Configuration ===
-OUTPUT_BASE="output"
+OUTPUT_BASE="/data/scratch/bty414/opentarget_evidences/23.06"
 KG_OUTPUT_DIR="${OUTPUT_BASE}/evidences"
 STATIC_EDGES_DIR="${KG_OUTPUT_DIR}/static_edges"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"

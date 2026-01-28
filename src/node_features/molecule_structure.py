@@ -45,11 +45,18 @@ def load_drug_parquets(
     # Filter to KG IDs if provided
     if kg_ids:
         kg_set = set(kg_ids)
-        # We don't filter the DF strictly here because we might need to check if IDs exist at all
-        # But for efficiency we can filter.
-        # Imputation logic needs to know ALL kg_ids, even those NOT in this DF.
         df = df[df[id_col].isin(kg_set)]
         print(f"   Found data for {len(df):,} molecules (out of {len(kg_ids):,} requested)")
+
+    print(df.head())
+    print(df.columns)
+    print(df.shape)
+    print(df[id_col].nunique())
+    print(df[smiles_col].nunique())
+    print(df[smiles_col].value_counts())
+    print(df[smiles_col].isna().sum())
+    print(df[smiles_col].isnull().sum())
+    print(df[smiles_col].isnull().sum())
 
     return df.reset_index(drop=True)
 
@@ -62,10 +69,12 @@ def smiles_to_morgan_fp(
     n_bits: int,
     radius: int,
 ) -> np.ndarray | None:
+
+    if smiles is None:
+        return None
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
-
     # Use modern generator to avoid deprecation warning
     gen = AllChem.GetMorganGenerator(radius=radius, fpSize=n_bits)
     fp = gen.GetFingerprint(mol)
@@ -105,6 +114,7 @@ def build_drug_embeddings(args: argparse.Namespace, kg_ids: list = None) -> Dict
         # Check SMILES existence
         if not isinstance(smiles, str) or not smiles.strip():
             skipped_stats["missing_smiles"] += 1
+            # Only skip if NO smiles
             continue
             
         # Generate Fingerprint

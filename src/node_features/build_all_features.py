@@ -85,40 +85,40 @@ def main():
     # Extract node IDs from mappings
     node_files = extract_node_ids_from_mappings(mappings_file, temp_dir)
     
-    # 1. Target Features (Static + RNA) - ALIGNED TO GRAPH NODES
-    print(f"\n{'='*60}")
-    print("1. TARGET FEATURES")
-    print(f"{'='*60}") 
+    # # 1. Target Features (Static + RNA) - ALIGNED TO GRAPH NODES
+    # print(f"\n{'='*60}")
+    # print("1. TARGET FEATURES")
+    # print(f"{'='*60}") 
     
-    if 'target' in node_files:
-        target_args = [
-            "--base-dir", feature_dir,
-            "--output-dir", output_dir,
-            "--target-ids-file", node_files['target']
-        ]
-        print(f"✅ Using {node_files['target']}")
-        run_script("src/node_features/target_features.py", target_args)
-    else:
-        print("⚠️  No target nodes in graph")
+    # if 'target' in node_files:
+    #     target_args = [
+    #         "--base-dir", feature_dir,
+    #         "--output-dir", output_dir,
+    #         "--target-ids-file", node_files['target']
+    #     ]
+    #     print(f"✅ Using {node_files['target']}")
+    #     run_script("src/node_features/target_features.py", target_args)
+    # else:
+    #     print("⚠️  No target nodes in graph")
     
-    # 2. Disease Features (Text) - ALIGNED TO GRAPH NODES
-    print(f"\n{'='*60}")
-    print("2. DISEASE FEATURES")
-    print(f"{'='*60}")
+    # # 2. Disease Features (Text) - ALIGNED TO GRAPH NODES
+    # print(f"\n{'='*60}")
+    # print("2. DISEASE FEATURES")
+    # print(f"{'='*60}")
     
-    if 'disease' in node_files:
-        disease_args = [
-            "--disease-dir", f"{evidence_dir}/diseases",
-            "--output-dir", output_dir,
-            "--parquet-glob", "part-*.parquet",
-            "--batch-size", "128",
-            "--kg-ids-file", node_files['disease']
-        ]
-        print(f"✅ Using {node_files['disease']}")
-        print(f"   Looking up data in: {evidence_dir}/diseases")
-        run_script("src/node_features/disease_description.py", disease_args)
-    else:
-        print("⚠️  No disease nodes in graph")
+    # if 'disease' in node_files:
+    #     disease_args = [
+    #         "--disease-dir", f"{evidence_dir}/diseases",
+    #         "--output-dir", output_dir,
+    #         "--parquet-glob", "part-*.parquet",
+    #         "--batch-size", "128",
+    #         "--kg-ids-file", node_files['disease']
+    #     ]
+    #     print(f"✅ Using {node_files['disease']}")
+    #     print(f"   Looking up data in: {evidence_dir}/diseases")
+    #     run_script("src/node_features/disease_description.py", disease_args)
+    # else:
+    #     print("⚠️  No disease nodes in graph")
     
     # 3. Molecule Features (Morgan Fingerprints) - ALIGNED TO GRAPH NODES
     print(f"\n{'='*60}")
