@@ -140,7 +140,6 @@ def save_outputs(
                     "num_diseases": len(embeddings),
                     "source_dir": args.disease_dir,
                 },
-                "embeddings": {k: v.tolist() for k, v in embeddings.items()},
             },
             f,
             sort_keys=False,

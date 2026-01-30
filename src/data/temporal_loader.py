@@ -15,19 +15,16 @@ import torch_geometric.transforms as T
 
 def load_event_graph(
     filepath: str,
-    attach_features: bool = False,
     to_undirected: bool = False,
-    embedding_dim: int = 128,
-    seed: int = 42
 ) -> HeteroData:
     """
     Load event-based temporal graph (HeteroData).
     
+    Note: Features should be attached separately using src/pipeline/attach_features.py
+    
     Args:
         filepath: Path to temporal graph file (.pt)
-        attach_features: Whether to attach random node features
-        embedding_dim: Embedding dimension
-        seed: Random seed
+        to_undirected: Whether to add reverse edges for message passing
         
     Returns:
         HeteroData object with edge_time and edge_weight attributes
@@ -41,33 +38,11 @@ def load_event_graph(
     if not isinstance(data, HeteroData):
         raise TypeError(f"Expected HeteroData, got {type(data)}")
     
-    # 1. Convert to undirected for GNN message passing
+    # Convert to undirected for GNN message passing
     if to_undirected:
         print("🔄 Converting to undirected graph (adding reverse edges)...")
         data = T.ToUndirected()(data)
     
-    # Optionally attach features
-    if attach_features:
-        from .utils import attach_node_features
-        # Create dummy id_maps (nodes already indexed in graph)
-        id_maps = {}
-        for node_type in data.node_types:
-            num_nodes = data[node_type].num_nodes
-            id_maps[node_type] = {str(i): i for i in range(num_nodes)}
-        
-        # Pass a copy or recreate id_maps if needed, but here we just need to ensure
-        # attach_node_features uses the 'node_id' attribute which is currently in data
-        
-        data = attach_node_features(
-            data,
-            id_maps,
-            init_method="random",
-            embedding_dim=embedding_dim,
-            seed=seed
-        )
-    
-
-
     # Remove node_id attribute if present to avoid PyG loader errors
     # (PyG loader tries to slice all attributes, and list[str] fails)
     for node_type in data.node_types:
