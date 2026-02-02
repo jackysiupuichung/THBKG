@@ -182,13 +182,19 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
     
     if prio_feats:
         all_prio = torch.stack(list(prio_feats.values()))
-        mean_prio = all_prio.mean(dim=0)
+        # Use nanmean to compute mean ignoring NaN values
+        mean_prio = torch.nanmean(all_prio, dim=0)
+        # Only replace with 0 if entire column is NaN (safety fallback)
+        mean_prio = torch.nan_to_num(mean_prio, nan=0.0)
     else:
         mean_prio = torch.zeros(dim_prio)
         
     if rna_feats:
         all_rna = torch.stack(list(rna_feats.values()))
-        mean_rna = all_rna.mean(dim=0)
+        # Use nanmean to compute mean ignoring NaN values
+        mean_rna = torch.nanmean(all_rna, dim=0)
+        # Only replace with 0 if entire column is NaN (safety fallback)
+        mean_rna = torch.nan_to_num(mean_rna, nan=0.0)
     else:
         mean_rna = torch.zeros(dim_rna)
         
@@ -201,6 +207,11 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
         # Get Prio (or Mean)
         if key in prio_feats:
             v_prio = prio_feats[key]
+            # Replace NaN with column-wise mean (already computed in mean_prio)
+            nan_mask = torch.isnan(v_prio)
+            if nan_mask.any():
+                v_prio = v_prio.clone()  # Don't modify original
+                v_prio[nan_mask] = mean_prio[nan_mask]
         else:
             v_prio = mean_prio
             missing_prio += 1
@@ -208,6 +219,11 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
         # Get RNA (or Mean)
         if key in rna_feats:
             v_rna = rna_feats[key]
+            # Replace NaN with column-wise mean (already computed in mean_rna)
+            nan_mask = torch.isnan(v_rna)
+            if nan_mask.any():
+                v_rna = v_rna.clone()  # Don't modify original
+                v_rna[nan_mask] = mean_rna[nan_mask]
         else:
             v_rna = mean_rna
             missing_rna += 1
