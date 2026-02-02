@@ -249,55 +249,41 @@ def main(config_path: str):
     print(f"\n🧪 Starting TEST Evaluation...")
     model.load_state_dict(torch.load(f"{evaluator.output_dir}/best_model.pt"))
     model.eval()
-    
-    # Evaluate on ALL test diseases
-    print("\n📊 Evaluating on ALL test diseases...")
-    metrics = evaluator.evaluate_ranking(
-        model, test_context, test_targets, test_history, test_srcs,
-        supervision_edge_type, hetero_data[dst_type].num_nodes, device,
-        num_negatives=None # Exhaustive
-    )
-    
-    # Log Test Metrics to WandB
-    if cfg.wandb.enabled:
-        wandb.log({f"test_all_{k}": v for k, v in metrics.items()})
-    
-    # Evaluate on VALIDATION diseases only
-    print("\n📊 Evaluating on VALIDATION diseases...")
+
+    # Load validation indices if available
+    validation_indices = []
     try:
         val_csv_path = os.path.join(project_root, "data/validation_diseases.csv")
-        val_df = pd.read_csv(val_csv_path)
-        
-        # Filter for rows where graph_node_idx != -1 and get the list
-        if 'graph_node_idx' in val_df.columns:
-            validation_indices = val_df[val_df['graph_node_idx'] != -1]['graph_node_idx'].tolist()
-            print(f"   Loaded {len(validation_indices)} validation disease indices from CSV.")
-            
-            metrics_validation = evaluator.evaluate_ranking(
-                model, test_context, test_targets, test_history, test_srcs,
-                supervision_edge_type, hetero_data[dst_type].num_nodes, device,
-                num_negatives=None,
-                validation_src_filter=validation_indices
-            )
-            
-            # Log Validation Disease Metrics to WandB
-            if cfg.wandb.enabled:
-                wandb.log({f"test_validation_{k}": v for k, v in metrics_validation.items()})
-        else:
-            print("⚠️  'graph_node_idx' column not found in validation_diseases.csv. Skipping validation disease evaluation.")
-        
-        metrics_validation = evaluator.evaluate_ranking(
+        if os.path.exists(val_csv_path):
+            val_df = pd.read_csv(val_csv_path)
+            if 'graph_node_idx' in val_df.columns:
+                validation_indices = val_df[val_df['graph_node_idx'] != -1]['graph_node_idx'].tolist()
+                print(f"   Loaded {len(validation_indices)} validation disease indices from CSV.")
+    except Exception as e:
+        print(f"⚠️  Could not load validation indices: {e}")
+
+    # Logic: If validation indices exist, evaluate ONLY those. Else evaluate ALL.
+    if validation_indices:
+        print("\n📊 Evaluating on VALIDATION diseases (subset)...")
+        metrics = evaluator.evaluate_ranking(
             model, test_context, test_targets, test_history, test_srcs,
             supervision_edge_type, hetero_data[dst_type].num_nodes, device,
-            num_negatives=None,
+            num_negatives=None, # Exhaustive
             validation_src_filter=validation_indices
         )
-        
-        # Log Validation Disease Metrics to WandB
-        if cfg.wandb.enabled:
-            wandb.log({f"test_validation_{k}": v for k, v in metrics_validation.items()})
-    except Exception as e:
-        print(f"⚠️  Could not evaluate validation diseases: {e}")
+        metric_prefix = "test_validation_"
+    else:
+        print("\n📊 Evaluating on ALL test diseases (fallback)...")
+        metrics = evaluator.evaluate_ranking(
+            model, test_context, test_targets, test_history, test_srcs,
+            supervision_edge_type, hetero_data[dst_type].num_nodes, device,
+            num_negatives=None # Exhaustive
+        )
+        metric_prefix = "test_all_"
+    
+    # Log Metrics to WandB
+    if cfg.wandb.enabled:
+        wandb.log({f"{metric_prefix}{k}": v for k, v in metrics.items()})
         
     # Finish WandB run
     if cfg.wandb.enabled:
