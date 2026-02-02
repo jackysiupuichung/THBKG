@@ -87,7 +87,7 @@ def main(config_path: str):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # 2. Load Data
-    temporal_graph_path = os.path.join(project_root, cfg.data.temporal_graph_file)
+    temporal_graph_path = cfg.data.temporal_graph_file
     hetero_data = load_event_graph(
         temporal_graph_path,
         to_undirected=True
