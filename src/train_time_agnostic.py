@@ -168,7 +168,7 @@ def main(config_path: str):
         num_neighbors=[20, 10],
         edge_label_index=(supervision_edge_type, val_edge_index),
         edge_label=val_labels,
-        neg_sampling=dict(mode='binary', amount=1.0),
+        neg_sampling=dict(mode='binary', amount=50),
         batch_size=cfg.train.batch_size,
         shuffle=False,
         num_workers=4,
