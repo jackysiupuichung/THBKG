@@ -10,6 +10,7 @@ import re
 import urllib3
 import xml.etree.ElementTree as ET
 from src.parsers.edge_extractor import extract_edge_props
+from src.parsers.chembl_trial_expander import expand_chembl_clinical_trials
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -124,13 +125,27 @@ class BaseParser:
                             if df_sub.empty:
                                 continue
 
-                            # Determine output name for this specific sub-spec + dataframe
-                            out_name = self.output_name(name, sub_spec, df_sub)
-                            
-                            if out_name in all_data:
-                                all_data[out_name] = pd.concat([all_data[out_name], df_sub], ignore_index=True)
+                            # For ChEMBL, split by relation (outcome type) after expansion
+                            if name == "chembl" and "relation" in df_sub.columns:
+                                # Group by unique relations (outcome types)
+                                for relation_val, group_df in df_sub.groupby("relation"):
+                                    # Create a temporary spec for output naming
+                                    temp_spec = sub_spec.copy()
+                                    temp_spec["relation_name"] = relation_val
+                                    out_name = self.output_name(name, temp_spec, group_df)
+                                    
+                                    if out_name in all_data:
+                                        all_data[out_name] = pd.concat([all_data[out_name], group_df], ignore_index=True)
+                                    else:
+                                        all_data[out_name] = group_df
                             else:
-                                all_data[out_name] = df_sub
+                                # Normal flow for non-ChEMBL edges
+                                out_name = self.output_name(name, sub_spec, df_sub)
+                                
+                                if out_name in all_data:
+                                    all_data[out_name] = pd.concat([all_data[out_name], df_sub], ignore_index=True)
+                                else:
+                                    all_data[out_name] = df_sub
 
                         except Exception as e:
                             print(f"⚠️ Error applying spec for {sub_spec}: {e}")
@@ -212,7 +227,7 @@ class NodeParser(BaseParser):
             if "drugType" in df.columns:
                 df = df[df["drugType"] == "Small molecule"]
             
-            print(f"  filtered molecules: {valid_stats} -> {len(df)} (Small molecule with valid SMILES)")
+            # print(f"  filtered molecules: {valid_stats} -> {len(df)} (Small molecule with valid SMILES)")
 
         return df
 
@@ -348,6 +363,9 @@ class EdgeParser(BaseParser):
                     expanded_edges.append(self._add_props(edge, row, props))
 
                 out = pd.DataFrame(expanded_edges)
+                # Expand ChEMBL clinical trials by outcome type
+                if name == "chembl" and "relation" in out.columns:
+                    out = expand_chembl_clinical_trials(out)
                 return out
 
         # === Case 2: Nested dict expansion (e.g. pathways.id) ===
@@ -373,7 +391,11 @@ class EdgeParser(BaseParser):
 
                             expanded_edges.append(edge)
 
-                return pd.DataFrame(expanded_edges)
+                out = pd.DataFrame(expanded_edges)
+                # Expand ChEMBL clinical trials by outcome type
+                if name == "chembl" and "relation" in out.columns:
+                    out = expand_chembl_clinical_trials(out)
+                return out
 
         # === Case 3: List-like targetId expansion ===
         if tgt_col in df.columns:
@@ -407,7 +429,11 @@ class EdgeParser(BaseParser):
 
                         expanded_edges.append(self._add_props(edge, row, props))
             if expanded_edges:
-                return pd.DataFrame(expanded_edges)
+                out = pd.DataFrame(expanded_edges)
+                # Expand ChEMBL clinical trials by outcome type
+                if name == "chembl" and "relation" in out.columns:
+                    out = expand_chembl_clinical_trials(out)
+                return out
 
         raise ValueError(f"Unsupported targetId {tgt_col} for {name}")
     
