@@ -168,7 +168,7 @@ def main(config_path: str):
         num_neighbors=[20, 10],
         edge_label_index=(supervision_edge_type, val_edge_index),
         edge_label=val_labels,
-        neg_sampling=dict(mode='binary', amount=50),
+        neg_sampling=dict(mode='binary', amount=1.0),
         batch_size=cfg.train.batch_size,
         shuffle=False,
         num_workers=4,
@@ -184,6 +184,17 @@ def main(config_path: str):
         num_layers=cfg.model.hgt.num_layers,
         dropout=cfg.model.hgt.dropout,
     ).to(device)
+    
+    # Load pretrained weights if specified
+    if cfg.model.get('pretrained_checkpoint'):
+        print(f"\n🔧 Loading pretrained weights from {cfg.model.pretrained_checkpoint}")
+        try:
+            pretrained_state = torch.load(cfg.model.pretrained_checkpoint, map_location=device)
+            model.load_state_dict(pretrained_state, strict=False)
+            print("✅ Pretrained encoder loaded successfully")
+        except Exception as e:
+            print(f"⚠️  Failed to load pretrained weights: {e}")
+            print("   Continuing with random initialization")
     
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
     evaluator = Evaluator(k_values=cfg.eval.k_values, output_dir=f"runs/{cfg.get('experiment_name', 'default')}")

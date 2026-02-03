@@ -11,18 +11,19 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Configuration ===
-OUTPUT_BASE="/data/scratch/bty414/opentarget_evidences/23.06"
-# OUTPUT_BASE="output"
-MAPPINGS_FILE="/data/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_mappings.pt"
-# MAPPINGS_FILE="${OUTPUT_BASE}/progression/temporal_graph_mappings.pt"
-EVIDENCE_DIR="/data/scratch/bty414/opentarget_evidences/23.06/evidenceDated"
-# EVIDENCE_DIR="data/evidenceDated_subset/23.06"
-FEATURE_DATA_DIR="/data/scratch/bty414/opentarget_evidences/23.06/features/raw"
-# FEATURE_DATA_DIR="data/node_features"
-FEATURE_OUTPUT_DIR="/data/scratch/bty414/opentarget_evidences/23.06/features/processed"
-# FEATURE_OUTPUT_DIR="${OUTPUT_BASE}/features/processed"
-TEMP_NODE_DIR="/data/scratch/bty414/opentarget_evidences/23.06/features/temp_nodes"
-# TEMP_NODE_DIR="${OUTPUT_BASE}/features/temp_nodes"
+# OUTPUT_BASE="/data/scratch/bty414/opentarget_evidences/23.06"
+# MAPPINGS_FILE="/data/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_mappings.pt"
+# EVIDENCE_DIR="/data/scratch/bty414/opentarget_evidences/23.06/evidenceDated"
+# FEATURE_DATA_DIR="/data/scratch/bty414/opentarget_evidences/23.06/features/raw"
+# FEATURE_OUTPUT_DIR="/data/scratch/bty414/opentarget_evidences/23.06/features/processed"
+# TEMP_NODE_DIR="/data/scratch/bty414/opentarget_evidences/23.06/features/temp_nodes"
+
+OUTPUT_BASE="output"
+MAPPINGS_FILE="${OUTPUT_BASE}/progression/temporal_graph_sample_mappings.pt"
+EVIDENCE_DIR="data/evidenceDated_subset/23.06"
+FEATURE_DATA_DIR="data/node_features"
+FEATURE_OUTPUT_DIR="${OUTPUT_BASE}/features/processed"
+TEMP_NODE_DIR="${OUTPUT_BASE}/features/temp_nodes"
 
 # === Build Node Features ===
 echo "🚀 Building Node Features from Graph Mappings..."
@@ -36,7 +37,8 @@ python -m src.node_features.build_all_features \
   --evidence-dir "$EVIDENCE_DIR" \
   --feature-data-dir "$FEATURE_DATA_DIR" \
   --output-dir "$FEATURE_OUTPUT_DIR" \
-  --temp-dir "$TEMP_NODE_DIR"
+  --temp-dir "$TEMP_NODE_DIR" \
+  --random-init
 
 echo ""
 echo "✅ Node Feature Collection Complete!"

@@ -11,14 +11,14 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Configuration ===
-OUTPUT_BASE="/data/scratch/bty414/opentarget_evidences/23.06"
-# OUTPUT_BASE="output"
+# OUTPUT_BASE="/data/scratch/bty414/opentarget_evidences/23.06"
+OUTPUT_BASE="output"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
 FEATURE_OUTPUT_DIR="${OUTPUT_BASE}/features/processed"
 FINAL_GRAPH_DIR="${OUTPUT_BASE}/graph"
 
-GRAPH_STRUCT_FILE="${EVENT_OUTPUT_DIR}/temporal_graph.pt"
-FINAL_GRAPH_FILE="${FINAL_GRAPH_DIR}/hetero_graph_with_features.pt"
+GRAPH_STRUCT_FILE="${EVENT_OUTPUT_DIR}/temporal_graph_sample.pt"
+FINAL_GRAPH_FILE="${FINAL_GRAPH_DIR}/hetero_graph_with_features_sample.pt"
 
 # === Attach Features to Graph ===
 echo "🚀 Attaching Features to Graph..."
@@ -31,13 +31,13 @@ python -m src.pipeline.attach_features \
   --output-file "$FINAL_GRAPH_FILE" \
   --feature-dir "$FEATURE_OUTPUT_DIR"
 
-# === Analysis ===
-echo ""
-echo "🚀 Analyzing Final Graph..."
-python -m src.data.analyze_graph \
-  --file "$FINAL_GRAPH_FILE" \
-  --output "${OUTPUT_BASE}/analysis"
+# # === Analysis ===
+# echo ""
+# echo "🚀 Analyzing Final Graph..."
+# python -m src.data.analyze_graph \
+#   --file "$FINAL_GRAPH_FILE" \
+#   --output "${OUTPUT_BASE}/analysis"
 
-echo ""
+# echo ""
 echo "✅ Graph Assembly Complete!"
 echo "   Final Graph: $FINAL_GRAPH_FILE"

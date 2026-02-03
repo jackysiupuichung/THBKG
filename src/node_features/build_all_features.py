@@ -9,6 +9,7 @@ import subprocess
 import sys
 import torch
 import pandas as pd
+import numpy as np
 from pathlib import Path
 
 def run_script(script_path: str, args: list):
@@ -115,6 +116,39 @@ def extract_node_ids_from_mappings(mappings_file: str, output_dir: str):
     return node_files
 
 
+def create_random_embeddings(node_ids_file: str, output_path: str, embedding_dim: int, entity_type: str, seed: int = 42):
+    """
+    Create random embeddings for nodes (useful for quick testing).
+    
+    Args:
+        node_ids_file: Path to parquet with node IDs
+        output_path: Path to save random embeddings
+        embedding_dim: Dimension of embeddings
+        entity_type: Type of entity (for logging)
+        seed: Random seed for reproducibility
+    """
+    print(f"   🎲 Creating random {embedding_dim}-dim embeddings for {entity_type}...")
+    
+    # Load node IDs
+    df = pd.read_parquet(node_ids_file)
+    node_ids = df['id'].tolist()
+    print(f"      Nodes: {len(node_ids):,}")
+    
+    # Create random embeddings
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    
+    embeddings = {}
+    for nid in node_ids:
+        embeddings[nid] = torch.randn(embedding_dim)
+    
+    # Save
+    torch.save(embeddings, output_path)
+    print(f"      ✅ Saved random embeddings to {output_path}")
+    
+    return len(embeddings)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build all node features from graph mappings")
     parser.add_argument("--mappings-file", required=True, help="Path to temporal_graph_mappings.pt")
@@ -122,6 +156,9 @@ def main():
     parser.add_argument("--feature-data-dir", default="data/node_features", help="Raw feature data directory (for targets)")
     parser.add_argument("--output-dir", default="output/features/processed", help="Output directory for features")
     parser.add_argument("--temp-dir", default="output/features/temp_nodes", help="Temporary directory for extracted node IDs")
+    parser.add_argument("--random-init", action="store_true", help="Use random initialization instead of computing features (fast testing mode)")
+    parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension for random init (default: 128)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility (default: 42)")
     args = parser.parse_args()
     
     mappings_file = args.mappings_file
@@ -138,6 +175,11 @@ def main():
     print(f"Feature data directory: {feature_dir}")
     print(f"Output directory: {output_dir}")
     
+    if args.random_init:
+        print(f"\n⚡ RANDOM INITIALIZATION MODE ⚡")
+        print(f"   Embedding dim: {args.embedding_dim}")
+        print(f"   Seed: {args.seed}")
+    
     # Extract node IDs from mappings
     node_files = extract_node_ids_from_mappings(mappings_file, temp_dir)
     
@@ -147,13 +189,24 @@ def main():
     print(f"{'='*60}") 
     
     if 'target' in node_files:
-        target_args = [
-            "--base-dir", feature_dir,
-            "--output-dir", output_dir,
-            "--target-ids-file", node_files['target']
-        ]
-        print(f"✅ Using {node_files['target']}")
-        run_script("src/node_features/target_features.py", target_args)
+        if args.random_init:
+            # Use random vectors instead of computing features
+            output_path = f"{output_dir}/integrated_target_features.pt"
+            create_random_embeddings(
+                node_files['target'], 
+                output_path, 
+                args.embedding_dim,
+                "target",
+                args.seed
+            )
+        else:
+            target_args = [
+                "--base-dir", feature_dir,
+                "--output-dir", output_dir,
+                "--target-ids-file", node_files['target']
+            ]
+            print(f"✅ Using {node_files['target']}")
+            run_script("src/node_features/target_features.py", target_args)
     else:
         print("⚠️  No target nodes in graph")
     
@@ -163,16 +216,26 @@ def main():
     print(f"{'='*60}")
     
     if 'disease' in node_files:
-        disease_args = [
-            "--disease-dir", f"{evidence_dir}/diseases",
-            "--output-dir", output_dir,
-            "--parquet-glob", "part-*.parquet",
-            "--batch-size", "128",
-            "--kg-ids-file", node_files['disease']
-        ]
-        print(f"✅ Using {node_files['disease']}")
-        print(f"   Looking up data in: {evidence_dir}/diseases")
-        run_script("src/node_features/disease_description.py", disease_args)
+        if args.random_init:
+            output_path = f"{output_dir}/disease_embeddings.pt"
+            create_random_embeddings(
+                node_files['disease'],
+                output_path,
+                args.embedding_dim,
+                "disease",
+                args.seed + 1
+            )
+        else:
+            disease_args = [
+                "--disease-dir", f"{evidence_dir}/diseases",
+                "--output-dir", output_dir,
+                "--parquet-glob", "part-*.parquet",
+                "--batch-size", "128",
+                "--kg-ids-file", node_files['disease']
+            ]
+            print(f"✅ Using {node_files['disease']}")
+            print(f"   Looking up data in: {evidence_dir}/diseases")
+            run_script("src/node_features/disease_description.py", disease_args)
     else:
         print("⚠️  No disease nodes in graph")
     
@@ -189,58 +252,80 @@ def main():
     print(f"   Static edges directory: {static_edges_dir}")
     
     # Train GO embeddings
-    go_edges_file = static_edges_dir / "go_is_subtype_of_go_gene_ontology.parquet"
-    if go_edges_file.exists():
-        print(f"\n   🧬 Training GO autoencoder on full graph...")
-        go_full_path = f"{output_dir}/go_embeddings_full.pt"
-        go_args = [
-            "--edges-file", str(go_edges_file),
-            "--output-path", go_full_path,
-            "--entity-type", "go",
-            "--embedding-dim", "64",
-            "--num-epochs", "100",
-        ]
-        run_script("src/node_features/pathway_go_autoencoder.py", go_args)
-        
-        # Subset to graph nodes if GO nodes exist in graph
-        if 'go' in node_files:
-            subset_embeddings(
-                full_embeddings_path=go_full_path,
-                node_ids_file=node_files['go'],
-                output_path=f"{output_dir}/go_embeddings.pt",
-                entity_type="go"
-            )
+    if args.random_init and 'go' in node_files:
+        # Skip autoencoder training, use random embeddings directly
+        output_path = f"{output_dir}/go_embeddings.pt"
+        create_random_embeddings(
+            node_files['go'],
+            output_path,
+            64,  # Standard GO embedding dim
+            "go",
+            args.seed + 2
+        )
+    elif not args.random_init:
+        go_edges_file = static_edges_dir / "go_is_subtype_of_go_gene_ontology.parquet"
+        if go_edges_file.exists():
+            print(f"\n   🧬 Training GO autoencoder on full graph...")
+            go_full_path = f"{output_dir}/go_embeddings_full.pt"
+            go_args = [
+                "--edges-file", str(go_edges_file),
+                "--output-path", go_full_path,
+                "--entity-type", "go",
+                "--embedding-dim", "64",
+                "--num-epochs", "100",
+            ]
+            run_script("src/node_features/pathway_go_autoencoder.py", go_args)
+            
+            # Subset to graph nodes if GO nodes exist in graph
+            if 'go' in node_files:
+                subset_embeddings(
+                    full_embeddings_path=go_full_path,
+                    node_ids_file=node_files['go'],
+                    output_path=f"{output_dir}/go_embeddings.pt",
+                    entity_type="go"
+                )
+            else:
+                print(f"   ⚠️  No GO nodes in graph, skipping subset")
         else:
-            print(f"   ⚠️  No GO nodes in graph, skipping subset")
-    else:
-        print(f"   ⚠️  GO edges not found: {go_edges_file}")
+            print(f"   ⚠️  GO edges not found: {go_edges_file}")
     
     # Train Reactome embeddings
-    reactome_edges_file = static_edges_dir / "reactome_is_subpathway_of_reactome_reactome.parquet"
-    if reactome_edges_file.exists():
-        print(f"\n   🧬 Training Reactome autoencoder on full graph...")
-        reactome_full_path = f"{output_dir}/reactome_embeddings_full.pt"
-        reactome_args = [
-            "--edges-file", str(reactome_edges_file),
-            "--output-path", reactome_full_path,
-            "--entity-type", "reactome",
-            "--embedding-dim", "64",
-            "--num-epochs", "100",
-        ]
-        run_script("src/node_features/pathway_go_autoencoder.py", reactome_args)
-        
-        # Subset to graph nodes if Reactome nodes exist in graph
-        if 'reactome' in node_files:
-            subset_embeddings(
-                full_embeddings_path=reactome_full_path,
-                node_ids_file=node_files['reactome'],
-                output_path=f"{output_dir}/reactome_embeddings.pt",
-                entity_type="reactome"
-            )
+    if args.random_init and 'reactome' in node_files:
+        # Skip autoencoder training, use random embeddings directly
+        output_path = f"{output_dir}/reactome_embeddings.pt"
+        create_random_embeddings(
+            node_files['reactome'],
+            output_path,
+            64,  # Standard Reactome embedding dim
+            "reactome",
+            args.seed + 3
+        )
+    elif not args.random_init:
+        reactome_edges_file = static_edges_dir / "reactome_is_subpathway_of_reactome_reactome.parquet"
+        if reactome_edges_file.exists():
+            print(f"\n   🧬 Training Reactome autoencoder on full graph...")
+            reactome_full_path = f"{output_dir}/reactome_embeddings_full.pt"
+            reactome_args = [
+                "--edges-file", str(reactome_edges_file),
+                "--output-path", reactome_full_path,
+                "--entity-type", "reactome",
+                "--embedding-dim", "64",
+                "--num-epochs", "100",
+            ]
+            run_script("src/node_features/pathway_go_autoencoder.py", reactome_args)
+            
+            # Subset to graph nodes if Reactome nodes exist in graph
+            if 'reactome' in node_files:
+                subset_embeddings(
+                    full_embeddings_path=reactome_full_path,
+                    node_ids_file=node_files['reactome'],
+                    output_path=f"{output_dir}/reactome_embeddings.pt",
+                    entity_type="reactome"
+                )
+            else:
+                print(f"   ⚠️  No Reactome nodes in graph, skipping subset")
         else:
-            print(f"   ⚠️  No Reactome nodes in graph, skipping subset")
-    else:
-        print(f"   ⚠️  Reactome edges not found: {reactome_edges_file}")
+            print(f"   ⚠️  Reactome edges not found: {reactome_edges_file}")
     
     # 4. Molecule Features (Morgan Fingerprints) - ALIGNED TO GRAPH NODES
     print(f"\n{'='*60}")
@@ -248,17 +333,27 @@ def main():
     print(f"{'='*60}")
     
     if 'molecule' in node_files:
-        molecule_args = [
-            "--drug-dir", f"{evidence_dir}/molecule",
-            "--output-dir", output_dir,
-            "--parquet-glob", "part-*.parquet",
-            "--id-col", "id",
-            "--smiles-col", "canonicalSmiles",
-            "--kg-ids-file", node_files['molecule']
-        ]
-        print(f"✅ Using {node_files['molecule']}")
-        print(f"   Looking up data in: {evidence_dir}/molecule")
-        run_script("src/node_features/molecule_structure.py", molecule_args)
+        if args.random_init:
+            output_path = f"{output_dir}/molecule_morgan_fingerprints.pt"
+            create_random_embeddings(
+                node_files['molecule'],
+                output_path,
+                2048,  # Standard Morgan fingerprint dim
+                "molecule",
+                args.seed + 4
+            )
+        else:
+            molecule_args = [
+                "--drug-dir", f"{evidence_dir}/molecule",
+                "--output-dir", output_dir,
+                "--parquet-glob", "part-*.parquet",
+                "--id-col", "id",
+                "--smiles-col", "canonicalSmiles",
+                "--kg-ids-file", node_files['molecule']
+            ]
+            print(f"✅ Using {node_files['molecule']}")
+            print(f"   Looking up data in: {evidence_dir}/molecule")
+            run_script("src/node_features/molecule_structure.py", molecule_args)
     else:
         print("⚠️  No molecule nodes in graph")
     

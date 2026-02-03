@@ -1,17 +1,17 @@
 # TODO: what about edges with no temporal information? e.g. intogen, progeny (supp file temporal trend)
 
-# gene_ontology:
-#   input_dir: targets
-#   sourceId: id
-#   targetId: go.id
-#   relation_name: has_function_in
-#   props: [
-#     datasourceId=constant:gene_ontology,
-#     score=constant:1.0,
-#     source_type=constant:target,
-#     target_type=constant:go,
-#     year
-#   ]
+gene_ontology:
+  input_dir: targets
+  sourceId: id
+  targetId: go.id
+  relation_name: has_function_in
+  props: [
+    datasourceId=constant:gene_ontology,
+    score=constant:1.0,
+    source_type=constant:target,
+    target_type=constant:go,
+    year
+  ]
 
 cancer_biomarkers:
   input_dir: sourceId=cancer_biomarkers
@@ -34,12 +34,6 @@ chembl:
     targetId: drugId
     relation_name: modulated_by
     props: [source_type=constant:target, target_type=constant:molecule, datasourceId, score=constant:1.0, year, id]
-
-  # - name: chembl
-  #   sourceId: drugId
-  #   targetId: diseaseId
-  #   relation_name: treats
-  #   props: [source_type=constant:molecule, target_type=constant:disease, datasourceId, score, year, id]
 
 reactome:
   - input_dir: sourceId=reactome
