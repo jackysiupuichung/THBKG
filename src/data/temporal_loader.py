@@ -16,6 +16,7 @@ import torch_geometric.transforms as T
 def load_event_graph(
     filepath: str,
     to_undirected: bool = False,
+    normalize_features: bool = False,
 ) -> HeteroData:
     """
     Load event-based temporal graph (HeteroData).
@@ -25,6 +26,7 @@ def load_event_graph(
     Args:
         filepath: Path to temporal graph file (.pt)
         to_undirected: Whether to add reverse edges for message passing
+        normalize_features: Whether to apply StandardScaler to node features
         
     Returns:
         HeteroData object with edge_time and edge_weight attributes
@@ -38,7 +40,12 @@ def load_event_graph(
     if not isinstance(data, HeteroData):
         raise TypeError(f"Expected HeteroData, got {type(data)}")
     
-    # Convert to undirected for GNN message passing
+    # 1. Feature Normalization (if requested)
+    if normalize_features:
+        print("   Normalizing features...")
+        data = T.NormalizeFeatures()(data)
+
+    # 2. Convert to undirected for GNN message passing
     if to_undirected:
         print("🔄 Converting to undirected graph (adding reverse edges)...")
         data = T.ToUndirected()(data)
