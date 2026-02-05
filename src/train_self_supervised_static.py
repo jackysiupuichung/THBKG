@@ -248,7 +248,11 @@ def main(config_path):
     
     # Load temporal graph
     print(f"\n📊 Loading graph from {cfg.data.graph_file}")
-    temporal_graph = load_event_graph(cfg.data.graph_file, to_undirected=True)
+    temporal_graph = load_event_graph(
+        cfg.data.graph_file, 
+        to_undirected=True, 
+        normalize_features=True
+    )
     
     # Prepare edge splits using temporal snapshots
     train_end = cfg.pretrain.temporal_split.train[1]
@@ -270,11 +274,8 @@ def main(config_path):
     # Create LinkNeighborLoaders for mini-batch training
     print("\n🚚 Creating Data Loaders...")
     batch_size = cfg.pretrain.get('batch_size', 512)
-    # Use list for multi-hop sampling (e.g., [20, 10] means 20 neighbors for 1st hop, 10 for 2nd)
-    # PyG LinkNeighborLoader supports list of ints for all edge types
     num_neighbors = cfg.pretrain.get('num_neighbors', [20, 10])
     
-    # Ensure num_neighbors is a list of integers
     if isinstance(num_neighbors, int):
         num_neighbors = [num_neighbors]
     
@@ -282,18 +283,15 @@ def main(config_path):
     print(f"   Num neighbors: {num_neighbors}")
     print(f"   Negative sampling ratio: {cfg.pretrain.get('neg_sampling_ratio', 1.0)}")
 
+    # Robustness Fix: Explicitly map num_neighbors for EVERY edge type.
+    # Passing a list directly causes PyG to fail if any edge type in the graph is empty.
+    # By using a dict, we explicitly tell the loader what to do for each type.
+    # Note: OmegaConf returns ListConfig, so we check if it is NOT a dict.
+    if not isinstance(num_neighbors, dict):
+        num_neighbors = {et: num_neighbors for et in temporal_graph.edge_types}
     
     train_loaders = {}
     val_loaders = {}
-    
-    # Construct num_neighbors dict for all edge types to ensure safety
-    # This prevents PyG errors if some types are empty
-    # Use list for multi-hop: [20, 10]
-    default_neighbors = cfg.pretrain.get('num_neighbors', [20, 10])
-    if isinstance(default_neighbors, int):
-        default_neighbors = [default_neighbors]
-        
-    num_neighbors_dict = {et: default_neighbors for et in temporal_graph.edge_types}
     
     for etype in train_edges.keys():
         if train_edges[etype]['edge_index'].size(1) == 0:
@@ -301,9 +299,18 @@ def main(config_path):
         
         loss_type = edge_loss_config[etype]
         
-        # Train loader
-        edge_label = train_edges[etype]['edge_attr'].squeeze() if train_edges[etype]['edge_attr'] is not None else torch.ones(train_edges[etype]['edge_index'].size(1))
         
+        # Train loader
+        if train_edges[etype]['edge_attr'] is not None:
+            edge_label = train_edges[etype]['edge_attr'].squeeze()
+            # Fix NaNs in targets (common in hierarchical edges like is_subtype_of)
+            if torch.isnan(edge_label).any():
+                # Only print warning once per type
+                # print(f"   ⚠️ Fixing NaNs in {etype} train targets (replacing with 1.0)")
+                edge_label = torch.nan_to_num(edge_label, nan=1.0)
+        else:
+            edge_label = torch.ones(train_edges[etype]['edge_index'].size(1))
+
         # CRITICAL: Only use negative sampling for binary edges (BCE)
         if loss_type == 'bce':
             neg_sampling_config = dict(mode='binary', amount=cfg.pretrain.get('neg_sampling_ratio', 1.0))
@@ -312,30 +319,31 @@ def main(config_path):
         
         train_loaders[etype] = LinkNeighborLoader(
             data=train_context,
-            num_neighbors=num_neighbors_dict,
+            num_neighbors=num_neighbors,
             edge_label_index=(etype, train_edges[etype]['edge_index']),
             edge_label=edge_label,
             neg_sampling=neg_sampling_config,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=0,
-            persistent_workers=False
         )
         
         # Val loader
         if etype in val_edges and val_edges[etype]['edge_index'].size(1) > 0:
-            val_edge_label = val_edges[etype]['edge_attr'].squeeze() if val_edges[etype]['edge_attr'] is not None else torch.ones(val_edges[etype]['edge_index'].size(1))
+            if val_edges[etype]['edge_attr'] is not None:
+                val_edge_label = val_edges[etype]['edge_attr'].squeeze()
+                if torch.isnan(val_edge_label).any():
+                    val_edge_label = torch.nan_to_num(val_edge_label, nan=1.0)
+            else:
+                val_edge_label = torch.ones(val_edges[etype]['edge_index'].size(1))
             
             val_loaders[etype] = LinkNeighborLoader(
                 data=val_context,
-                num_neighbors=num_neighbors_dict,
+                num_neighbors=num_neighbors,
                 edge_label_index=(etype, val_edges[etype]['edge_index']),
                 edge_label=val_edge_label,
                 neg_sampling=neg_sampling_config,  # Same as train
                 batch_size=batch_size,
                 shuffle=False,
-                num_workers=0,
-                persistent_workers=False
             )
     
     print(f"   Batch size: {batch_size}")
@@ -475,6 +483,13 @@ def main(config_path):
     
     # Test evaluation
     print(f"\n🧪 Starting TEST Evaluation...")
+    
+    # Clean test targets (NaNs)
+    for etype in test_edges:
+        if test_edges[etype].get('edge_attr') is not None:
+             if torch.isnan(test_edges[etype]['edge_attr']).any():
+                 test_edges[etype]['edge_attr'] = torch.nan_to_num(test_edges[etype]['edge_attr'], nan=1.0)
+                 
     model.load_state_dict(torch.load(output_dir / "pretrained_best.pt"))
     
     test_metrics = evaluate_link_prediction(
