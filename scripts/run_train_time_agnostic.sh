@@ -17,8 +17,17 @@ source .venv/bin/activate
 export WANDB_MODE=offline
 
 echo "================================================================================"
-echo "RUNNING GATv2 TIME-AGNOSTIC TRAINING (WANDB OFFLINE)"
+echo "RUNNING STATIC SELF-SUPERVISED PRETRAINING (WANDB OFFLINE)"
 echo "================================================================================"
 
-# Time-Agnostic (GATv2)
-python -m src.train_time_agnostic --config config/experiments/gatv2_agnostic.yaml
+# 1. HGT Pretrain
+echo "▶️  Running HGT..."
+python src/train_self_supervised_static.py --config config/experiments/pretrain_static_hgt.yaml
+
+# 2. GATv2 Pretrain
+echo "▶️  Running GATv2..."
+python src/train_self_supervised_static.py --config config/experiments/pretrain_static_gatv2.yaml
+
+# 3. GATv3 Pretrain
+echo "▶️  Running GATv3..."
+python src/train_self_supervised_static.py --config config/experiments/pretrain_static_gatv3.yaml
