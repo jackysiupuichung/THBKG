@@ -24,6 +24,7 @@ class HGT(nn.Module):
     
     def __init__(
         self,
+        in_channels: Dict[str, int],
         hidden_dim: int,
         out_dim: int,
         num_heads: int,
@@ -36,6 +37,7 @@ class HGT(nn.Module):
         Initialize HGT encoder.
         
         Args:
+            in_channels: Dictionary of node type -> input dimension
             hidden_dim: Hidden dimension
             out_dim: Output dimension
             num_heads: Number of attention heads
@@ -51,11 +53,16 @@ class HGT(nn.Module):
         self.num_layers = num_layers
         self.node_types = node_types
         
+        # Input projection layer
+        self.lin_dict = nn.ModuleDict()
+        for node_type, in_dim in in_channels.items():
+            self.lin_dict[node_type] = Linear(in_dim, hidden_dim)
+        
         # HGT convolution layers
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             conv = HGTConv(
-                in_channels=hidden_dim,
+                in_channels=hidden_dim, # Inputs are now projected to hidden_dim
                 out_channels=hidden_dim,
                 metadata=metadata,
                 heads=num_heads,
@@ -89,6 +96,16 @@ class HGT(nn.Module):
         Returns:
             Node embeddings {node_type: embeddings}
         """
+        # Project inputs to hidden_dim
+        x_dict_proj = {}
+        for node_type, x in x_dict.items():
+            if node_type in self.lin_dict:
+                x_dict_proj[node_type] = self.lin_dict[node_type](x)
+            else:
+                x_dict_proj[node_type] = x # Should not happen if in_channels is correct
+        
+        x_dict = x_dict_proj
+
         # Apply HGT layers
         for i, conv in enumerate(self.convs):
             # HGT convolution
@@ -116,6 +133,7 @@ class HGTLinkPredictor(nn.Module):
     
     def __init__(
         self,
+        in_channels: Dict[str, int],
         hidden_dim: int,
         out_dim: int,
         num_heads: int,
@@ -128,17 +146,15 @@ class HGTLinkPredictor(nn.Module):
         Initialize link predictor.
         
         Args:
+            in_channels: Input feature dimensions
             hidden_dim: Hidden dimension
             out_dim: Output dimension
-            num_heads: Number of attention heads
-            num_layers: Number of HGT layers
-            node_types: List of node type names
-            metadata: (node_types, edge_types) tuple
-            dropout: Dropout rate
+            ...
         """
         super().__init__()
         
         self.encoder = HGT(
+            in_channels=in_channels,
             hidden_dim=hidden_dim,
             out_dim=out_dim,
             num_heads=num_heads,

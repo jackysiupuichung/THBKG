@@ -54,8 +54,22 @@ def build_model(
     node_types, edge_types = get_metadata(data)
     metadata = (node_types, edge_types)
     
+    # Extract input dimensions for each node type
+    in_channels = {}
+    for nt in node_types:
+        if hasattr(data[nt], 'x') and data[nt].x is not None:
+            in_channels[nt] = data[nt].x.size(1)
+        else:
+            # Fallback or specific handling for nodes without features
+            # Usually strict error or defaulting is better. 
+            # Assuming all have features for now based on 'hetero_graph_with_features'
+            # If missing, we might use Embedding. But let's assume features.
+            # Default to hidden_dim if not found (risky but maintains old behavior if no features)
+            in_channels[nt] = hidden_dim
+
     if model_name == 'hgt':
         model = HGTLinkPredictor(
+            in_channels=in_channels,
             hidden_dim=hidden_dim,
             out_dim=out_dim,
             num_heads=num_heads,
