@@ -23,7 +23,7 @@ data:
     test: [2018, 2025]
     
   graph:
-    mode: "event"  # Options: event, time_agnostic, temporal_snapshot
+    mode: "event"
     
     # Supervision task (link prediction target)
     supervision:

@@ -130,12 +130,10 @@ def main(config_path: str):
     else: train_labels = torch.ones(train_edge_index.size(1))
     
     # Val Edges (From Raw, masked to Val Range)
-    # Pass split_config if available, or legacy years
+    # Pass split_config
     masks = get_temporal_masks(
         hetero_data, 
-        split_config=split_config,
-        train_year=train_end, 
-        val_year=val_end
+        split_config=split_config
     )
     
     train_mask, val_mask, test_mask = masks[supervision_edge_type]
