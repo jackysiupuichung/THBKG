@@ -175,12 +175,11 @@ def train_one_epoch(
     model.train()
     total_loss = 0
     total_examples = 0
-    loss_breakdown = {'bce': 0, 'huber': 0}
-    num_batches = {'bce': 0, 'huber': 0}
+    loss_breakdown = {'exist': 0, 'prob': 0}
+    num_batches = 0
     
     # Train on each edge type
     for etype, loader in loaders.items():
-        loss_type = edge_loss_config[etype]
         src_type, rel, dst_type = etype
         
         pbar = tqdm(loader, desc=f"Training {etype[1][:30]}", leave=False)
@@ -190,7 +189,7 @@ def train_one_epoch(
             optimizer.zero_grad()
             
             # Forward pass
-            pred_scores = model(
+            out = model(
                 batch.x_dict,
                 batch.edge_index_dict,
                 batch[etype].edge_label_index,
@@ -198,34 +197,76 @@ def train_one_epoch(
                 dst_type
             )
             
-            # Compute loss based on edge type
-            if loss_type == 'bce':
-                # Binary: LinkNeighborLoader already provides edge_label with 1s (pos) and 0s (neg)
-                targets = batch[etype].edge_label.float()
-                loss = F.binary_cross_entropy_with_logits(pred_scores[:targets.size(0)], targets)
-                loss_breakdown['bce'] += loss.item()
-                num_batches['bce'] += 1
-            else:  # huber
-                # Continuous: use actual edge scores (no negative sampling for Huber)
-                targets = batch[etype].edge_label.flatten()
-                loss = F.huber_loss(pred_scores[:targets.size(0)], targets)
-                loss_breakdown['huber'] += loss.item()
-                num_batches['huber'] += 1
+            targets = batch[etype].edge_label.float()
+            # Ensure targets are aligned with prediction size if needed
+            # (LinkNeighborLoader usually guarantees this)
+            
+            # Handle dual-head output
+            if isinstance(out, dict):
+                logits_exist = out['logits_exist']
+                logits_prob = out['logits_prob']
+                
+                # Truncate preds if necessary (though usually they match)
+                num_preds = logits_exist.size(0)
+                targets = targets[:num_preds]
+                
+                # ---------------------------------------------------------
+                # Head A: Existence (Binary Discovery)
+                # ---------------------------------------------------------
+                # Target: 1 if edge exists (positive sample), 0 if negative sample.
+                # Since we use soft labels for positives (e.g. 0.8), we binarize them for existence.
+                # Assuming all positive samples have score > 0.
+                exist_targets = (targets > 0).float()
+                
+                loss_exist = F.binary_cross_entropy_with_logits(logits_exist, exist_targets)
+                
+                # ---------------------------------------------------------
+                # Head B: Probability (Calibrated Strength)
+                # ---------------------------------------------------------
+                # Target: The soft score (probability).
+                # Mask: Apply only to positive edges (where existence=1).
+                # We do not train probability on negative edges (statistically undefined/irrelevant).
+                pos_mask = (targets > 0)
+                
+                if pos_mask.sum() > 0:
+                    # Select logits and targets for positives
+                    prob_logits_pos = logits_prob[pos_mask]
+                    prob_targets_pos = targets[pos_mask]
+                    
+                    # Soft-label BCE
+                    loss_prob = F.binary_cross_entropy_with_logits(prob_logits_pos, prob_targets_pos)
+                else:
+                    loss_prob = torch.tensor(0.0, device=device)
+                    
+                # ---------------------------------------------------------
+                # proper composite loss
+                # ---------------------------------------------------------
+                # hardcoded lambdas for now (1.0 each)
+                loss = loss_exist + loss_prob
+                
+                loss_breakdown['exist'] += loss_exist.item()
+                loss_breakdown['prob'] += loss_prob.item()
+
+            else:
+                # Fallback for single-head models (e.g. legacy HGT)
+                # Treats output as existence logits
+                loss = F.binary_cross_entropy_with_logits(out[:targets.size(0)], (targets > 0).float())
+                loss_breakdown['exist'] += loss.item()
             
             loss.backward()
             optimizer.step()
             
             total_loss += loss.item() * batch[etype].edge_label_index.size(1)
             total_examples += batch[etype].edge_label_index.size(1)
+            num_batches += 1
             
             # Update progress bar
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
     
     # Average loss breakdown
-    if num_batches['bce'] > 0:
-        loss_breakdown['bce'] /= num_batches['bce']
-    if num_batches['huber'] > 0:
-        loss_breakdown['huber'] /= num_batches['huber']
+    if num_batches > 0:
+        loss_breakdown['exist'] /= num_batches
+        loss_breakdown['prob'] /= num_batches
     
     avg_loss = total_loss / total_examples if total_examples > 0 else 0.0
     return avg_loss, loss_breakdown
@@ -392,12 +433,11 @@ def main(config_path):
         model.eval()
         val_loss = 0
         val_examples = 0
-        val_breakdown = {'bce': 0, 'huber': 0}
-        val_batches = {'bce': 0, 'huber': 0}
+        val_breakdown = {'exist': 0, 'prob': 0}
+        val_batches = 0
         
         with torch.no_grad():
             for etype, loader in val_loaders.items():
-                loss_type = edge_loss_config[etype]
                 src_type, rel, dst_type = etype
                 
                 pbar = tqdm(loader, desc=f"Validating {etype[1][:30]}", leave=False)
@@ -405,7 +445,7 @@ def main(config_path):
                 for batch in pbar:
                     batch = batch.to(device)
                     
-                    pred_scores = model(
+                    out = model(
                         batch.x_dict,
                         batch.edge_index_dict,
                         batch[etype].edge_label_index,
@@ -413,58 +453,69 @@ def main(config_path):
                         dst_type
                     )
                     
-                    if loss_type == 'bce':
-                        # Binary: edge_label already contains 1s (pos) and 0s (neg)
-                        targets = batch[etype].edge_label.float()
-                        loss = F.binary_cross_entropy_with_logits(pred_scores[:targets.size(0)], targets)
-                        val_breakdown['bce'] += loss.item()
-                        val_batches['bce'] += 1
-                    else:  # huber
-                        # Continuous: use actual edge scores
-                        targets = batch[etype].edge_label.flatten()
-                        loss = F.huber_loss(pred_scores[:targets.size(0)], targets)
-                        val_breakdown['huber'] += loss.item()
-                        val_batches['huber'] += 1
+                    targets = batch[etype].edge_label.float()
+                    
+                    # Handle dual-head output
+                    if isinstance(out, dict):
+                        logits_exist = out['logits_exist']
+                        logits_prob = out['logits_prob']
+                        
+                        num_preds = logits_exist.size(0)
+                        targets = targets[:num_preds]
+                        
+                        # Head A: Existence
+                        exist_targets = (targets > 0).float()
+                        loss_exist = F.binary_cross_entropy_with_logits(logits_exist, exist_targets)
+                        
+                        # Head B: Probability
+                        pos_mask = (targets > 0)
+                        if pos_mask.sum() > 0:
+                            prob_logits_pos = logits_prob[pos_mask]
+                            prob_targets_pos = targets[pos_mask]
+                            loss_prob = F.binary_cross_entropy_with_logits(prob_logits_pos, prob_targets_pos)
+                        else:
+                            loss_prob = torch.tensor(0.0, device=device)
+                            
+                        loss = loss_exist + loss_prob
+                        
+                        val_breakdown['exist'] += loss_exist.item()
+                        val_breakdown['prob'] += loss_prob.item()
+
+                    else:
+                        # Fallback
+                        loss = F.binary_cross_entropy_with_logits(out[:targets.size(0)], (targets > 0).float())
+                        val_breakdown['exist'] += loss.item()
                     
                     val_loss += loss.item() * batch[etype].edge_label_index.size(1)
                     val_examples += batch[etype].edge_label_index.size(1)
+                    val_batches += 1
                     
                     # Update progress bar
                     pbar.set_postfix({'loss': f'{loss.item():.4f}'})
         
         # Average validation metrics
-        if val_batches['bce'] > 0:
-            val_breakdown['bce'] /= val_batches['bce']
-        if val_batches['huber'] > 0:
-            val_breakdown['huber'] /= val_batches['huber']
+        if val_batches > 0:
+            val_breakdown['exist'] /= val_batches
+            val_breakdown['prob'] /= val_batches
         
         avg_val_loss = val_loss / val_examples if val_examples > 0 else float('inf')
-        
-        # Use Huber loss as primary metric if available
-        if val_batches['huber'] > 0:
-            val_metric = val_breakdown['huber']
-            metric_name = 'Huber'
-        elif val_batches['bce'] > 0:
-            val_metric = val_breakdown['bce']
-            metric_name = 'BCE'
-        else:
-            val_metric = avg_val_loss
-            metric_name = 'Loss'
+        val_metric = avg_val_loss 
+        metric_name = 'Loss'
         
         # Logging
         print(f"\nEpoch {epoch+1:03d}/{cfg.pretrain.num_epochs}")
-        print(f"  Train Loss: {train_loss:.4f} (BCE: {loss_breakdown['bce']:.4f}, Huber: {loss_breakdown['huber']:.4f})")
-        print(f"  Val {metric_name}: {val_metric:.4f}")
+        print(f"  Train Loss: {train_loss:.4f} (Exist: {loss_breakdown['exist']:.4f}, Prob: {loss_breakdown['prob']:.4f})")
+        print(f"  Val Loss:   {avg_val_loss:.4f} (Exist: {val_breakdown['exist']:.4f}, Prob: {val_breakdown['prob']:.4f})")
         
         if cfg.wandb.enabled:
             wandb.log({
                 "epoch": epoch + 1,
                 "train_loss": train_loss,
-                "train_bce_loss": loss_breakdown['bce'],
-                "train_huber_loss": loss_breakdown['huber'],
+                "train_exist_loss": loss_breakdown['exist'],
+                "train_prob_loss": loss_breakdown['prob'],
                 "val_loss": avg_val_loss,
-                "val_bce_loss": val_breakdown['bce'],
-                "val_huber_loss": val_breakdown['huber']
+                "val_exist_loss": val_breakdown['exist'],
+                "val_prob_loss": val_breakdown['prob']
             })
         
         # Save best model

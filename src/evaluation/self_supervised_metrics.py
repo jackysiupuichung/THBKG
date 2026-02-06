@@ -110,13 +110,23 @@ def evaluate_link_prediction(
             
             # Get positive edge predictions
             pos_edge_index = pos_data['edge_index'].to(device)
-            pos_scores = model(
+            out_pos = model(
                 {k: v.to(device) for k, v in graph.x_dict.items()},
                 {k: v.to(device) for k, v in graph.edge_index_dict.items()},
                 pos_edge_index,
                 src_type,
                 dst_type
             )
+            
+            # Handle dual-head output
+            if isinstance(out_pos, dict):
+                pos_logits_exist = out_pos['logits_exist']
+                pos_logits_prob = out_pos['logits_prob']
+                pos_scores_exist = pos_logits_exist # Logits are fine for ranking
+                pos_probs = torch.sigmoid(pos_logits_prob) # Probabilities for regression
+            else:
+                pos_scores_exist = out_pos
+                pos_probs = torch.sigmoid(out_pos) # Ambiguous fallback
             
             if loss_type == 'bce':
                 # Binary classification metrics - create negative samples
@@ -129,7 +139,7 @@ def evaluate_link_prediction(
                 )
                 
                 # Get negative edge predictions
-                neg_scores = model(
+                out_neg = model(
                     {k: v.to(device) for k, v in graph.x_dict.items()},
                     {k: v.to(device) for k, v in graph.edge_index_dict.items()},
                     neg_edge_index.to(device),
@@ -137,11 +147,17 @@ def evaluate_link_prediction(
                     dst_type
                 )
                 
-                # Combine positive and negative
-                all_scores = torch.cat([pos_scores, neg_scores]).cpu().numpy()
+                if isinstance(out_neg, dict):
+                    neg_logits_exist = out_neg['logits_exist']
+                    neg_scores_exist = neg_logits_exist
+                else:
+                    neg_scores_exist = out_neg
+                
+                # Combine positive and negative for Existence task
+                all_scores = torch.cat([pos_scores_exist, neg_scores_exist]).cpu().numpy()
                 all_labels = np.concatenate([
-                    np.ones(pos_scores.size(0)),
-                    np.zeros(neg_scores.size(0))
+                    np.ones(pos_scores_exist.size(0)),
+                    np.zeros(neg_scores_exist.size(0))
                 ])
                 
                 # Compute metrics
@@ -157,19 +173,22 @@ def evaluate_link_prediction(
                 except ValueError as e:
                     print(f"Warning: Could not compute metrics for {etype}: {e}")
             
-            else:  # huber
-                # Regression metrics
+            else:  # huber / prob
+                # Regression metrics (Probability Calibration)
                 if pos_data['edge_attr'] is not None:
                     targets = pos_data['edge_attr'].flatten().to(device)
                     
-                    # MSE
-                    mse = F.mse_loss(pos_scores, targets).item()
+                    # Ensure targets are [0,1]? If they are not, sigmoid comparison is invalid.
+                    # Assuming they are probabilities.
+                    
+                    # MSE (on probabilities)
+                    mse = F.mse_loss(pos_probs, targets).item()
                     
                     # MAE
-                    mae = F.l1_loss(pos_scores, targets).item()
+                    mae = F.l1_loss(pos_probs, targets).item()
                     
                     # Huber loss
-                    huber = F.huber_loss(pos_scores, targets).item()
+                    huber = F.huber_loss(pos_probs, targets).item()
                     
                     metrics[f'{etype}_mse'] = mse
                     metrics[f'{etype}_mae'] = mae
