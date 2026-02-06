@@ -235,7 +235,13 @@ def train_one_epoch(
                     
                     # Soft-label BCE
                     loss_prob = F.binary_cross_entropy_with_logits(prob_logits_pos, prob_targets_pos)
+                    
+                    # DEBUG: Check why loss_prob might be 0
+                    if loss_prob.item() < 1e-5 and torch.rand(1).item() < 0.01: # Sample prints
+                         print(f"DEBUG {etype}: targets_mean={targets.mean():.4f}, pos_sum={pos_mask.sum()}, prob_loss={loss_prob.item():.6f}")
                 else:
+                    if torch.rand(1).item() < 0.01:
+                        print(f"DEBUG {etype}: No positive targets! targets_mean={targets.mean():.4f}")
                     loss_prob = torch.tensor(0.0, device=device)
                     
                 # ---------------------------------------------------------
