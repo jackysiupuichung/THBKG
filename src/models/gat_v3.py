@@ -8,6 +8,7 @@ from torch_geometric.nn.inits import glorot, zeros
 from torch_geometric.utils import softmax
 from torch_geometric.nn import Linear
 from typing import Dict, List, Optional, Union
+from .decoder import DualHeadDecoder
 
 class GATv3Conv(MessagePassing):
     """
@@ -222,8 +223,6 @@ class GATv3HeteroConv(nn.Module):
         return out_dict
 
 
-from torch_geometric.nn import Linear
-
 class GATv3(nn.Module):
     """
     GATv3 Model.
@@ -253,6 +252,7 @@ class GATv3(nn.Module):
             self.convs.append(conv)
             
         self.lin = Linear(-1, out_dim)
+        self.decoder = DualHeadDecoder(out_dim)
 
     def forward(
         self, 
@@ -286,9 +286,13 @@ class GATv3(nn.Module):
         if edge_label_index is not None:
             # Dot product on specific edges
             row, col = edge_label_index
-            return (z_src[row] * z_dst[col]).sum(dim=-1)
+            # Use separate embeddings for source and destination
+            emb_src = z_src[row]
+            emb_dst = z_dst[col]
+            return self.decoder(emb_src, emb_dst)
         else:
             # Full pairwise matrix product
-            return torch.matmul(z_src, z_dst.t()).view(-1)
+            # Not supported by DualHeadDecoder efficiently yet for all pairs
+            raise NotImplementedError("Full matrix decoding not yet implemented for DualHeadDecoder")
 
 

@@ -12,6 +12,8 @@ from .gat_v3 import GATv3
 
 
 
+
+
 def get_metadata(data: HeteroData) -> Tuple[List[str], List[Tuple[str, str, str]]]:
     """
     Extract metadata from HeteroData.

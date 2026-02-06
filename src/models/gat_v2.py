@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch_geometric.nn import GATv2Conv, HeteroConv, Linear
+from .decoder import DualHeadDecoder
 
 class GATv2(nn.Module):
     """
@@ -19,11 +20,7 @@ class GATv2(nn.Module):
             self.convs.append(conv)
             
         # Dual heads for Multi-Task Probabilistic Learning
-        # Head A: Existence (Binary Discovery)
-        self.lin_exist = Linear(-1, 1)
-        
-        # Head B: Probability (Calibrated Strength)
-        self.lin_prob = Linear(-1, 1)
+        self.decoder = DualHeadDecoder(hidden_dim)
 
     def forward(
         self, 
@@ -59,28 +56,7 @@ class GATv2(nn.Module):
             emb_src = z_src[row]
             emb_dst = z_dst[col]
             
-            # Head A: Existence (Binary)
-            # Project to single scalar then dot product? 
-            # Or concat and project?
-            # Standard GAT link prediction typically assumes dot product of embeddings.
-            # But here we want separate heads.
-            # Option 1: Separate linear projections for the embeddings, then dot product.
-            # Option 2: Hadamard product -> Linear.
-            # To be consistent with "Linear(-1, 1)" definitions above, we apply linear transform to the interaction?
-            # Actually, standard GAE does dot product.
-            # If we want specific heads, we can project embeddings first or project the hadamard product.
-            # Let's use Hadamard product -> Linear as it's more expressive for separate heads sharing the same backbone.
-            
-            # Hadamard product (element-wise multiplication) representing the edge interaction
-            edge_feat = emb_src * emb_dst
-            
-            logits_exist = self.lin_exist(edge_feat).squeeze(-1)
-            logits_prob = self.lin_prob(edge_feat).squeeze(-1)
-            
-            return {
-                'logits_exist': logits_exist,
-                'logits_prob': logits_prob
-            }
+            return self.decoder(emb_src, emb_dst)
         else:
             # Evaluation/Inference (returning embeddings or full matrix not easily supported with dual heads yet)
             # For now, we assume this usage is always paired with edge_label_index in our training loop.

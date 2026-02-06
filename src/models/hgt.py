@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from .hgt_conv_rte import HGTConvRTE as HGTConv
 from torch_geometric.nn import Linear
 from typing import Dict, List, Tuple, Optional
+from .decoder import DualHeadDecoder
 
 
 class HGT(nn.Module):
@@ -163,6 +164,8 @@ class HGTLinkPredictor(nn.Module):
             metadata=metadata,
             dropout=dropout,
         )
+        
+        self.decoder = DualHeadDecoder(out_dim)
     
     def encode(
         self,
@@ -188,17 +191,16 @@ class HGTLinkPredictor(nn.Module):
         z_dst: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Decode link scores using dot product.
+        Decode link scores using DualHeadDecoder.
         
         Args:
             z_src: Source node embeddings [num_edges, hidden_dim]
             z_dst: Destination node embeddings [num_edges, hidden_dim]
             
         Returns:
-            Link scores [num_edges]
+            Dict containing 'logits_exist' and 'logits_prob'
         """
-        # Dot product decoder
-        return (z_src * z_dst).sum(dim=-1)
+        return self.decoder(z_src, z_dst)
     
     def forward(
         self,
@@ -208,7 +210,7 @@ class HGTLinkPredictor(nn.Module):
         src_type: str,
         dst_type: str,
         edge_time_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
-    ) -> torch.Tensor:
+    ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for link prediction.
         
@@ -220,7 +222,7 @@ class HGTLinkPredictor(nn.Module):
             dst_type: Destination node type
             
         Returns:
-            Link prediction scores [num_edges]
+            Dict with 'logits_exist' and 'logits_prob'
         """
         # Encode all nodes
         z_dict = self.encode(x_dict, edge_index_dict, edge_time_dict)
