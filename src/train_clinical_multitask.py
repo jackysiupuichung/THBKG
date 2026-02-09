@@ -415,7 +415,7 @@ def main(cfg):
     print(f"Device: {device}")
     
     # Create output directory
-    output_dir = Path(cfg.train.output_dir)
+    output_dir = Path(cfg.finetune.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Save configuration
@@ -433,9 +433,18 @@ def main(cfg):
     node_mappings = mappings['node_mapping']
     
     # Get years from config for logging and splitting
-    train_year = cfg.data.temporal_split.train[1] if hasattr(cfg.data, 'temporal_split') else "2015"
-    val_year = cfg.data.temporal_split.val[1] if hasattr(cfg.data, 'temporal_split') else "2017"
-    test_year = cfg.data.temporal_split.test[1] if hasattr(cfg.data, 'temporal_split') else "2024"
+    # Get years from config for logging and splitting
+    # Try finetune split first, then global
+    if hasattr(cfg.data, 'temporal_split') and hasattr(cfg.data.temporal_split, 'finetune'):
+         split_cfg = cfg.data.temporal_split.finetune
+    elif hasattr(cfg.data, 'temporal_split'):
+         split_cfg = cfg.data.temporal_split
+    else:
+         split_cfg = None
+
+    train_year = split_cfg.train[1] if split_cfg else "2015"
+    val_year = split_cfg.val[1] if split_cfg else "2017"
+    test_year = split_cfg.test[1] if split_cfg else "2024"
     
     # Extract labels from graph dynamically
     print(f"\n📊 Extracting labels from graph:")
@@ -460,7 +469,7 @@ def main(cfg):
     print(f"   Test:  {len(test_labels):,} pairs")
     
     # Prepare training data with negatives
-    print(f"\n🔄 Preparing training data (negative ratio: 1:{cfg.train.negative_ratio})")
+    print(f"\n🔄 Preparing training data (negative ratio: 1:{cfg.finetune.negative_ratio})")
     num_disease_nodes = graph['disease'].num_nodes
     num_target_nodes = graph['target'].num_nodes
     
@@ -468,7 +477,7 @@ def main(cfg):
         train_labels, 
         num_disease_nodes=num_disease_nodes,
         num_target_nodes=num_target_nodes,
-        negative_ratio=cfg.train.negative_ratio
+        negative_ratio=cfg.finetune.negative_ratio
     )
     
     # Compute task weights
@@ -479,41 +488,47 @@ def main(cfg):
     
     # Build encoder
     encoder = None
-    if cfg.model.get('use_encoder', False):
-        print(f"\n🏗️  Building encoder: {cfg.model.encoder.name}")
+    # Check if use_encoder is implied or explicit (default True for this script)
+    use_encoder = cfg.model.get('use_encoder', True) 
+    
+    if use_encoder:
+        # Use shared model config for encoder architecture
+        print(f"\n🏗️  Building encoder: {cfg.model.name}")
         encoder = build_model(
-            model_name=cfg.model.encoder.name,
+            model_name=cfg.model.name,
             data=graph,
-            hidden_dim=cfg.model.encoder.hidden_dim,
-            num_heads=cfg.model.encoder.num_heads,
-            num_layers=cfg.model.encoder.num_layers,
-            dropout=cfg.model.encoder.dropout
+            hidden_dim=cfg.model.hidden_dim,
+            num_heads=cfg.model.num_heads,
+            num_layers=cfg.model.num_layers,
+            dropout=cfg.model.dropout
         ).to(device)
         
-        # Load pretrained weights if specified
-        if cfg.model.encoder.get('pretrained_checkpoint'):
-            print(f"   Loading pretrained weights: {cfg.model.encoder.pretrained_checkpoint}")
-            checkpoint = torch.load(cfg.model.encoder.pretrained_checkpoint, map_location=device)
-            # Use strict=False to allow for decoder mismatches (we only need the encoder convs)
-            missing_keys, unexpected_keys = encoder.load_state_dict(checkpoint, strict=False)
-            
-            print(f"   Pretrained weights loaded (strict=False).")
-            if missing_keys:
-                print(f"   Missing keys (expected): {len(missing_keys)}")
-                # Verify that convs are NOT missing
-                convs_missing = [k for k in missing_keys if 'convs' in k]
-                if convs_missing:
-                    print(f"   ⚠️ WARNING: Some CONV layers are missing! {convs_missing[:5]}...")
-                else:
-                    print(f"   ✅ All encoder (convs) layers loaded.")
-            
-            if unexpected_keys:
-                 print(f"   Unexpected keys (ignored): {len(unexpected_keys)}")
-    
+        # Load pretrained weights if specified in finetune.model
+        pretrained_checkpoint = cfg.finetune.get('model', {}).get('pretrained_checkpoint')
+        if pretrained_checkpoint:
+             print(f"   Loading pretrained weights: {pretrained_checkpoint}")
+             checkpoint = torch.load(pretrained_checkpoint, map_location=device)
+             # Use strict=False to allow for decoder mismatches (we only need the encoder convs)
+             missing_keys, unexpected_keys = encoder.load_state_dict(checkpoint, strict=False)
+             
+             print(f"   Pretrained weights loaded (strict=False).")
+             if missing_keys:
+                 print(f"   Missing keys (expected): {len(missing_keys)}")
+                 # Verify that convs are NOT missing
+                 convs_missing = [k for k in missing_keys if 'convs' in k]
+                 if convs_missing:
+                     print(f"   ⚠️ WARNING: Some CONV layers are missing! {convs_missing[:5]}...")
+                 else:
+                     print(f"   ✅ All encoder (convs) layers loaded.")
+             
+             if unexpected_keys:
+                  print(f"   Unexpected keys (ignored): {len(unexpected_keys)}")
+     
     # Extract embeddings
     print(f"\n🔧 Extracting embeddings...")
     graph = graph.to(device)
-    embeddings = extract_embeddings(graph, encoder, device, freeze_encoder=cfg.model.get('freeze_encoder', True))
+    freeze_encoder = cfg.finetune.get('model', {}).get('freeze_encoder', True)
+    embeddings = extract_embeddings(graph, encoder, device, freeze_encoder=freeze_encoder)
     
     # Get embedding dimensions
     disease_dim = embeddings['disease'].size(1)
@@ -526,10 +541,16 @@ def main(cfg):
     
     # Build MLP decoder
     print(f"\n🏗️  Building MLP decoder...")
+    
+    # Get decoder config from finetune.model.decoder
+    decoder_cfg = cfg.finetune.get('model', {}).get('decoder', {})
+    hidden_dim = decoder_cfg.get('hidden_dim', 32)
+    dropout = decoder_cfg.get('dropout', 0.1)
+
     model = MultiTaskClinicalMLP(
         input_dim=input_dim,
-        hidden_dim=cfg.model.decoder.hidden_dim,
-        dropout=cfg.model.decoder.dropout
+        hidden_dim=hidden_dim,
+        dropout=dropout
     ).to(device)
     
     total_params = sum(p.numel() for p in model.parameters())
@@ -537,9 +558,11 @@ def main(cfg):
     
     # Loss and optimizer
     # Determine loss type
-    if cfg.train.get('use_huber', False):
+    # Loss and optimizer
+    # Determine loss type
+    if cfg.finetune.get('use_huber', False):
         loss_type = 'huber'
-    elif cfg.train.get('use_bce_loss', False): # Optional explicit flag for BCE
+    elif cfg.finetune.get('use_bce_loss', False): # Optional explicit flag for BCE
         loss_type = 'bce'
     else:
         loss_type = 'mse' # Default
@@ -550,20 +573,21 @@ def main(cfg):
         weights=task_weights, 
         loss_type=loss_type
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.finetune.lr, weight_decay=cfg.finetune.weight_decay)
     
     # Training loop
     print(f"\n🔄 Starting Training...")
-    print(f"   Epochs: {cfg.train.num_epochs}")
-    print(f"   Learning rate: {cfg.train.lr}")
+    print(f"   Epochs: {cfg.finetune.num_epochs}")
+    print(f"   Learning rate: {cfg.finetune.lr}")
     
     best_val_metric = float('inf')
     
     # Determine reporting metric (MSE vs RMSE)
-    report_mse = cfg.train.get('force_mse_eval', True) # Default to True per user request
-    metric_key = 'mse' if report_mse else 'rmse'
+    # Default to MSE as requested
+    report_mse = True 
+    metric_key = 'mse'
     
-    for epoch in range(cfg.train.num_epochs):
+    for epoch in range(cfg.finetune.num_epochs):
         # Train
         train_loss, train_task_losses = train_epoch(
             model, train_data, embeddings, node_mappings, loss_fn, optimizer, device
@@ -575,7 +599,7 @@ def main(cfg):
         # Average Metric across tasks
         avg_val_metric = np.mean([val_metrics[f'{task}_{metric_key}'] for task in ['pos', 'unmet', 'adv', 'op']])
         
-        print(f"Epoch {epoch+1:03d}/{cfg.train.num_epochs} | "
+        print(f"Epoch {epoch+1:03d}/{cfg.finetune.num_epochs} | "
               f"Train Loss ({loss_type}): {train_loss:.4f} | Val {metric_key.upper()}: {avg_val_metric:.4f}")
         
         # Save best model
@@ -609,7 +633,7 @@ def main(cfg):
     print(metrics_df.to_string(index=False))
     
     # Save predictions ONLY if configured
-    if cfg.train.get('save_predictions', False):
+    if cfg.finetune.get('save_predictions', False):
         for task in ['pos', 'unmet', 'adv', 'op']:
             vals = test_predictions[task]
             if isinstance(vals, torch.Tensor):

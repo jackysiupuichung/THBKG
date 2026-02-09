@@ -176,15 +176,18 @@ def train_one_epoch(
     total_loss = 0
     total_examples = 0
     loss_breakdown = {'exist': 0, 'prob': 0}
+    # Calculate total batches for single progress bar
+    total_batches = sum(len(loader) for loader in loaders.values())
+    # Calculate total batches for single progress bar
+    total_batches = sum(len(loader) for loader in loaders.values())
+    pbar = tqdm(total=total_batches, desc="Training Epoch", leave=False)
     num_batches = 0
     
     # Train on each edge type
     for etype, loader in loaders.items():
         src_type, rel, dst_type = etype
         
-        pbar = tqdm(loader, desc=f"Training {etype[1][:30]}", leave=False)
-        
-        for batch in pbar:
+        for batch in loader:
             batch = batch.to(device)
             optimizer.zero_grad()
             
@@ -271,7 +274,10 @@ def train_one_epoch(
                 loss_breakdown['exist'] += loss.item() * batch_size
             
             # Update progress bar
+            pbar.update(1)
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+            
+    pbar.close()
     
     # Average loss breakdown
     if total_examples > 0:
@@ -303,10 +309,11 @@ def main(cfg):
     )
     
     # Prepare edge splits using temporal snapshots
-    train_end = cfg.pretrain.temporal_split.train[1]
-    val_end = cfg.pretrain.temporal_split.val[1]
-    test_end = cfg.pretrain.temporal_split.test[1]
-    split_config = cfg.pretrain.temporal_split
+    # access split from data.temporal_split.pretrain
+    train_end = cfg.data.temporal_split.pretrain.train[1]
+    val_end = cfg.data.temporal_split.pretrain.val[1]
+    test_end = cfg.data.temporal_split.pretrain.test[1]
+    split_config = cfg.data.temporal_split.pretrain
     
     (train_context, val_context, test_context,
      train_edges, val_edges, test_edges,
@@ -321,15 +328,17 @@ def main(cfg):
     
     # Create LinkNeighborLoaders for mini-batch training
     print("\n🚚 Creating Data Loaders...")
-    batch_size = cfg.pretrain.get('batch_size', 512)
-    num_neighbors = cfg.pretrain.get('num_neighbors', [20, 10])
+    batch_size = cfg.pretrain.batch_size
+    num_neighbors = cfg.pretrain.num_neighbors
     
     if isinstance(num_neighbors, int):
         num_neighbors = [num_neighbors]
     
     print(f"   Batch size: {batch_size}")
     print(f"   Num neighbors: {num_neighbors}")
-    print(f"   Negative sampling ratio: {cfg.pretrain.get('neg_sampling_ratio', 1.0)}")
+    print(f"   Batch size: {batch_size}")
+    print(f"   Num neighbors: {num_neighbors}")
+    print(f"   Negative sampling ratio: {cfg.pretrain.neg_sampling_ratio}")
 
     # Robustness Fix: Explicitly map num_neighbors for EVERY edge type.
     # Passing a list directly causes PyG to fail if any edge type in the graph is empty.
@@ -361,7 +370,7 @@ def main(cfg):
 
         # CRITICAL: Only use negative sampling for binary edges (BCE)
         if loss_type == 'bce':
-            neg_sampling_config = dict(mode='binary', amount=cfg.pretrain.get('neg_sampling_ratio', 1.0))
+            neg_sampling_config = dict(mode='binary', amount=cfg.pretrain.neg_sampling_ratio)
         else:  # huber
             neg_sampling_config = None
         
@@ -396,23 +405,32 @@ def main(cfg):
     
     print(f"   Batch size: {batch_size}")
     print(f"   Num neighbors: {num_neighbors}")
-    print(f"   Negative sampling ratio: {cfg.pretrain.get('neg_sampling_ratio', 1.0)}")
+    print(f"   Batch size: {batch_size}")
+    print(f"   Num neighbors: {num_neighbors}")
+    print(f"   Negative sampling ratio: {cfg.pretrain.neg_sampling_ratio}")
     
     # Build model
-    print(f"\n🏗️  Building {cfg.model.name} model...")
+    # Use cfg.model.encoder as default if available (consistent with unified config)
+    model_name = cfg.model.get('name') or cfg.model.encoder.name
+    hidden_dim = cfg.model.get('hidden_dim') or cfg.model.encoder.hidden_dim
+    num_heads = cfg.model.get('num_heads') or cfg.model.encoder.num_heads
+    num_layers = cfg.model.get('num_layers') or cfg.model.encoder.num_layers
+    dropout = cfg.model.get('dropout') or cfg.model.encoder.dropout
+
+    print(f"\n🏗️  Building {model_name} model...")
     model = build_model(
-        model_name=cfg.model.name,
+        model_name=model_name,
         data=train_context,
-        hidden_dim=cfg.model.hidden_dim,
-        num_heads=cfg.model.num_heads,
-        num_layers=cfg.model.num_layers,
-        dropout=cfg.model.dropout
+        hidden_dim=hidden_dim,
+        num_heads=num_heads,
+        num_layers=num_layers,
+        dropout=dropout
     ).to(device)
     
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=cfg.pretrain.lr,
-        weight_decay=cfg.pretrain.get('weight_decay', 0.0)
+        weight_decay=cfg.pretrain.weight_decay
     )
     
     # Create output directory
@@ -423,11 +441,11 @@ def main(cfg):
     print(f"\n🔄 Starting Training...")
     print(f"   Epochs: {cfg.pretrain.num_epochs}")
     print(f"   Learning rate: {cfg.pretrain.lr}")
-    print(f"   Early stopping patience: {cfg.pretrain.get('early_stopping_patience', 10)}")
+    print(f"   Early stopping patience: {cfg.pretrain.early_stopping.patience}")
     
     best_val_metric = float('inf')  # Lower is better for loss
     patience_counter = 0
-    patience = cfg.pretrain.get('early_stopping_patience', 10)
+    patience = cfg.pretrain.early_stopping.patience
     
     for epoch in range(cfg.pretrain.num_epochs):
         # Train
@@ -443,13 +461,16 @@ def main(cfg):
         val_breakdown = {'exist': 0, 'prob': 0}
         val_batches = 0
         
+        total_val_batches = sum(len(loader) for loader in val_loaders.values())
+        val_pbar = tqdm(total=total_val_batches, desc="Validating", leave=False)
+        
         with torch.no_grad():
             for etype, loader in val_loaders.items():
                 src_type, rel, dst_type = etype
                 
-                pbar = tqdm(loader, desc=f"Validating {etype[1][:30]}", leave=False)
+                # val_pbar.set_description(f"Validating {etype[1][:20]}...")
                 
-                for batch in pbar:
+                for batch in loader:
                     batch = batch.to(device)
                     
                     out = model(
@@ -498,7 +519,10 @@ def main(cfg):
                     val_batches += 1
                     
                     # Update progress bar
-                    pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+                    val_pbar.update(1)
+                    val_pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+        
+        val_pbar.close()
         
         # Average validation metrics
         if val_batches > 0:
@@ -553,7 +577,7 @@ def main(cfg):
     test_metrics = evaluate_link_prediction(
         model, test_context, test_edges,
         edge_loss_config, device,
-        num_neg_per_pos=cfg.pretrain.get('num_neg_samples', 1)
+        num_neg_per_pos=1 # Default 1:1 evaluation
     )
     
     print_metrics(test_metrics, prefix="Test")

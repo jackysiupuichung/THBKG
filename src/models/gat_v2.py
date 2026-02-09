@@ -20,7 +20,8 @@ class GATv2(nn.Module):
             self.convs.append(conv)
             
         # Dual heads for Multi-Task Probabilistic Learning
-        self.decoder = DualHeadDecoder(hidden_dim)
+        # GATv2Conv concatenates heads by default, so output dim is hidden_dim * num_heads
+        self.decoder = DualHeadDecoder(hidden_dim * num_heads)
 
     def forward(
         self, 
