@@ -250,14 +250,12 @@ def train_one_epoch(
                     actual_edge_time_dict[et] = batch[et].edge_time
 
             out = model(
-                batch.x_dict,
-                batch.edge_index_dict,
-                actual_edge_time_dict,
-                actual_node_time_dict,
-                batch.edge_attr_dict,
-                batch[etype].edge_label_index,
-                src_type,
-                dst_type
+                x_dict=batch.x_dict,
+                edge_index_dict=batch.edge_index_dict,
+                edge_label_index=batch[etype].edge_label_index,
+                src_type=src_type,
+                dst_type=dst_type,
+                edge_time_dict=actual_edge_time_dict
             )
             
             targets = batch[etype].edge_label.float()
