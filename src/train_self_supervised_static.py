@@ -309,11 +309,11 @@ def main(cfg):
     )
     
     # Prepare edge splits using temporal snapshots
-    # access split from data.temporal_split.pretrain
-    train_end = cfg.data.temporal_split.pretrain.train[1]
-    val_end = cfg.data.temporal_split.pretrain.val[1]
-    test_end = cfg.data.temporal_split.pretrain.test[1]
-    split_config = cfg.data.temporal_split.pretrain
+    # access split from data.temporal_split
+    train_end = cfg.data.temporal_split.train[1]
+    val_end = cfg.data.temporal_split.val[1]
+    test_end = cfg.data.temporal_split.test[1]
+    split_config = cfg.data.temporal_split
     
     (train_context, val_context, test_context,
      train_edges, val_edges, test_edges,

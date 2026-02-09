@@ -130,7 +130,12 @@ def get_temporal_masks(
     # Helper to check if times fall within range
     def is_in_range(times, rng):
         start, end = rng
-        return (times >= start) & (times <= end)
+        mask = torch.ones(times.size(0), dtype=torch.bool, device=times.device)
+        if start is not None:
+            mask &= (times >= int(start))
+        if end is not None:
+            mask &= (times <= int(end))
+        return mask
 
     for edge_type in data.edge_types:
         if 'edge_time' not in data[edge_type]:
