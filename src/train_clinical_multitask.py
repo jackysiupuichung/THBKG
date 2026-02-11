@@ -501,22 +501,16 @@ def main(cfg):
     
     if use_encoder:
         # ========================================================================
-        # STEP 1: Remove clinical trial edges from context
-        # ========================================================================
-        # Clinical trial edges are supervision targets, not context edges.
-        # Removing them prevents the encoder from "cheating" by using them.
-        print(f"\n🏗️  Building encoder: {cfg.model.name}")
-        print(f"   Step 1: Removing clinical trial edges from context...")
-        graph_context = remove_clinical_trial_edges(graph)
-        
-        # ========================================================================
-        # STEP 2: Create temporal context for encoder (ONLY train split)
+        # Create temporal context for encoder (ONLY train split)
         # ========================================================================
         # Prevent temporal leakage: encoder should only see edges up to train year
-        print(f"   Step 2: Creating train context (≤ {train_year}) to prevent temporal leakage...")
+        # NOTE: We keep clinical trial edges in the context to match pretrain setup
+        #       They are excluded from SUPERVISION, not from MESSAGE PASSING
+        print(f"\n🏗️  Building encoder: {cfg.model.name}")
+        print(f"   Creating train context (≤ {train_year}) to prevent temporal leakage...")
         
         # Filter to train year
-        train_temporal = filter_graph_by_time(graph_context, train_year)
+        train_temporal = filter_graph_by_time(graph, train_year)
         # Collapse to static (deduplicate, max aggregation)
         train_context = to_time_agnostic(train_temporal)
         
