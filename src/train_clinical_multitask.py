@@ -34,6 +34,16 @@ from src.data.temporal_loader import (
 from src.models.multitask_mlp import MultiTaskClinicalMLP, WeightedMultiTaskLoss, compute_task_weights
 from src.models.utils import build_model
 
+# Task definitions
+CLINICAL_TASKS = ['pos', 'unmet', 'adv', 'op']
+TASK_LABELS = ['y_pos', 'y_unmet', 'y_adv', 'y_op']
+TASK_EDGE_MAP = {
+    'pos': 'clinical_trial_positive::chembl',
+    'unmet': 'clinical_trial_unmet_efficacy::chembl',
+    'adv': 'clinical_trial_adverse_effects::chembl',
+    'op': 'clinical_trial_Unknown/Operational::chembl'
+}
+
 
 def extract_labels_from_graph(graph, split_year, node_mappings):
     """
@@ -182,56 +192,6 @@ def prepare_training_data(positives_df, num_disease_nodes, num_target_nodes, neg
 
 
 
-class WeightedMultiTaskLoss(nn.Module):
-    """
-    Weighted loss for multi-task learning.
-    
-    Supports:
-    - 'mse': Mean Squared Error (default)
-    - 'huber': Huber Loss
-    - 'bce': Binary Cross Entropy
-    """
-    def __init__(self, weights, loss_type='mse', huber_delta=1.0):
-        super().__init__()
-        self.weights = weights
-        self.loss_type = loss_type
-        self.huber_delta = huber_delta
-        
-    def forward(self, predictions, targets):
-        """
-        Args:
-            predictions: Dict of task -> logits
-            targets: Dict of task -> scalar targets
-        """
-        total_loss = 0
-        task_losses = {}
-        
-        for task in predictions:
-            pred = predictions[task]
-            target = targets[task]
-            
-            # Apply task weight
-            weight = self.weights.get(task, 1.0)
-            
-            # Compute loss based on type
-            if self.loss_type == 'bce':
-                # BCEWithLogits takes logits
-                loss = F.binary_cross_entropy_with_logits(pred, target)
-            else:
-                # MSE and Huber typically operate on probabilities (0-1) for this task
-                # So we apply sigmoid first
-                prob = torch.sigmoid(pred)
-                
-                if self.loss_type == 'huber':
-                    loss = F.huber_loss(prob, target, delta=self.huber_delta)
-                else: # 'mse'
-                    loss = F.mse_loss(prob, target)
-            
-            weighted_loss = loss * weight
-            total_loss += weighted_loss
-            task_losses[task] = loss.item() # Log raw unweighted loss
-            
-        return total_loss, task_losses
 
 
 def extract_embeddings(graph, encoder, device, freeze_encoder=True):
@@ -636,11 +596,13 @@ def main(cfg):
         # Save best model
         if avg_val_metric < best_val_metric:
             best_val_metric = avg_val_metric
+            print(f"   💾 New best model saved! (Val {metric_key.upper()}: {avg_val_metric:.4f})")
             torch.save(model.state_dict(), output_dir / "best_decoder.pt")
     
     # Final evaluation on test set
     print(f"\n📊 Final Evaluation on Test Set:")
     model.load_state_dict(torch.load(output_dir / "best_decoder.pt"))
+    # if streaming setting, embedding here should be updated
     test_metrics, test_predictions = evaluate(model, test_labels, embeddings, node_mappings, device)
     
     # Format per-task metrics as a table
