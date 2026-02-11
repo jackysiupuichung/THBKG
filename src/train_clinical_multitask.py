@@ -25,7 +25,12 @@ from scipy import stats
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from src.data.temporal_loader import load_event_graph
+from src.data.temporal_loader import (
+    load_event_graph, 
+    remove_clinical_trial_edges, 
+    filter_graph_by_time, 
+    to_time_agnostic
+)
 from src.models.multitask_mlp import MultiTaskClinicalMLP, WeightedMultiTaskLoss, compute_task_weights
 from src.models.utils import build_model
 
@@ -424,15 +429,16 @@ def main(cfg):
     print(f"✅ Saved config to {output_dir / 'config.yaml'}")
     
     # Load graph
+    # IMPORTANT: Must match pretraining directionality for checkpoint compatibility
+    # Pretrained model used to_undirected=True, resulting in ~124 relations (66*2 - 8 clinical trial edges)
     print(f"\n📂 Loading graph: {cfg.data.graph_file}")
-    graph = load_event_graph(cfg.data.graph_file, to_undirected=False)
+    graph = load_event_graph(cfg.data.graph_file, to_undirected=True)
     
     # Load mappings
     print(f"📂 Loading mappings: {cfg.data.mappings_file}")
     mappings = torch.load(cfg.data.mappings_file)
     node_mappings = mappings['node_mapping']
     
-    # Get years from config for logging and splitting
     # Get years from config for logging and splitting
     # Try finetune split first, then global
     if hasattr(cfg.data, 'temporal_split') and hasattr(cfg.data.temporal_split, 'finetune'):
@@ -488,15 +494,39 @@ def main(cfg):
     
     # Build encoder
     encoder = None
+    train_context = None  # Will store train-only graph for encoder
+    
     # Check if use_encoder is implied or explicit (default True for this script)
     use_encoder = cfg.model.get('use_encoder', True) 
     
     if use_encoder:
-        # Use shared model config for encoder architecture
+        # ========================================================================
+        # STEP 1: Remove clinical trial edges from context
+        # ========================================================================
+        # Clinical trial edges are supervision targets, not context edges.
+        # Removing them prevents the encoder from "cheating" by using them.
         print(f"\n🏗️  Building encoder: {cfg.model.name}")
+        print(f"   Step 1: Removing clinical trial edges from context...")
+        graph_context = remove_clinical_trial_edges(graph)
+        
+        # ========================================================================
+        # STEP 2: Create temporal context for encoder (ONLY train split)
+        # ========================================================================
+        # Prevent temporal leakage: encoder should only see edges up to train year
+        print(f"   Step 2: Creating train context (≤ {train_year}) to prevent temporal leakage...")
+        
+        # Filter to train year
+        train_temporal = filter_graph_by_time(graph_context, train_year)
+        # Collapse to static (deduplicate, max aggregation)
+        train_context = to_time_agnostic(train_temporal)
+        
+        # ========================================================================
+        # STEP 3: Build encoder using TRAIN CONTEXT metadata
+        # ========================================================================
+        print(f"   Step 3: Building encoder model...")
         encoder = build_model(
             model_name=cfg.model.name,
-            data=graph,
+            data=train_context,  # CRITICAL: Use train_context, not full graph
             hidden_dim=cfg.model.hidden_dim,
             num_heads=cfg.model.num_heads,
             num_layers=cfg.model.num_layers,
@@ -526,9 +556,16 @@ def main(cfg):
      
     # Extract embeddings
     print(f"\n🔧 Extracting embeddings...")
-    graph = graph.to(device)
-    freeze_encoder = cfg.finetune.get('model', {}).get('freeze_encoder', True)
-    embeddings = extract_embeddings(graph, encoder, device, freeze_encoder=freeze_encoder)
+    
+    if use_encoder and train_context is not None:
+        # Use train context for encoder (temporal isolation)
+        train_context = train_context.to(device)
+        freeze_encoder = cfg.finetune.get('model', {}).get('freeze_encoder', True)
+        embeddings = extract_embeddings(train_context, encoder, device, freeze_encoder=freeze_encoder)
+    else:
+        # Direct features (no encoder)
+        graph = graph.to(device)
+        embeddings = extract_embeddings(graph, encoder, device, freeze_encoder=False)
     
     # Get embedding dimensions
     disease_dim = embeddings['disease'].size(1)

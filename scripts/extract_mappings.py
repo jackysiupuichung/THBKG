@@ -8,7 +8,7 @@ def extract_mappings(graph_path, output_path):
     
     mappings = {'node_mapping': {}}
     
-    for node_type in ['disease', 'target']:
+    for node_type in data.node_types:
         if hasattr(data[node_type], 'node_id'):
             print(f"Extracting {node_type} IDs...")
             node_ids = data[node_type].node_id

@@ -59,6 +59,46 @@ def load_event_graph(
     return data
 
 
+def is_clinical_trial_edge(edge_type: Tuple[str, str, str]) -> bool:
+    """
+    Check if edge type is a clinical trial edge (to exclude from context).
+    
+    Args:
+        edge_type: Tuple of (src_type, relation, dst_type)
+        
+    Returns:
+        True if edge is a clinical trial edge
+    """
+    CLINICAL_TRIAL_KEYWORDS = ['clinical_trial']
+    return any(kw in edge_type[1] for kw in CLINICAL_TRIAL_KEYWORDS)
+
+
+def remove_clinical_trial_edges(data: HeteroData) -> HeteroData:
+    """
+    Remove all clinical trial edges from graph.
+    
+    Clinical trial edges are supervision targets for downstream tasks,
+    so they should not be part of the encoder's context to prevent leakage.
+    
+    Args:
+        data: HeteroData object
+        
+    Returns:
+        New HeteroData object without clinical trial edges
+    """
+    new_data = data.clone()
+    
+    to_remove = [et for et in new_data.edge_types if is_clinical_trial_edge(et)]
+    
+    if to_remove:
+        print(f"   Removing {len(to_remove)} clinical trial edge types from context:")
+        for et in to_remove:
+            print(f"      ❌ {et}")
+            del new_data[et]
+    
+    return new_data
+
+
 def filter_graph_by_time(data: HeteroData, year: int) -> HeteroData:
     """
     Filter graph to include only edges up to a specific year.
