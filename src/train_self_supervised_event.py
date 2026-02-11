@@ -128,13 +128,25 @@ def train_one_epoch(
             batch = batch.to(device)
             optimizer.zero_grad()
             
-            # Standard forward pass (temporal info used in sampling)
+            # Extract edge times for RTE (if available in batch)
+            edge_time_dict = None
+            if hasattr(batch, 'edge_time_dict'):
+                edge_time_dict = batch.edge_time_dict
+            elif 'edge_time' in batch[etype]:
+                # Build edge_time_dict from batch edges
+                edge_time_dict = {}
+                for et in batch.edge_types:
+                    if 'edge_time' in batch[et]:
+                        edge_time_dict[et] = batch[et].edge_time
+            
+            # Forward pass with temporal info for RTE
             out = model(
                 batch.x_dict,
                 batch.edge_index_dict,
                 batch[etype].edge_label_index,
                 src_type,
-                dst_type
+                dst_type,
+                edge_time_dict=edge_time_dict
             )
             
             targets = batch[etype].edge_label.float()
@@ -333,12 +345,24 @@ def main(cfg):
                 for batch in loader:
                     batch = batch.to(device)
                     
+                    # Extract edge times for RTE (if available in batch)
+                    edge_time_dict = None
+                    if hasattr(batch, 'edge_time_dict'):
+                        edge_time_dict = batch.edge_time_dict
+                    elif 'edge_time' in batch[etype]:
+                        # Build edge_time_dict from batch edges
+                        edge_time_dict = {}
+                        for et in batch.edge_types:
+                            if 'edge_time' in batch[et]:
+                                edge_time_dict[et] = batch[et].edge_time
+                    
                     out = model(
                         batch.x_dict,
                         batch.edge_index_dict,
                         batch[etype].edge_label_index,
                         src_type,
-                        dst_type
+                        dst_type,
+                        edge_time_dict=edge_time_dict
                     )
                     
                     targets = batch[etype].edge_label.float()
