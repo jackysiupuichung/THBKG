@@ -312,9 +312,6 @@ def evaluate_ranking_with_scores(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to experiment config (yaml)")
-    parser.add_argument("--parquet_dir", required=True, help="Directory containing OpenTargets association parquet files")
-    parser.add_argument("--validation_diseases", default="/Users/pui.chungsiu/Documents/opentarget_het_graph/data/validation_diseases.csv", 
-                        help="Path to validation diseases CSV for filtering benchmark diseases")
     args = parser.parse_args()
     
     cfg = OmegaConf.load(args.config)
@@ -323,7 +320,6 @@ def main():
     
     print(f"🚀 Novel Target Prioritization Evaluator (OpenTargets Baseline)")
     print(f"   Config: {args.config}")
-    print(f"   Parquet Dir: {args.parquet_dir}")
     
     # 1. Load Data
     print(f"\n📂 Loading graph data...")
@@ -332,8 +328,9 @@ def main():
     node_mappings = mappings['node_mapping']
     
     # Load validation diseases for filtering
-    print(f"📋 Loading validation diseases from {args.validation_diseases}...")
-    val_diseases_df = pd.read_csv(args.validation_diseases)
+    val_diseases_path = cfg.data.validation_diseases_file
+    print(f"📋 Loading validation diseases from {val_diseases_path}...")
+    val_diseases_df = pd.read_csv(val_diseases_path)
     # Filter out diseases not in graph (graph_node_idx == -1)
     val_diseases_df = val_diseases_df[val_diseases_df['graph_node_idx'] != -1]
     validation_disease_indices = set(val_diseases_df['graph_node_idx'].tolist())
@@ -352,7 +349,8 @@ def main():
     test_year = ts.test[1]
     
     # Load OpenTargets associations up to test year
-    association_scores = load_opentargets_associations(args.parquet_dir, node_mappings, max_year=test_year)
+    association_dir = cfg.data.association_dir
+    association_scores = load_opentargets_associations(association_dir, node_mappings, max_year=test_year)
     
     print(f"\n📊 Extracting History (All edges <= {history_year})...")
     history_data, _ = extract_labels_from_graph(graph, history_year, node_mappings)
