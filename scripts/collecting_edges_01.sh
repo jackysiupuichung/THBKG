@@ -52,4 +52,5 @@ python -m src.pipeline.build_event_list \
   --input-dir "$RAW_EDGES_DIR" \
   --config "$CONFIG" \
   --output "$EVENTS_FILE" \
-  --aggregation-method "max"
+  --aggregation-method "max" \
+  --datatype-mapping "config/datatype_mapping.yaml"

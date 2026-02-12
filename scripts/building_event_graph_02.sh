@@ -11,8 +11,8 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Configuration ===
-# OUTPUT_BASE="/data/scratch/bty414/opentarget_evidences/23.06"
-OUTPUT_BASE="output"
+OUTPUT_BASE="/data/scratch/bty414/opentarget_evidences/23.06"
+# OUTPUT_BASE="output"
 KG_OUTPUT_DIR="${OUTPUT_BASE}/evidences"
 STATIC_EDGES_DIR="${KG_OUTPUT_DIR}/static_edges"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
@@ -25,7 +25,8 @@ echo "🚀 Building Event Graph Structure..."
 python -m src.pipeline.build_event_graph \
   --input "$EVENTS_FILE" \
   --output "$GRAPH_STRUCT_FILE" \
-  --static-edges "$STATIC_EDGES_DIR"
+  --static-edges "$STATIC_EDGES_DIR" \
+  --edge-type-mode relation_only
 
 echo ""
 echo "✅ Event Graph Built!"
