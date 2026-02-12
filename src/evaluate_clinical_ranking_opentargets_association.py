@@ -83,7 +83,8 @@ def extract_labels_from_graph(graph, split_year, node_mappings):
 
 def load_opentargets_associations(parquet_dir, node_mappings, max_year=None):
     """
-    Load all parquet files and create disease-target score mapping.
+    Load all parquet files iteratively and create disease-target score mapping.
+    Optimized for memory usage by processing one file at a time.
     
     Args:
         parquet_dir: Directory containing OpenTargets association parquet files
@@ -103,58 +104,75 @@ def load_opentargets_associations(parquet_dir, node_mappings, max_year=None):
     if len(parquet_files) == 0:
         raise ValueError(f"No parquet files found in {parquet_dir}")
     
-    # Load all parquet files
-    dfs = []
-    for pf in tqdm(parquet_files, desc="Loading parquet files"):
-        df = pd.read_parquet(pf)
-        dfs.append(df)
-    
-    # Concatenate all dataframes
-    full_df = pd.concat(dfs, ignore_index=True)
-    print(f"   Total associations loaded: {len(full_df):,}")
-    
-    # Filter by year if specified
-    if max_year is not None:
-        full_df = full_df[full_df['year'] <= max_year]
-        print(f"   After year filtering (<= {max_year}): {len(full_df):,}")
-    
-    # Handle NaN scores as 0
-    full_df['score'] = full_df['score'].fillna(0.0)
-    
-    # Map IDs to graph indices
+    # Map IDs to graph indices using sets for faster lookup
     disease_mapping = node_mappings['disease']
     target_mapping = node_mappings['target']
     
+    valid_diseases = set(disease_mapping.keys())
+    valid_targets = set(target_mapping.keys())
+    
     association_scores = {}
-    unmapped_diseases = set()
-    unmapped_targets = set()
+    total_processed = 0
+    total_mapped = 0
     
-    for _, row in tqdm(full_df.iterrows(), total=len(full_df), desc="Mapping to graph indices"):
-        disease_id = row['diseaseId']
-        target_id = row['targetId']
-        score = float(row['score'])
-        
-        # Map to graph indices
-        if disease_id not in disease_mapping:
-            unmapped_diseases.add(disease_id)
-            continue
-        if target_id not in target_mapping:
-            unmapped_targets.add(target_id)
-            continue
+    # Process files iteratively
+    for pf in tqdm(parquet_files, desc="Processing parquet files"):
+        try:
+            # Read only essential columns
+            columns = ['diseaseId', 'targetId', 'score']
+            if max_year is not None:
+                columns.append('year')
+                
+            df = pd.read_parquet(pf, columns=columns)
             
-        d_idx = disease_mapping[disease_id]
-        t_idx = target_mapping[target_id]
-        
-        # Keep max score if duplicate
-        key = (d_idx, t_idx)
-        if key in association_scores:
-            association_scores[key] = max(association_scores[key], score)
-        else:
-            association_scores[key] = score
-    
+            if df.empty: continue
+            
+            # Filter by year if needed
+            if max_year is not None:
+                df = df[df['year'] <= max_year]
+                
+            if df.empty: continue
+            
+            # Pre-filter rows where both IDs are in our mapping
+            # This drastically reduces rows before the slow iterrows loop
+            mask = df['diseaseId'].isin(valid_diseases) & df['targetId'].isin(valid_targets)
+            df_filtered = df[mask].copy()
+            
+            if df_filtered.empty: continue
+            
+            # Handle NaN scores
+            df_filtered['score'] = df_filtered['score'].fillna(0.0)
+            
+            total_processed += len(df)
+            total_mapped += len(df_filtered)
+            
+            # Update dictionary
+            # Using vectorization via mapping then manual update is faster but dict update is easier
+            # Let's do a semi-vectorized approach for speed
+            
+            # Map IDs to indices
+            # We can use map() but let's be careful with missing keys (already filtered)
+            d_indices = df_filtered['diseaseId'].map(disease_mapping)
+            t_indices = df_filtered['targetId'].map(target_mapping)
+            scores = df_filtered['score'].values
+            
+            # Update dict
+            for d_idx, t_idx, score in zip(d_indices, t_indices, scores):
+                key = (d_idx, t_idx)
+                if key in association_scores:
+                    association_scores[key] = max(association_scores[key], float(score))
+                else:
+                    association_scores[key] = float(score)
+            
+            # Explicit garbage collection hint
+            del df, df_filtered
+            
+        except Exception as e:
+            print(f"⚠️ Error processing {pf}: {e}")
+            continue
+
+    print(f"   Total associations processed: {total_processed:,}")
     print(f"   Mapped associations: {len(association_scores):,}")
-    print(f"   Unmapped diseases: {len(unmapped_diseases):,}")
-    print(f"   Unmapped targets: {len(unmapped_targets):,}")
     
     return association_scores
 
