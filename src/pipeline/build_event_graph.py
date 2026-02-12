@@ -153,17 +153,21 @@ def extract_nodes_from_edges(edges: pd.DataFrame) -> Tuple[Dict[str, List[str]],
 
 
 
-def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
+def build_hetero_graph(edges: pd.DataFrame, edge_type_mode: str = 'relation_datasource') -> Tuple[HeteroData, Dict]:
     """
-    Build heterogeneous graph from edges - RELATION::SOURCE LEVEL ONLY.
+    Build heterogeneous graph from edges.
     
-    Always uses (source_type, "relation::datasource", target_type) format with scores.
+    Supports two edge type modes:
+    - 'relation_datasource': (source_type, "relation::datasource", target_type)
+    - 'relation_only': (source_type, "relation", target_type)
+    
     Supports temporal attributes: edge_time and edge_weight.
     
     Args:
         edges: DataFrame with edges (sourceId, targetId, source_type, target_type, 
                relation, datasourceId, score)
                Optional: edge_time (year/timestamp), edge_weight (for events)
+        edge_type_mode: 'relation_datasource' or 'relation_only'
         
     Returns:
         hetero_data: HeteroData object
@@ -172,7 +176,8 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
             - node_type_mapping: {node_type: type_index}
             - edge_type_mapping: {edge_type_tuple: type_index}
     """
-    print("\n🔨 Building HeteroData (relation::source level)...")
+    mode_label = "relation::datasource" if edge_type_mode == 'relation_datasource' else "relation only"
+    print(f"\n🔨 Building HeteroData ({mode_label} level)...")
     
     # Extract nodes
     print("📊 Extracting nodes from edges...")
@@ -198,22 +203,35 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
         print(f"✅ Added {len(node_list)} {node_type} nodes")
     
     # Build edges
-    print("\n🔗 Building edges (relation::datasource level)...")
+    mode_label = "relation::datasource" if edge_type_mode == 'relation_datasource' else "relation only"
+    print(f"\n🔗 Building edges ({mode_label} level)...")
     
     # Check for temporal attributes
     has_edge_time = 'edge_time' in edges.columns
     has_edge_weight = 'edge_weight' in edges.columns
     has_score = 'score' in edges.columns and not has_edge_weight
     
-    # Group by edge type
-    edge_groups = edges.groupby(['source_type', 'relation', 'target_type', 'datasourceId'])
+    # Group by edge type based on mode
+    if edge_type_mode == 'relation_datasource':
+        # Group by relation AND datasource
+        edge_groups = edges.groupby(['source_type', 'relation', 'target_type', 'datasourceId'])
+        group_keys = ['source_type', 'relation', 'target_type', 'datasourceId']
+    else:
+        # Group by relation ONLY (aggregate across datasources)
+        edge_groups = edges.groupby(['source_type', 'relation', 'target_type'])
+        group_keys = ['source_type', 'relation', 'target_type']
     
     edge_type_mapping = {}
     edge_type_idx = 0
     
-    for (src_type, relation, dst_type, datasource), group in edge_groups:
-        # Create edge type key
-        edge_type_key = (src_type, f"{relation}::{datasource}", dst_type)
+    for group_tuple, group in edge_groups:
+        # Unpack based on mode
+        if edge_type_mode == 'relation_datasource':
+            src_type, relation, dst_type, datasource = group_tuple
+            edge_type_key = (src_type, f"{relation}::{datasource}", dst_type)
+        else:
+            src_type, relation, dst_type = group_tuple
+            edge_type_key = (src_type, relation, dst_type)
         
         # Add to mapping if new
         if edge_type_key not in edge_type_mapping:
@@ -274,7 +292,8 @@ def build_hetero_graph(edges: pd.DataFrame) -> Tuple[HeteroData, Dict]:
 def build_event_graph(
     event_file: str,
     output_file: str,
-    static_edges_dir: str = None
+    static_edges_dir: str = None,
+    edge_type_mode: str = 'relation_datasource'
 ):
     """
     Build HeteroData from event list.
@@ -355,7 +374,7 @@ def build_event_graph(
     
     # Build graph
     # build_hetero_graph now supports edge_time and edge_weight
-    hetero_data, mappings = build_hetero_graph(all_edges)
+    hetero_data, mappings = build_hetero_graph(all_edges, edge_type_mode=edge_type_mode)
     
     # Save
     print(f"\n💾 Saving event graph to {output_file}...")
@@ -408,6 +427,13 @@ def main():
         default=None,
         help="Directory containing static edge parquets"
     )
+    parser.add_argument(
+        "--edge-type-mode",
+        type=str,
+        default="relation_datasource",
+        choices=["relation_datasource", "relation_only"],
+        help="Edge type naming: 'relation_datasource' (e.g., clinical_trial::chembl) or 'relation_only' (e.g., clinical_trial)"
+    )
     
     args = parser.parse_args()
     
@@ -415,7 +441,8 @@ def main():
     build_event_graph(
         event_file=args.input,
         output_file=args.output,
-        static_edges_dir=args.static_edges
+        static_edges_dir=args.static_edges,
+        edge_type_mode=args.edge_type_mode
     )
 
 
