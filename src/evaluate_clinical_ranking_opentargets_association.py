@@ -105,14 +105,14 @@ def load_opentargets_associations(parquet_dir, node_mappings, max_year=None):
     Args:
         parquet_dir: Directory containing OpenTargets association parquet files
         node_mappings: Dict with 'disease' and 'target' ID to index mappings
-        max_year: Optional year filter - only include associations from this specific year
+        max_year: Optional year cutoff - load associations up to this year and take max score
         
     Returns:
         dict: {(disease_idx, target_idx): score}
     """
     print(f"\n📂 Loading OpenTargets associations from {parquet_dir}...")
     if max_year is not None:
-        print(f"   Filtering to associations from year {max_year} (point-in-time snapshot)")
+        print(f"   Filtering to associations <= year {max_year} (cumulative max score)")
     
     parquet_files = glob(str(Path(parquet_dir) / "*.parquet"))
     print(f"   Found {len(parquet_files)} parquet files")
@@ -143,9 +143,9 @@ def load_opentargets_associations(parquet_dir, node_mappings, max_year=None):
             
             if df.empty: continue
             
-            # Filter to exact year (dataset contains snapshots, not cumulative)
+            # Filter to cumulative (<= max_year) to get best historical score
             if max_year is not None:
-                df = df[df['year'] == max_year]
+                df = df[df['year'] <= max_year]
                     
             if df.empty: continue
             
