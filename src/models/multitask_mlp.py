@@ -88,9 +88,6 @@ class WeightedMultiTaskLoss(nn.Module):
             pred = predictions[task]
             target = targets[task]
             
-            # Regression losses (GATher approach)
-            # Predictions are already ReLU-activated (non-negative)
-            # Targets are continuous phase values (0.0 to 4.0 or normalized)
             if self.use_huber:
                 # Huber loss (robust to outliers)
                 loss = F.huber_loss(pred, target, delta=1.0)
