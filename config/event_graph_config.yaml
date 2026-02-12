@@ -1,120 +1,14 @@
 # Event Graph Configuration
 # Defines parameters for building the temporal event graph from raw Open Targets evidence.
 
-time_range:
-  # Represents the years for which we will generate cumulative scores. all prior evidences are considered
-  first_year: 2000
-  last_year: 2025
+# ============================================================================
+# NOTE: Datasource weights and datatype mappings are now in:
+#       config/datatype_mapping.yaml
+# This file only contains time range configuration.
+# ============================================================================
 
-datasources:
-  # Configuration for each datasource combination (relation::datasourceId).
-  # 'datatype': Used for grouping or analysis.
-  # 'weight': Multiplier for the score (default 1.0).
-  # 'cutoff': Minimum score threshold to include the edge (optional).
-  
-  # Genetic Association (target -> disease)
-  genetic_association::eva:
-    datatype: genetic_association
-    weight: 1.0
-    cutoff: 0.6
-  genetic_association::gene_burden:
-    datatype: genetic_association
-    weight: 1.0
-  genetic_association::genomics_england:
-    datatype: genetic_association
-    weight: 1.0
-  genetic_association::gene2phenotype:
-    datatype: genetic_association
-    weight: 1.0
-  genetic_association::uniprot_literature:
-    datatype: genetic_association
-    weight: 1.0
-  genetic_association::uniprot_variants:
-    datatype: genetic_association
-    weight: 1.0
-  genetic_association::orphanet:
-    datatype: genetic_association
-    weight: 1.0
-  genetic_association::clingen:
-    datatype: genetic_association
-    weight: 1.0
-  
-  # Somatic Mutation (target -> disease)
-  somatic_mutation::cancer_gene_census:
-    datatype: somatic_mutation
-    weight: 1.0
-  somatic_mutation::eva_somatic:
-    datatype: somatic_mutation
-    weight: 1.0
-  somatic_mutation::cancer_biomarkers:
-    datatype: somatic_mutation
-    weight: 1.0
-  
-  # Clinical Trial (disease -> target)
-  clinical_trial::chembl:
-    datatype: known_drug
-    weight: 1.0
-  
-  # Affected Pathway (target -> disease)
-  affected_pathway::crispr_screen:
-    datatype: affected_pathway
-    weight: 1.0
-  affected_pathway::crispr:
-    datatype: affected_pathway
-    weight: 1.0
-  affected_pathway::slapenrich:
-    datatype: affected_pathway
-    weight: 0.5
-  affected_pathway::reactome:
-    datatype: affected_pathway
-    weight: 1.0
-  affected_pathway::sysbio:
-    datatype: affected_pathway
-    weight: 0.5
-  
-  # Literature (target -> disease)
-  literature::europepmc:
-    datatype: literature
-    weight: 0.2
-    cutoff: 0.3
-  
-  # RNA Expression (target -> disease)
-  rna_expression::expression_atlas:
-    datatype: rna_expression
-    weight: 0.2
-  
-  # Animal Model (target -> disease)
-  animal_model::impc:
-    datatype: animal_model
-    weight: 0.2
-  
-  # Functional Annotation (target -> go)
-  has_function_in::gene_ontology:
-    datatype: functional_annotation
-    weight: 1.0
-  
-  # Protein Interaction (target -> target)
-  interacts_with::intact:
-    datatype: protein_interaction
-    weight: 1.0
-  
-  # Target modulation (target -> molecule)
-  modulated_by::chembl:
-    datatype: known_drug
-    weight: 1.0
-  
-  # Pathway involvement (target -> reactome)
-  involved_in::reactome:
-    datatype: affected_pathway
-    weight: 1.0
-  involved_in::slapenrich:
-    datatype: affected_pathway
-    weight: 0.5
-  
-  # Disease-pathway association (disease -> reactome)
-  associated_with::reactome:
-    datatype: affected_pathway
-    weight: 1.0
-  associated_with::slapenrich:
-    datatype: affected_pathway
-    weight: 0.5
+time_range:
+  # Represents the years for which we will generate cumulative scores
+  # All evidence prior to these years is also considered
+  first_year: 1995
+  last_year: 2025

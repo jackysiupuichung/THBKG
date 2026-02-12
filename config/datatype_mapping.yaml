@@ -1,0 +1,54 @@
+# Datatype aggregation mapping (from OpenTargets timeseries.py)
+# Each datasource maps to a datatype with an aggregation weight
+
+datatypes:
+  genetic_association:
+    label: "Genetic association"
+    datasources:
+      gwas_credible_sets: 1.0
+      eva: 1.0
+      gene_burden: 1.0
+      genomics_england: 1.0
+      gene2phenotype: 1.0
+      uniprot_literature: 1.0
+      uniprot_variants: 1.0
+      orphanet: 1.0
+      clingen: 1.0
+    
+  somatic_mutation:
+    label: "Somatic mutations"
+    datasources:
+      cancer_gene_census: 1.0
+      intogen: 1.0
+      eva_somatic: 1.0
+      cancer_biomarkers: 1.0
+    
+  known_drug:
+    label: "Known drug"
+    datasources:
+      chembl: 1.0
+    
+  affected_pathway:
+    label: "Affected pathway"
+    datasources:
+      crispr_screen: 1.0
+      crispr: 1.0
+      slapenrich: 0.5
+      progeny: 0.5
+      reactome: 1.0
+      sysbio: 0.5
+      
+  literature:
+    label: "Literature"
+    datasources:
+      europepmc: 0.2
+    
+  rna_expression:
+    label: "RNA expression"
+    datasources:
+      expression_atlas: 0.2
+    
+  animal_model:
+    label: "Animal model"
+    datasources:
+      impc: 0.2
