@@ -26,12 +26,11 @@ from scipy import stats
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.data.temporal_loader import (
-    load_event_graph, 
-    remove_clinical_trial_edges, 
-    filter_graph_by_time, 
-    to_time_agnostic
+    load_event_graph,
+    remove_clinical_trial_edges
 )
 from src.models.multitask_mlp import MultiTaskClinicalMLP, WeightedMultiTaskLoss, compute_task_weights
+from src.evaluate_clinical_ranking import evaluate_ranking
 from src.models.utils import build_model
 
 # Task definitions
@@ -139,7 +138,7 @@ def extract_labels_from_graph(graph, split_year, node_mappings):
     return df
 
 
-def prepare_training_data(positives_df, num_disease_nodes, num_target_nodes, negative_ratio=15, seed=42):
+def prepare_training_data(positives_df, num_disease_nodes, num_target_nodes, negative_ratio=15, seed=42, hard_negative_sample=False):
     """
     Prepare training data with negative sampling using indices.
     
@@ -408,9 +407,9 @@ def main(cfg):
     else:
          split_cfg = None
 
-    train_year = split_cfg.train[1] if split_cfg else "2015"
-    val_year = split_cfg.val[1] if split_cfg else "2017"
-    test_year = split_cfg.test[1] if split_cfg else "2024"
+    train_year = split_cfg.train[1]
+    val_year = split_cfg.val[1]
+    test_year = split_cfg.test[1]
     
     # Extract labels from graph dynamically
     print(f"\n📊 Extracting labels from graph:")
@@ -422,13 +421,6 @@ def main(cfg):
     
     print(f"   Test (<= {test_year})")
     test_labels = extract_labels_from_graph(graph, test_year, node_mappings)
-    
-    # Truncate for debug
-    if cfg.get('debug', False):
-        print("\n🐞 DEBUG MODE: Truncating datasets to 100 samples")
-        train_labels = train_labels.head(100)
-        val_labels = val_labels.head(100)
-        test_labels = test_labels.head(100)
     
     print(f"   Train: {len(train_labels):,} pairs")
     print(f"   Val:   {len(val_labels):,} pairs")
@@ -443,9 +435,12 @@ def main(cfg):
         train_labels, 
         num_disease_nodes=num_disease_nodes,
         num_target_nodes=num_target_nodes,
-        negative_ratio=cfg.finetune.negative_ratio
+        negative_ratio=cfg.finetune.negative_ratio,
+        hard_negative_sample = cfg.finetune.hard_negative_sample
     )
     
+
+
     # Compute task weights
     task_weights = compute_task_weights(train_labels, inverse_freq=True)
     print(f"\n⚖️  Task weights:")
@@ -727,183 +722,6 @@ def main(cfg):
     print("\n" + "="*80)
     print("✅ TRAINING COMPLETE")
     print("="*80)
-
-
-def evaluate_ranking(
-    model, 
-    embeddings, 
-    history_pairs, 
-    test_pairs, 
-    num_disease_nodes, 
-    num_target_nodes, 
-    device, 
-    k_values=[100, 200, 500],
-    valid_disease_indices=None
-):
-    """
-    Evaluate ranking metrics per disease using custom scoring strategies.
-    Strategies:
-    1. Positive Outcome (Pos)
-    2. Pos / Unmet
-    3. Pos / Max(Unmet, Adv)
-    """
-    model.eval()
-    
-    # All target indices (candidates)
-    target_emb_all = embeddings['target'].to(device) # [N_t, dim]
-    
-    # Pre-organize history: disease -> set(target_indices)
-    history_map = {}
-    for (d, t) in history_pairs:
-        if d not in history_map: history_map[d] = set()
-        history_map[d].add(t)
-
-    all_task_results = {}
-    
-    # Define Ground Truth: Relevant = (Pos > 0 or Op > 0)
-    # We want to retrieve successful trials.
-    # We explicitly exclude pure 'unmet' or 'adv' (failures) from the "Relevant" set for these metrics.
-    test_ground_truth = {}
-    for (d, t), scores in test_pairs.items():
-        if scores['y_pos'] > 0 or scores['y_op'] > 0:
-            if d not in test_ground_truth: test_ground_truth[d] = set()
-            test_ground_truth[d].add(t)
-            
-    test_diseases = set(test_ground_truth.keys())
-
-    # Filter by validation set if provided
-    if valid_disease_indices is not None:
-        original_count = len(test_diseases)
-        test_diseases = test_diseases.intersection(valid_disease_indices)
-        print(f"   Filtered diseases: {original_count} -> {len(test_diseases)} (based on validation list)")
-    
-    if len(test_diseases) == 0:
-        print(f"   ⚠️  No diseases with relevant targets left. Skipping.")
-        return {}
-
-    # Define Strategies
-    strategies = ['Score_Pos', 'Score_Pos_div_Unmet', 'Score_Pos_div_MaxUnmetAdv']
-    
-    for strategy in strategies:
-        print(f"\n   --- Ranking Strategy: {strategy} ---")
-        
-        # Pre-compute metrics storage
-        metrics = {k: {'precision': [], 'recall': [], 'hits': [], 'mrr': [], 'ndcg': []} for k in k_values}
-        
-        # Loop over diseases
-        for d_idx in tqdm(test_diseases, desc=f"Ranking ({strategy})"):
-            true_targets = test_ground_truth.get(d_idx, set())
-            history = history_map.get(d_idx, set())
-            
-            # Prepare inputs
-            d_emb = embeddings['disease'][d_idx].unsqueeze(0).to(device) # [1, dim]
-            d_emb_expanded = d_emb.expand(num_target_nodes, -1)
-            
-            # Forward pass
-            with torch.no_grad():
-                logits = model(d_emb_expanded, target_emb_all) # returns dict
-                
-                # Get Probabilities
-                p_pos = torch.sigmoid(logits['pos'])
-                p_unmet = torch.sigmoid(logits['unmet'])
-                p_adv = torch.sigmoid(logits['adv'])
-                # p_op = torch.sigmoid(logits['op']) # Not used in scoring formula, but used in GT
-                
-                eps = 1e-6
-                
-                if strategy == 'Score_Pos':
-                    scores = p_pos
-                elif strategy == 'Score_Pos_div_Unmet':
-                    scores = p_pos / (p_unmet + eps)
-                elif strategy == 'Score_Pos_div_MaxUnmetAdv':
-                    denom = torch.max(p_unmet, p_adv) + eps
-                    scores = p_pos / denom
-                else:
-                    scores = p_pos # Default
-                
-            # Mask history
-            if history:
-                hist_indices = torch.tensor(list(history), device=device, dtype=torch.long)
-                scores[hist_indices] = -1.0 # Set to lowest possible
-                
-            # Ranking
-            max_k = max(k_values)
-            top_k_scores, top_k_indices = torch.topk(scores, max_k)
-            top_k_indices = top_k_indices.cpu().tolist()
-            
-            # Metrics
-            for k in k_values:
-                curr_top = top_k_indices[:k]
-                intersects = len(set(curr_top) & true_targets)
-                
-                # Recall@K
-                if len(true_targets) > 0:
-                    recall = intersects / len(true_targets)
-                else:
-                    recall = 0.0
-                metrics[k]['recall'].append(recall)
-                
-                # Precision@K
-                precision = intersects / k
-                metrics[k]['precision'].append(precision)
-                
-                # Hits@K
-                metrics[k]['hits'].append(1.0 if intersects > 0 else 0.0)
-                
-                # MRR
-                rr = 0.0
-                for rank, t_idx in enumerate(curr_top):
-                    if t_idx in true_targets:
-                        rr = 1.0 / (rank + 1)
-                        break
-                metrics[k]['mrr'].append(rr)
-                
-                # NDCG
-                dcg = 0.0
-                idcg = 0.0
-                
-                # DCG
-                for i, t_idx in enumerate(curr_top):
-                    if t_idx in true_targets:
-                        dcg += 1.0 / np.log2(i + 2)
-                
-                # IDCG
-                num_relevant = min(k, len(true_targets))
-                for i in range(num_relevant):
-                    idcg += 1.0 / np.log2(i + 2)
-                    
-                metrics[k]['ndcg'].append(dcg / idcg if idcg > 0 else 0)
-
-        # Average metrics for this strategy
-        task_final_results = {}
-        ranking_rows = []
-        
-        for k in k_values:
-            avg_rec = np.mean(metrics[k]['recall']) if metrics[k]['recall'] else 0.0
-            avg_prec = np.mean(metrics[k]['precision']) if metrics[k]['precision'] else 0.0
-            avg_mrr = np.mean(metrics[k]['mrr']) if metrics[k]['mrr'] else 0.0
-            avg_ndcg = np.mean(metrics[k]['ndcg']) if metrics[k]['ndcg'] else 0.0
-            
-            task_final_results[f'Recall@{k}'] = float(avg_rec)
-            task_final_results[f'Precision@{k}'] = float(avg_prec)
-            task_final_results[f'MRR@{k}'] = float(avg_mrr)
-            task_final_results[f'NDCG@{k}'] = float(avg_ndcg)
-            
-            ranking_rows.append({
-                'K': k,
-                'Recall': f"{avg_rec:.4f}",
-                'Precision': f"{avg_prec:.4f}",
-                'MRR': f"{avg_mrr:.4f}",
-                'NDCG': f"{avg_ndcg:.4f}"
-            })
-            
-        print(f"\n📊 Ranking Results for {strategy}:")
-        df_ranking = pd.DataFrame(ranking_rows)
-        print(df_ranking.to_string(index=False))
-        
-        all_task_results[strategy] = task_final_results
-        
-    return all_task_results
 
 
 if __name__ == "__main__":
