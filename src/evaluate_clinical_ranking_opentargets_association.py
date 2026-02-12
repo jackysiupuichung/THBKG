@@ -28,12 +28,28 @@ def extract_labels_from_graph(graph, split_year, node_mappings):
     print(f"   Extracting labels up to year {split_year}...")
     
     # Task to edge type mapping
-    task_edge_map = {
-        'pos': 'clinical_trial_positive::chembl',
-        'unmet': 'clinical_trial_unmet_efficacy::chembl',
-        'adv': 'clinical_trial_adverse_effects::chembl',
-        'op': 'clinical_trial_Unknown/Operational::chembl'
+    # Check if graph uses 'relation::datasource' or 'relation_only'
+    # Try to find 'clinical_trial_positive' first
+    
+    tasks = ['pos', 'unmet', 'adv', 'op']
+    relations = {
+        'pos': 'clinical_trial_positive',
+        'unmet': 'clinical_trial_unmet_efficacy',
+        'adv': 'clinical_trial_adverse_effects',
+        'op': 'clinical_trial_Unknown/Operational'
     }
+    
+    task_edge_map = {}
+    for t in tasks:
+        base_rel = relations[t]
+        # Check simplified name first
+        if ('disease', base_rel, 'target') in graph.edge_types:
+            task_edge_map[t] = base_rel
+        # Check suffixed name
+        elif ('disease', f"{base_rel}::chembl", 'target') in graph.edge_types:
+            task_edge_map[t] = f"{base_rel}::chembl"
+            
+    print(f"   Detected {len(task_edge_map)} valid clinical trial edge types.")
     
     label_data = {}
     
@@ -348,10 +364,6 @@ def main():
         
     test_year = ts.test[1]
     
-    # Load OpenTargets associations up to test year
-    association_dir = cfg.data.association_dir
-    association_scores = load_opentargets_associations(association_dir, node_mappings, max_year=test_year)
-    
     print(f"\n📊 Extracting History (All edges <= {history_year})...")
     history_data, _ = extract_labels_from_graph(graph, history_year, node_mappings)
     
@@ -369,15 +381,19 @@ def main():
     print(f"   Total Edges in Test Period Window: {len(full_test_data):,}")
     print(f"   Known History Edges: {len(history_data):,}")
     print(f"   Strictly Novel Test Edges: {len(test_novel_data):,} (History Removed, Validation Diseases Only)")
-    
+    print(f" Number of diseases with novel edges: {len(set([k[0] for k in test_novel_data.keys()]))}")
     if len(test_novel_data) == 0:
         print("❌ No novel edges found in test split! Check temporal splits.")
         sys.exit(1)
 
+    # Load OpenTargets associations up to test year
+    association_dir = cfg.data.association_dir
+    association_scores = load_opentargets_associations(association_dir, node_mappings, max_year=test_year)
+
     # 3. Evaluate
     results = evaluate_ranking_with_scores(
         association_scores,
-        history_data, # Use full history (Train+Val) to mask
+            history_data, # Use full history (Train+Val) to mask
         test_novel_data, 
         graph['disease'].num_nodes,
         graph['target'].num_nodes,
