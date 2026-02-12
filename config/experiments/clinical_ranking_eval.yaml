@@ -1,0 +1,16 @@
+experiment:
+  name: clinical_ranking_evaluation
+
+data:
+  graph_file: output/graph/hetero_graph_with_features.pt
+  mappings_file: output/graph/hetero_mappings.pt
+  
+  # Temporal split configuration
+  temporal_split:
+    train: [null, 2016]
+    val: [2017, 2020]
+    test: [2021, 2024]
+
+# Output directory for evaluation results
+eval:
+  output_dir: runs/clinical_ranking_evaluation
