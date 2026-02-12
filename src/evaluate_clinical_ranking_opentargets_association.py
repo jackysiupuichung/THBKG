@@ -386,9 +386,9 @@ def main():
         print("❌ No novel edges found in test split! Check temporal splits.")
         sys.exit(1)
 
-    # Load OpenTargets associations up to test year
+    # Load OpenTargets associations up to history cutoff (no temporal leakage)
     association_dir = cfg.data.association_dir
-    association_scores = load_opentargets_associations(association_dir, node_mappings, max_year=test_year)
+    association_scores = load_opentargets_associations(association_dir, node_mappings, max_year=history_year)
 
     # 3. Evaluate
     results = evaluate_ranking_with_scores(
