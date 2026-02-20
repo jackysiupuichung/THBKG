@@ -35,7 +35,7 @@ echo "🚀 [1/2] Running KG Pipeline..."
 echo "   Input: $INPUT_EVIDENCE_DIR"
 echo "   Output: $KG_OUTPUT_DIR"
 
-python -m src.pipeline.kg_pipeline \
+python preprocessing/temporal_graph/pipeline/kg_pipeline.py \
   --input "$INPUT_EVIDENCE_DIR" \
   --node-schema "$NODE_SCHEMA" \
   --edge-schema "$EDGE_SCHEMA" \
@@ -48,7 +48,7 @@ python -m src.pipeline.kg_pipeline \
 echo "🚀 [2/3] Building Event List..."
 if [ ! -f "$CONFIG" ]; then echo "❌ Config $CONFIG not found!"; exit 1; fi
 
-python -m src.pipeline.build_event_list \
+python preprocessing/temporal_graph/pipeline/build_event_list.py \
   --input-dir "$RAW_EDGES_DIR" \
   --config "$CONFIG" \
   --output "$EVENTS_FILE" \

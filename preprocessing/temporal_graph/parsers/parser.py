@@ -9,8 +9,8 @@ import time
 import re
 import urllib3
 import xml.etree.ElementTree as ET
-from src.parsers.edge_extractor import extract_edge_props
-from src.parsers.chembl_trial_expander import expand_chembl_clinical_trials
+from .edge_extractor import extract_edge_props
+from .chembl_trial_expander import expand_chembl_clinical_trials
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 

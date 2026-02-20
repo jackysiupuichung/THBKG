@@ -22,7 +22,7 @@ GRAPH_STRUCT_FILE="${EVENT_OUTPUT_DIR}/temporal_graph.pt"
 
 # === Build Graph Structure ===
 echo "🚀 Building Event Graph Structure..."
-python -m src.pipeline.build_event_graph \
+python preprocessing/temporal_graph/pipeline/build_event_graph.py \
   --input "$EVENTS_FILE" \
   --output "$GRAPH_STRUCT_FILE" \
   --static-edges "$STATIC_EDGES_DIR" \

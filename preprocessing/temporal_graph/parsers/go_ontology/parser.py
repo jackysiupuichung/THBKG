@@ -2,7 +2,7 @@ import os
 import re
 import pandas as pd
 import numpy as np
-from src.parsers.parser import EdgeParser
+from ..parser import EdgeParser
 
 class GOOntologyParser(EdgeParser):
     def __init__(self, root_dir, schema_file, output_dir, node_store=None, static=False):

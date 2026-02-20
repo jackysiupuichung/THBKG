@@ -26,7 +26,7 @@ echo "   Graph Structure: $GRAPH_STRUCT_FILE"
 echo "   Features: $FEATURE_OUTPUT_DIR"
 echo "   Output: $FINAL_GRAPH_FILE"
 
-python -m src.pipeline.attach_features \
+python preprocessing/temporal_graph/pipeline/attach_features.py \
   --graph-file "$GRAPH_STRUCT_FILE" \
   --output-file "$FINAL_GRAPH_FILE" \
   --feature-dir "$FEATURE_OUTPUT_DIR"

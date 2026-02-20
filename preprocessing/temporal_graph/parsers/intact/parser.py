@@ -2,7 +2,7 @@ import os
 import csv
 import re
 import pandas as pd
-from src.parsers.parser import EdgeParser
+from ..parser import EdgeParser
 
 class IntActParser(EdgeParser):
     def __init__(self, root_dir, schema_file, output_dir, node_store=None):

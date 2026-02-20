@@ -1,9 +1,14 @@
-#!/usr/bin/env python3
+import os
+import sys
 import argparse
-from src.parsers.parser import NodeParser, EdgeParser
-from src.parsers.intact.parser import IntActParser
-from src.parsers.go_ontology.parser import GOOntologyParser
 import pandas as pd
+
+# Add the parent directory to path to allow importing parsers
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from parsers.parser import NodeParser, EdgeParser
+from parsers.intact.parser import IntActParser
+from parsers.go_ontology.parser import GOOntologyParser
 
 
 def run_pipeline(input, node_schema, edge_schema, static_edge_schema, node_output, edge_output, static_edge_output):
