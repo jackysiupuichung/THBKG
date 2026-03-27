@@ -38,10 +38,12 @@ def build_model(
     num_layers: int = 2,
     dropout: float = 0.1,
     use_rte: bool = False,
+    use_edge_features: bool = False,
+    edge_feat_dim: int = 2,
 ) -> torch.nn.Module:
     """
     Build model from HeteroData.
-    
+
     Args:
         model_name: Name of model to build (hgt, gatv2, gatv3, etc)
         data: HeteroData object
@@ -51,7 +53,9 @@ def build_model(
         num_layers: Number of layers
         dropout: Dropout rate
         use_rte: Enable Relative Temporal Encoding (HGT only)
-        
+        use_edge_features: Inject stored edge_attr into attention scaling (HGT only)
+        edge_feat_dim: Dimension of stored edge features (default 2: score + novelty)
+
     Returns:
         differentiable PyTorch model
     """
@@ -82,6 +86,8 @@ def build_model(
             metadata=metadata,
             dropout=dropout,
             use_rte=use_rte,
+            use_edge_features=use_edge_features,
+            edge_feat_dim=edge_feat_dim,
         )
     elif model_name == 'gatv2':
         model = GATv2(
@@ -90,7 +96,8 @@ def build_model(
             num_heads=num_heads,
             num_layers=num_layers,
             metadata=metadata,
-            dropout=dropout
+            dropout=dropout,
+            edge_feat_dim=edge_feat_dim,
         )
     elif model_name == 'gatv3':
         model = GATv3(

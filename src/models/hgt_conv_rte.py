@@ -52,6 +52,8 @@ class HGTConv(MessagePassing):
         metadata: Metadata,
         heads: int = 1,
         use_RTE: bool = False,
+        use_edge_features: bool = False,
+        edge_feat_dim: int = 2,
         **kwargs,
     ):
         super().__init__(aggr='add', node_dim=0, **kwargs)
@@ -67,6 +69,8 @@ class HGTConv(MessagePassing):
         self.out_channels = out_channels
         self.heads = heads
         self.use_RTE = use_RTE
+        self.use_edge_features = use_edge_features
+        self.edge_feat_dim = edge_feat_dim
         self.node_types = metadata[0]
         self.edge_types = metadata[1]
         self.edge_types_map = {
@@ -100,6 +104,15 @@ class HGTConv(MessagePassing):
             edge_type = '__'.join(edge_type)
             self.p_rel[edge_type] = Parameter(torch.empty(1, heads))
 
+        # Per-edge-type projection: [edge_feat_dim, heads] — projects stored
+        # edge_attr ([E, edge_feat_dim]) to a per-head attention scalar [E, heads]
+        # that multiplies the attention score alongside p_rel.
+        if self.use_edge_features:
+            self.ef_lin = ParameterDict()
+            for edge_type in self.edge_types:
+                key = '__'.join(edge_type)
+                self.ef_lin[key] = Parameter(torch.empty(edge_feat_dim, heads))
+
         if self.use_RTE:
             self.rte = PositionalEncoding(self.out_channels)
 
@@ -113,6 +126,9 @@ class HGTConv(MessagePassing):
         self.v_rel.reset_parameters()
         ones(self.skip)
         ones(self.p_rel)
+        if self.use_edge_features:
+            for param in self.ef_lin.values():
+                torch.nn.init.xavier_uniform_(param)
 
     def _cat(self, x_dict: Dict[str, Tensor]) -> Tuple[Tensor, Dict[str, int]]:
         """Concatenates a dictionary of features."""
@@ -192,6 +208,7 @@ class HGTConv(MessagePassing):
         x_dict: Dict[NodeType, Tensor],
         edge_index_dict: Dict[EdgeType, Adj],  # Support both.
         edge_time_diff_dict: Optional[Dict[EdgeType, Tensor]] = None,
+        edge_feat_dict: Optional[Dict[EdgeType, Tensor]] = None,
     ) -> Dict[NodeType, Optional[Tensor]]:
         r"""Runs the forward pass of the module.
 
@@ -246,8 +263,27 @@ class HGTConv(MessagePassing):
 
             temporal_features = self.rte(edge_time_diff).view(-1, H, D)
 
+        # Project stored edge features [E_type, edge_feat_dim] → [E_total, heads]
+        # Iterate edge_index_dict in the same order used by construct_bipartite_edge_index
+        # so the per-type tensors concatenate in matching order.
+        ef_scalar = None
+        if self.use_edge_features and edge_feat_dict is not None:
+            ef_parts = []
+            for edge_type in edge_index_dict.keys():
+                key = '__'.join(edge_type)
+                ef = edge_feat_dict.get(edge_type)
+                if ef is not None:
+                    W = self.ef_lin[key]                   # [edge_feat_dim, heads]
+                    ef_parts.append(ef.float() @ W)        # [E_type, heads]
+                else:
+                    n = edge_index_dict[edge_type].size(1)
+                    ef_parts.append(torch.ones(n, self.heads,
+                                               device=edge_index.device))
+            ef_scalar = torch.cat(ef_parts, dim=0)         # [E_total, heads]
+
         out = self.propagate(edge_index, k=k, q=q, v=v, edge_attr=edge_attr,
-                             temporal_features=temporal_features)
+                             temporal_features=temporal_features,
+                             ef_scalar=ef_scalar)
 
         # Reconstruct output node embeddings dict:
         for node_type, start_offset in dst_offset.items():
@@ -276,11 +312,14 @@ class HGTConv(MessagePassing):
     def message(self, k_j: Tensor, q_i: Tensor, v_j: Tensor, edge_attr: Tensor,
                 index: Tensor, ptr: Optional[Tensor],
                 temporal_features: Optional[Tensor],
+                ef_scalar: Optional[Tensor],
                 size_i: Optional[int]) -> Tensor:
         if temporal_features is not None:
             k_j = k_j + temporal_features
             v_j = v_j + temporal_features
-        alpha = (q_i * k_j).sum(dim=-1) * edge_attr
+        alpha = (q_i * k_j).sum(dim=-1) * edge_attr   # p_rel scaling [E, heads]
+        if ef_scalar is not None:
+            alpha = alpha * ef_scalar                  # evidence/novelty scaling [E, heads]
         alpha = alpha / math.sqrt(q_i.size(-1))
         alpha = softmax(alpha, index, ptr, size_i)
         out = v_j * alpha.view(-1, self.heads, 1)

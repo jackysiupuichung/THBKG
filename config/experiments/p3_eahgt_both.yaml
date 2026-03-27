@@ -1,5 +1,5 @@
 experiment:
-  name: advancement_hgt
+  name: p3_eahgt_both
 
 data:
   graph_file: output/graph/hetero_graph_with_features.pt
@@ -17,7 +17,7 @@ model:
   edge_feat_dim: 2
 
 train:
-  output_dir: runs/advancement_hgt
+  output_dir: runs/p3_eahgt_both
   num_epochs: 50
   lr: 0.001
   weight_decay: 0.0001

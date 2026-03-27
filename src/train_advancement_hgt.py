@@ -117,7 +117,7 @@ def build_context_graph(data, collapse: bool = False):
     return context
 
 
-def run_epoch(model, loader, optimizer, device, train=True):
+def run_epoch(model, loader, optimizer, device, train=True, edge_feat_cols=(0, 1)):
     model.train() if train else model.eval()
     total_loss, n_batches = 0.0, 0
 
@@ -131,6 +131,12 @@ def run_epoch(model, loader, optimizer, device, train=True):
                 batch[ADV_ETYPE].edge_label_index,
                 src_type="target",
                 dst_type="disease",
+                edge_feat_dict={
+                    et: batch[et].edge_attr[:, edge_feat_cols]
+                    for et in batch.edge_types
+                    if et != ADV_ETYPE and hasattr(batch[et], 'edge_attr')
+                    and batch[et].edge_attr is not None
+                },
             )
             labels = batch[ADV_ETYPE].edge_label.float()
             logits = out["logits_exist"].squeeze(-1)
@@ -170,6 +176,7 @@ def compute_metrics(labels: np.ndarray, scores: np.ndarray) -> dict:
             "precision@10", "precision@30", "precision@50",
             "average_precision@10", "average_precision@30", "average_precision@50",
             "recall@10", "recall@30", "recall@50",
+            "rr@10", "rr@20", "rr@30", "rr@50", "rr@90", "rr@100",
         ]} | {"n_samples": n_samples, "n_positives": n_positives, "balance": balance}
 
     preds = (scores >= 0.5).astype(int)
@@ -209,6 +216,19 @@ def compute_metrics(labels: np.ndarray, scores: np.ndarray) -> dict:
             return 0.0
         return average_precision_score(top_labels, top_scores)
 
+    def _rr_at_k(k):
+        k = min(k, n_samples)
+        threshold = scores[order][k - 1]            # k-th largest score
+        exposed   = labels[scores >= threshold]
+        control   = labels[scores < threshold]
+        if len(exposed) == 0 or len(control) == 0:
+            return float("nan")
+        p_exposed = exposed.sum() / len(exposed)
+        p_control = control.sum() / len(control)
+        if p_control == 0:                          # undefined when no positives in control
+            return float("nan")
+        return float(p_exposed / p_control)
+
     metrics = {
         "n_samples":           n_samples,
         "n_positives":         n_positives,
@@ -231,12 +251,18 @@ def compute_metrics(labels: np.ndarray, scores: np.ndarray) -> dict:
         "recall@10":           _recall_at_k(10),
         "recall@30":           _recall_at_k(30),
         "recall@50":           _recall_at_k(50),
+        "rr@10":               _rr_at_k(10),
+        "rr@20":               _rr_at_k(20),
+        "rr@30":               _rr_at_k(30),
+        "rr@50":               _rr_at_k(50),
+        "rr@90":               _rr_at_k(90),
+        "rr@100":              _rr_at_k(100),
     }
     return metrics
 
 
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, edge_feat_cols=(0, 1)):
     model.eval()
     all_logits, all_labels = [], []
 
@@ -248,6 +274,12 @@ def evaluate(model, loader, device):
             batch[ADV_ETYPE].edge_label_index,
             src_type="target",
             dst_type="disease",
+            edge_feat_dict={
+                et: batch[et].edge_attr[:, edge_feat_cols]
+                for et in batch.edge_types
+                if et != ADV_ETYPE and hasattr(batch[et], 'edge_attr')
+                and batch[et].edge_attr is not None
+            },
         )
         all_logits.append(out["logits_exist"].squeeze(-1).cpu())
         all_labels.append(batch[ADV_ETYPE].edge_label.cpu())
@@ -260,7 +292,7 @@ def evaluate(model, loader, device):
 
 
 @torch.no_grad()
-def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighbors, batch_size, device):
+def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighbors, batch_size, device, edge_feat_cols=(0, 1)):
     """Score test edges using temporally-constrained subgraphs."""
     model.eval()
     loader = LinkNeighborLoader(
@@ -281,6 +313,12 @@ def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighb
             batch.x_dict, batch.edge_index_dict,
             batch[ADV_ETYPE].edge_label_index,
             src_type="target", dst_type="disease",
+            edge_feat_dict={
+                et: batch[et].edge_attr[:, edge_feat_cols]
+                for et in batch.edge_types
+                if et != ADV_ETYPE and hasattr(batch[et], 'edge_attr')
+                and batch[et].edge_attr is not None
+            },
         )
         all_logits.append(out["logits_exist"].squeeze(-1).cpu())
         all_labels.append(batch[ADV_ETYPE].edge_label.cpu())
@@ -343,8 +381,15 @@ def main(cfg):
         num_heads=cfg.model.num_heads,
         num_layers=cfg.model.num_layers,
         dropout=cfg.model.dropout,
+        use_rte=cfg.model.get("use_rte", False),
+        use_edge_features=cfg.model.get("use_edge_features", False),
+        edge_feat_dim=cfg.model.get("edge_feat_dim", 2),
     ).to(device)
     print(f"Model: {cfg.model.name} | params: {sum(p.numel() for p in model.parameters()):,}")
+
+    # Column indices into edge_attr [E, 2] = [score, novelty]
+    # e.g. [0] = score only, [1] = novelty only, [0,1] = both
+    _edge_feat_cols = list(cfg.model.get("edge_feat_cols", [0, 1]))
 
     optimizer = torch.optim.Adam(
         model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay
@@ -356,10 +401,10 @@ def main(cfg):
         data=context,
         num_neighbors=num_neighbors,
         edge_label_index=(ADV_ETYPE, edge_index[:, train_mask]),
-        edge_label=edge_attr[train_mask, 0],   # 0.0/1.0 from CSV — no synthetic negatives
-        edge_label_time=edge_time[train_mask],  # anchor time per query edge
-        time_attr="edge_time",                  # filter neighbours to <= anchor time
-        temporal_strategy="last",               # sample most recent qualifying neighbours
+        edge_label=edge_attr[train_mask, 0],
+        edge_label_time=edge_time[train_mask],
+        time_attr="edge_time",
+        temporal_strategy="last",
         batch_size=cfg.train.batch_size,
         shuffle=True,
     )
@@ -376,7 +421,7 @@ def main(cfg):
     )
 
     # ── Training loop ────────────────────────────────────────────────────────
-    best_val_auroc  = -1.0
+    best_val_rr90  = -1.0
     best_val_metrics = {}
     patience_counter = 0
     patience = cfg.train.early_stopping.patience if cfg.train.early_stopping.enabled else int(1e9)
@@ -389,12 +434,13 @@ def main(cfg):
         "precision@10", "precision@30", "precision@50",
         "average_precision@10", "average_precision@30", "average_precision@50",
         "recall@10", "recall@30", "recall@50",
+        "rr@10", "rr@20", "rr@30", "rr@50", "rr@90", "rr@100",
     ]
     epoch_rows = []
 
     for epoch in range(1, cfg.train.num_epochs + 1):
-        train_loss  = run_epoch(model, train_loader, optimizer, device, train=True)
-        val_metrics = evaluate(model, val_loader, device)
+        train_loss  = run_epoch(model, train_loader, optimizer, device, train=True, edge_feat_cols=_edge_feat_cols)
+        val_metrics = evaluate(model, val_loader, device, edge_feat_cols=_edge_feat_cols)
 
         row = {"epoch": epoch, "split": "val", "train_loss": train_loss}
         row.update(val_metrics)
@@ -410,15 +456,16 @@ def main(cfg):
             f"| ap: {val_metrics['average_precision']:.4f} "
             f"| f1: {val_metrics['f1']:.4f} "
             f"| p@10: {val_metrics['precision@10']:.4f} "
-            f"| r@50: {val_metrics['recall@50']:.4f}"
+            f"| r@50: {val_metrics['recall@50']:.4f} "
+            f"| rr@90: {val_metrics['rr@90']:.4f}"
         )
 
-        if val_metrics["roc_auc"] > best_val_auroc:
-            best_val_auroc   = val_metrics["roc_auc"]
+        if val_metrics["rr@90"] > best_val_rr90:
+            best_val_rr90   = val_metrics["rr@90"]
             best_val_metrics = val_metrics
             patience_counter = 0
             torch.save(model.state_dict(), output_dir / "best_model.pt")
-            print(f"  ✓ Best model saved (roc_auc={best_val_auroc:.4f})")
+            print(f"  ✓ Best model saved (rr@90={best_val_rr90:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= patience:
@@ -443,6 +490,7 @@ def main(cfg):
         num_neighbors=num_neighbors,
         batch_size=cfg.train.batch_size,
         device=device,
+        edge_feat_cols=_edge_feat_cols,
     )
 
     test_metrics = compute_metrics(test_labels, test_scores)

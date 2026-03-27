@@ -1,5 +1,5 @@
 experiment:
-  name: advancement_hgt
+  name: p2_eahgt_novelty
 
 data:
   graph_file: output/graph/hetero_graph_with_features.pt
@@ -13,11 +13,11 @@ model:
   dropout: 0.1
   use_rte: true
   use_edge_features: true
-  edge_feat_cols: [0, 1]
-  edge_feat_dim: 2
+  edge_feat_cols: [1]
+  edge_feat_dim: 1
 
 train:
-  output_dir: runs/advancement_hgt
+  output_dir: runs/p2_eahgt_novelty
   num_epochs: 50
   lr: 0.001
   weight_decay: 0.0001

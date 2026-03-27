@@ -7,14 +7,19 @@ class GATv2(nn.Module):
     """
     Static GATv2 model wrapped in HeteroConv.
     """
-    def __init__(self, hidden_dim, out_dim, num_heads, num_layers=2, metadata=None, dropout=0.1):
+    def __init__(self, hidden_dim, out_dim, num_heads, num_layers=2, metadata=None, dropout=0.1, edge_feat_dim=0):
         super().__init__()
         self.node_types, self.edge_types = metadata
-        
+        self.edge_feat_dim = edge_feat_dim
+
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             conv = HeteroConv({
-                edge_type: GATv2Conv(-1, hidden_dim, heads=num_heads, dropout=dropout, add_self_loops=False)
+                edge_type: GATv2Conv(
+                    -1, hidden_dim, heads=num_heads, dropout=dropout,
+                    add_self_loops=False,
+                    edge_dim=edge_feat_dim if edge_feat_dim > 0 else None,
+                )
                 for edge_type in self.edge_types
             }, aggr='sum')
             self.convs.append(conv)
@@ -24,27 +29,32 @@ class GATv2(nn.Module):
         self.decoder = DualHeadDecoder(hidden_dim * num_heads)
 
     def forward(
-        self, 
-        x_dict, 
-        edge_index_dict, 
-        edge_label_index=None, 
-        src_type=None, 
-        dst_type=None, 
-        edge_time_dict=None, # Ignored in static GAT
+        self,
+        x_dict,
+        edge_index_dict,
+        edge_label_index=None,
+        src_type=None,
+        dst_type=None,
+        edge_time_dict=None,   # ignored in static GAT
+        edge_feat_dict=None,
         **kwargs
     ):
         # 1. Message Passing (Encode)
-        x_dict = self.encode(x_dict, edge_index_dict)
-        
+        x_dict = self.encode(x_dict, edge_index_dict, edge_feat_dict=edge_feat_dict)
+
         # 2. Link Prediction (Decode)
         if edge_label_index is not None and src_type is not None:
             return self.decode(x_dict[src_type], x_dict[dst_type], edge_label_index)
-            
+
         return x_dict
 
-    def encode(self, x_dict, edge_index_dict):
+    def encode(self, x_dict, edge_index_dict, edge_feat_dict=None):
         for conv in self.convs:
-            x_dict = conv(x_dict, edge_index_dict)
+            if self.edge_feat_dim > 0 and edge_feat_dict is not None:
+                # HeteroConv passes edge_attr per type when supplied as edge_attr_dict
+                x_dict = conv(x_dict, edge_index_dict, edge_attr_dict=edge_feat_dict)
+            else:
+                x_dict = conv(x_dict, edge_index_dict)
             x_dict = {key: x.relu() for key, x in x_dict.items()}
         return x_dict
 

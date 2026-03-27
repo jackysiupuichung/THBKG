@@ -1,23 +1,21 @@
 experiment:
-  name: advancement_hgt
+  name: b3_gatv2_score
 
 data:
   graph_file: output/graph/hetero_graph_with_features.pt
   mappings_file: output/graph/temporal_graph_mappings.pt
 
 model:
-  name: hgt
+  name: gatv2
   hidden_dim: 64
   num_heads: 4
   num_layers: 2
   dropout: 0.1
-  use_rte: true
-  use_edge_features: true
-  edge_feat_cols: [0, 1]
-  edge_feat_dim: 2
+  edge_feat_cols: [0]
+  edge_feat_dim: 1
 
 train:
-  output_dir: runs/advancement_hgt
+  output_dir: runs/b3_gatv2_score
   num_epochs: 50
   lr: 0.001
   weight_decay: 0.0001

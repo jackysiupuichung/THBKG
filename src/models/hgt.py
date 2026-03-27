@@ -33,10 +33,12 @@ class HGT(nn.Module):
         metadata: Tuple[List[str], List[Tuple[str, str, str]]],
         dropout: float = 0.1,
         use_rte: bool = False,
+        use_edge_features: bool = False,
+        edge_feat_dim: int = 2,
     ):
         """
         Initialize HGT encoder.
-        
+
         Args:
             in_channels: Dictionary of node type -> input dimension
             hidden_dim: Hidden dimension
@@ -47,14 +49,17 @@ class HGT(nn.Module):
             metadata: (node_types, edge_types) tuple
             dropout: Dropout rate
             use_rte: Enable Relative Temporal Encoding
+            use_edge_features: Enable stored edge feature injection into attention
+            edge_feat_dim: Dimension of stored edge features (default 2: score + novelty)
         """
         super().__init__()
-        
+
         self.hidden_dim = hidden_dim
         self.out_dim = out_dim
         self.num_layers = num_layers
         self.node_types = node_types
         self.use_rte = use_rte
+        self.use_edge_features = use_edge_features
         
         # Input projection layer
         self.lin_dict = nn.ModuleDict()
@@ -70,6 +75,8 @@ class HGT(nn.Module):
                 metadata=metadata,
                 heads=num_heads,
                 use_RTE=use_rte,
+                use_edge_features=use_edge_features,
+                edge_feat_dim=edge_feat_dim,
             )
             self.convs.append(conv)
         
@@ -89,14 +96,17 @@ class HGT(nn.Module):
         x_dict: Dict[str, torch.Tensor],
         edge_index_dict: Dict[Tuple[str, str, str], torch.Tensor],
         edge_time_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
+        edge_feat_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass.
-        
+
         Args:
             x_dict: Node features {node_type: features}
             edge_index_dict: Edge indices {edge_type: edge_index}
-            
+            edge_time_dict: Optional temporal differences per edge type
+            edge_feat_dict: Optional stored edge features [E, edge_feat_dim] per edge type
+
         Returns:
             Node embeddings {node_type: embeddings}
         """
@@ -106,14 +116,16 @@ class HGT(nn.Module):
             if node_type in self.lin_dict:
                 x_dict_proj[node_type] = self.lin_dict[node_type](x)
             else:
-                x_dict_proj[node_type] = x # Should not happen if in_channels is correct
-        
+                x_dict_proj[node_type] = x
+
         x_dict = x_dict_proj
 
         # Apply HGT layers
         for i, conv in enumerate(self.convs):
-            # HGT convolution with optional temporal encoding
-            x_dict = conv(x_dict, edge_index_dict, edge_time_diff_dict=edge_time_dict)
+            # HGT convolution with optional temporal and edge feature encoding
+            x_dict = conv(x_dict, edge_index_dict,
+                          edge_time_diff_dict=edge_time_dict,
+                          edge_feat_dict=edge_feat_dict)
             
             # Layer norm + dropout
             x_dict = {
@@ -146,19 +158,22 @@ class HGTLinkPredictor(nn.Module):
         metadata: Tuple[List[str], List[Tuple[str, str, str]]],
         dropout: float = 0.1,
         use_rte: bool = False,
+        use_edge_features: bool = False,
+        edge_feat_dim: int = 2,
     ):
         """
         Initialize link predictor.
-        
+
         Args:
             in_channels: Input feature dimensions
             hidden_dim: Hidden dimension
             out_dim: Output dimension
             use_rte: Enable Relative Temporal Encoding
-            ...
+            use_edge_features: Enable stored edge feature injection into attention
+            edge_feat_dim: Dimension of stored edge features
         """
         super().__init__()
-        
+
         self.encoder = HGT(
             in_channels=in_channels,
             hidden_dim=hidden_dim,
@@ -169,6 +184,8 @@ class HGTLinkPredictor(nn.Module):
             metadata=metadata,
             dropout=dropout,
             use_rte=use_rte,
+            use_edge_features=use_edge_features,
+            edge_feat_dim=edge_feat_dim,
         )
         
         # Decoder input dim must match encoder output (hidden_dim)
@@ -179,18 +196,21 @@ class HGTLinkPredictor(nn.Module):
         x_dict: Dict[str, torch.Tensor],
         edge_index_dict: Dict[Tuple[str, str, str], torch.Tensor],
         edge_time_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
+        edge_feat_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Encode nodes to embeddings.
-        
+
         Args:
             x_dict: Node features
             edge_index_dict: Edge indices
-            
+            edge_time_dict: Optional temporal differences per edge type
+            edge_feat_dict: Optional stored edge features per edge type
+
         Returns:
             Node embeddings
         """
-        return self.encoder(x_dict, edge_index_dict, edge_time_dict)
+        return self.encoder(x_dict, edge_index_dict, edge_time_dict, edge_feat_dict)
     
     def decode(
         self,
@@ -217,22 +237,25 @@ class HGTLinkPredictor(nn.Module):
         src_type: str,
         dst_type: str,
         edge_time_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
+        edge_feat_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for link prediction.
-        
+
         Args:
             x_dict: Node features
             edge_index_dict: Edge indices
             edge_label_index: Edges to predict [2, num_edges]
             src_type: Source node type
             dst_type: Destination node type
-            
+            edge_time_dict: Optional temporal differences per edge type
+            edge_feat_dict: Optional stored edge features per edge type
+
         Returns:
             Dict with 'logits_exist' and 'logits_prob'
         """
         # Encode all nodes
-        z_dict = self.encode(x_dict, edge_index_dict, edge_time_dict)
+        z_dict = self.encode(x_dict, edge_index_dict, edge_time_dict, edge_feat_dict)
         
         # Get embeddings for edges to predict
         z_src = z_dict[src_type][edge_label_index[0]]
