@@ -19,10 +19,12 @@ Usage:
 """
 import json
 import logging
+import textwrap
 import numpy as np
 import pandas as pd
 import xarray as xr
 import plotnine as pn
+import mizani.bounds
 import fire
 from pathlib import Path
 from scipy.stats import wilcoxon
@@ -71,9 +73,8 @@ DEFAULT_RUNS: dict[str, str] = {
 # Colours
 # ---------------------------------------------------------------------------
 _BASE_MODEL_COLORS = {
-    "RDG":   "#1f77b4",
-    "RDG-T": "#aec7e8",
-    "OTS":   "#2ca02c",
+    "RDG": "#1f77b4",
+    "OTS": "#2ca02c",
 }
 _EXTERNAL_MODEL_COLORS = [
     "#d62728", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf",
@@ -378,10 +379,12 @@ def _compute_rr_by_ta(evaluation_dataset: xr.Dataset,
             merged = merged[merged.set_index(["target_id", "disease_id"]).index.isin(pf_idx)]
         for ta, ta_grp in merged.groupby("therapeutic_area_name"):
             for limit in limits:
-                threshold = ta_grp["score"].nlargest(limit).min()
-                exposed = ta_grp[ta_grp["score"] >= threshold]
-                control = ta_grp[ta_grp["score"] < threshold]
-                if len(exposed) == 0 or len(control) == 0:
+                if len(ta_grp) <= limit:
+                    continue
+                top_idx = ta_grp.nlargest(limit, "score").index
+                exposed = ta_grp.loc[top_idx]
+                control = ta_grp.drop(top_idx)
+                if len(exposed) == 0:
                     continue
                 rr = relative_risk(
                     exposed["outcome"].sum(), len(exposed),
@@ -397,6 +400,7 @@ def _compute_rr_by_ta(evaluation_dataset: xr.Dataset,
                     "relative_risk_high": ci.high,
                     "n_exposed": len(exposed),
                     "n_exposed_true": int(exposed["outcome"].sum()),
+                    "n_total": len(ta_grp),
                 })
     return pd.DataFrame(rows)
 
@@ -407,14 +411,20 @@ def _compute_rr_by_ta(evaluation_dataset: xr.Dataset,
 
 def _save_plot(plot: pn.ggplot, path: Path) -> None:
     logger.info(f"Saving plot to {path}")
-    plot = plot + pn.theme(plot_background=pn.element_rect(fill="white"))
-    plot.save(str(path), verbose=False)
+    plot = plot + pn.theme(
+        plot_background=pn.element_rect(fill="white"),
+        panel_background=pn.element_rect(fill="white"),
+        panel_border=pn.element_blank(),
+        axis_line=pn.element_blank(),
+        panel_grid_major=pn.element_line(color="#dddddd"),
+        panel_grid_minor=pn.element_blank(),
+    )
+    plot.save(str(path), verbose=False, dpi=300)
 
 
 def _build_color_map(model_names: list[str]) -> dict:
     base = {
-        "rdg__all__positive": _BASE_MODEL_COLORS["RDG"],
-        "rdg__no_time__positive": _BASE_MODEL_COLORS["RDG-T"],
+        "rdg__no_time__positive": _BASE_MODEL_COLORS["RDG"],
         "ots__all": _BASE_MODEL_COLORS["OTS"],
     }
     colors = dict(base)
@@ -486,15 +496,16 @@ def evaluate(
     external_model_names = [e["model_name"] for e in all_inject]
 
     # Base models always included for comparison if present in zarr
-    base_models = [m for m in ["rdg__all__positive", "rdg__no_time__positive", "ots__all"]
+    base_models = [m for m in ["rdg__no_time__positive", "ots__all"]
                    if m in evaluation_dataset.coords["models"].values]
     all_model_names = base_models + external_model_names
 
     model_display = {
-        "rdg__all__positive":     "RDG-T",
         "rdg__no_time__positive": "RDG",
         "ots__all":               "OTS",
-        **{n: n.upper().replace("__", "-")[:12] for n in external_model_names},
+        "p3_lambdarank":          "EAHGT",
+        **{n: n.upper().replace("__", "-")[:12]
+           for n in external_model_names if n != "p3_lambdarank"},
     }
     color_map  = _build_color_map(all_model_names)
     slug_colors = {model_display.get(m, m): color_map[m] for m in all_model_names}
@@ -640,6 +651,48 @@ def evaluate(
         .agg(relative_risk=("relative_risk", "mean"))
     )
 
+    # Pooled RR with 95% Katz CI — fine-grained limits for the paper-style line plot
+    _n_pairs_total = int(
+        evaluation_dataset.outcome.squeeze("outcomes").to_series().reset_index().shape[0]
+    )
+    _fine_limits = sorted(set(
+        list(range(10, 50))
+        + list(range(50, 200, 5))
+        + list(range(200, 501, 10))
+    ))
+    logger.info("Computing pooled RR with 95%% Katz CI over %d limits...", len(_fine_limits))
+    rr_pooled = _compute_relative_risk_by_limit(
+        evaluation_dataset, all_model_names, _fine_limits, confidence=0.95
+    )
+    rr_pooled["model_slug"] = rr_pooled["model_name"].map(model_display)
+    rr_pooled = rr_pooled.sort_values(["model_slug", "limit"])
+    rr_pooled["relative_risk_smooth"] = (
+        rr_pooled.groupby("model_slug")["relative_risk"]
+        .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
+    )
+
+    # Mean-of-ratios (TA-averaged) at fine limits for overlay on katz plot
+    logger.info("Computing mean-of-ratios RR over fine limits for katz overlay...")
+    rr_by_ta_fine_frames = []
+    for stratum, pair_filter in [("all", None)]:
+        rr_fine_s = _compute_rr_by_ta(
+            evaluation_dataset, therapeutic_areas, all_model_names,
+            limits=_fine_limits, pair_filter=pair_filter,
+        )
+        rr_by_ta_fine_frames.append(rr_fine_s)
+    rr_by_ta_fine = pd.concat(rr_by_ta_fine_frames, ignore_index=True)
+    rr_by_ta_fine["model_slug"] = rr_by_ta_fine["model_name"].map(model_display)
+    rr_mor = (
+        rr_by_ta_fine[rr_by_ta_fine["therapeutic_area_name"].isin(_primary_ta_set)]
+        .groupby(["model_name", "model_slug", "limit"], as_index=False)
+        .agg(relative_risk=("relative_risk", "mean"))
+    )
+    rr_mor = rr_mor.sort_values(["model_slug", "limit"])
+    rr_mor["relative_risk_smooth"] = (
+        rr_mor.groupby("model_slug")["relative_risk"]
+        .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
+    )
+
     # Save CSVs: primary TAs + average row appended (stratified)
     avg_ta_rows = rr_by_limit_full.assign(therapeutic_area_name="average primary therapeutic area")
     pd.concat([rr_by_ta_primary_full, avg_ta_rows], ignore_index=True).to_csv(
@@ -652,44 +705,43 @@ def evaluate(
     # ------------------------------------------------------------------
     logger.info("Generating plots...")
 
-    # Plot 1: RR vs limit (mean over primary TAs, matching reference paper)
-    _rr_max = int(np.ceil(rr_by_limit["relative_risk"].max()))
+    # Plot 1: Mean-of-ratios line+points with 95% Katz CI ribbon
+    # rr_pooled provides the CI band only; rr_mor drives the line and points.
+    _pct1  = max(1, round(_n_pairs_total * 0.01))
+    _pct2  = max(1, round(_n_pairs_total * 0.02))
+    _max_limit_plot = 250
+    _eahgt_slug = model_display.get("p3_lambdarank", "EAHGT")
+    _rr_mor_katz = rr_mor[rr_mor["model_slug"] == _eahgt_slug].copy()
+    _rr_pooled_katz = rr_pooled[rr_pooled["model_slug"] == _eahgt_slug].copy()
+    _rr_plot_max = min(6.0, float(_rr_pooled_katz["relative_risk_high"].max()))
+    _nudge = 0.15
     _save_plot(
-        pn.ggplot(rr_by_limit, pn.aes(x="limit", y="relative_risk", color="model_slug", group="model_slug"))
-        + pn.geom_line(size=1, alpha=0.8)
+        pn.ggplot(rr_mor, pn.aes(x="limit", y="relative_risk", color="model_slug", fill="model_slug", group="model_slug"))
+        + pn.geom_ribbon(
+            data=_rr_pooled_katz,
+            mapping=pn.aes(x="limit", ymin="relative_risk_low", ymax="relative_risk_high", fill="model_slug", group="model_slug"),
+            outline_type="full", alpha=0.1, color=None,
+        )
+        + pn.geom_point(alpha=0.3, size=1)
+        + pn.geom_line(pn.aes(y="relative_risk_smooth"), size=1, alpha=0.8)
         + pn.geom_hline(yintercept=1, linetype="dashed")
+        + pn.annotate("text", x=_max_limit_plot, y=1 + _nudge, label="Random (RR=1)", size=8, ha="right")
+        + pn.annotate("segment", x=_pct1, xend=_pct1, y=0, yend=_rr_plot_max, color="grey", linetype="dotted", size=0.6)
+        + pn.annotate("text", x=_pct1, y=_rr_plot_max, label=f"Top 1%\n(n={_pct1})", size=7, ha="center", va="top", color="grey")
+        + pn.annotate("segment", x=_pct2, xend=_pct2, y=0, yend=_rr_plot_max, color="grey", linetype="dotted", size=0.6)
+        + pn.annotate("text", x=_pct2, y=_rr_plot_max, label=f"Top 2%\n(n={_pct2})", size=7, ha="center", va="top", color="grey")
         + pn.scale_color_manual(values=slug_colors)
         + pn.scale_fill_manual(values=slug_colors)
-        + pn.scale_x_continuous(breaks=np.arange(10, 101, 10).tolist())
-        + pn.scale_y_continuous(breaks=np.arange(1, _rr_max + 1, 1).tolist(),
-                                limits=(1, _rr_max))
+        + pn.scale_x_continuous(limits=(0, _max_limit_plot))
+        + pn.scale_y_continuous(limits=(0, _rr_plot_max), oob=mizani.bounds.squish)
         + pn.labs(x="N top target-disease pairs", y="relative risk", color="model", fill="model")
         + pn.theme_minimal()
-        + pn.theme(figure_size=(8, 4)),
-        plots_dir / "relative_risk_by_limit.png",
-    )
-
-    # Plot 2: Classification metrics bar chart (stratum='all' only for legacy plot)
-    cm_all = classification_metrics[classification_metrics["stratum"] == "all"].copy()
-    cm_overall = cm_all[cm_all["therapeutic_area_name"] == "all"].copy()
-    cm_overall["model_slug"] = cm_overall["models"].map(model_display)
-    cm_melt = cm_overall.melt(
-        id_vars=["model_slug"], value_vars=["roc_auc", "average_precision"],
-        var_name="metric", value_name="value"
-    )
-    _save_plot(
-        pn.ggplot(cm_melt, pn.aes(x="model_slug", y="value", fill="model_slug"))
-        + pn.geom_col(position="dodge")
-        + pn.facet_wrap("~ metric", scales="free_y", ncol=1)
-        + pn.scale_fill_manual(values=slug_colors)
-        + pn.labs(x="", y="", fill="model")
-        + pn.coord_flip()
-        + pn.theme_minimal()
-        + pn.theme(figure_size=(7, 4), legend_position="none"),
-        plots_dir / "classification_metrics_overall.png",
+        + pn.theme(figure_size=(10, 4)),
+        plots_dir / "relative_risk_by_limit_katz95.png",
     )
 
     # Plot 3: Classification metrics by primary TA (boxplot) — stratum='all' only
+    cm_all = classification_metrics[classification_metrics["stratum"] == "all"].copy()
     cm_ta = cm_all[
         cm_all["therapeutic_area_name"].isin(primary_therapeutic_areas)
     ].copy()
@@ -702,20 +754,20 @@ def evaluate(
         pn.ggplot(cm_ta_melt, pn.aes(x="model_slug", y="value", fill="model_slug"))
         + pn.geom_boxplot(outlier_size=1, alpha=0.6)
         + pn.geom_jitter(width=0.15, size=1.5, alpha=0.7)
-        + pn.facet_wrap("~ metric", scales="free_y", ncol=1)
+        + pn.facet_wrap("~ metric", scales="free_y", ncol=2)
         + pn.scale_fill_manual(values=slug_colors)
         + pn.labs(x="", y="", fill="model")
-        + pn.coord_flip()
         + pn.theme_minimal()
-        + pn.theme(figure_size=(7, 5), legend_position="none"),
+        + pn.theme(figure_size=(7, 5), legend_position="none",
+                   axis_text_x=pn.element_text(rotation=40, ha="right")),
         plots_dir / "classification_metrics_by_ta.png",
     )
 
     # Plot 4: Figure 12 — RR heatmap by model × TA (table style)
-    # Columns: {model_slug}@{N} for selected limits; rows: TAs; cell = RR (n_pairs)
-    _heatmap_limits  = [10, 50, 100]
+    # Columns: {model_slug}@{N} for selected limits; rows: TAs; cell = RR.
+    _heatmap_limits  = [10, 20, 30, 40, 50, 100]
     _heatmap_models  = [
-        m for m in ["rdg__all__positive", "ots__all", "p3_lambdarank", "rdg__no_time__positive"]
+        m for m in ["ots__all", "rdg__no_time__positive", "p3_lambdarank"]
         if m in all_model_names
     ]
 
@@ -729,26 +781,20 @@ def evaluate(
     avg_rows = (
         hm_data
         .groupby(["model_name", "model_slug", "limit"], as_index=False)
-        .agg(relative_risk=("relative_risk", "mean"), n_exposed=("n_exposed", "mean"))
+        .agg(relative_risk=("relative_risk", "mean"))
         .assign(therapeutic_area_name="average primary therapeutic area")
     )
     hm_data = pd.concat([hm_data, avg_rows], ignore_index=True)
 
-    # Pivot RR and n_exposed separately
     rr_pivot = hm_data.pivot_table(
         index="therapeutic_area_name", columns=["model_name", "limit"],
         values="relative_risk", aggfunc="first",
-    )
-    np_pivot = hm_data.pivot_table(
-        index="therapeutic_area_name", columns=["model_name", "limit"],
-        values="n_exposed", aggfunc="first",
     )
 
     # Order columns: group by model, then limit
     col_order = [(m, lim) for m in _heatmap_models for lim in _heatmap_limits
                  if (m, lim) in rr_pivot.columns]
     rr_pivot = rr_pivot[col_order]
-    np_pivot = np_pivot[col_order]
 
     # Row order: primary TAs alphabetically, then "average primary therapeutic area"
     ta_order = (
@@ -757,7 +803,6 @@ def evaluate(
         + ["average primary therapeutic area"] * ("average primary therapeutic area" in rr_pivot.index)
     )
     rr_pivot = rr_pivot.loc[ta_order]
-    np_pivot = np_pivot.loc[ta_order]
 
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
@@ -766,25 +811,42 @@ def evaluate(
     fig_h = max(5, n_rows * 0.45 + 1.5)
     fig_w = max(6, n_cols * 1.2 + 2.5)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    fig.patch.set_facecolor("white")
     ax.set_aspect("auto")
 
-    cmap  = plt.get_cmap("RdYlGn")
-    vmin, vmax = 0.5, rr_pivot.values[~np.isnan(rr_pivot.values)].max() if rr_pivot.notna().any().any() else 3.0
-    norm  = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    # Per-model colormap (white -> line-plot color) with per-model RR normalization.
+    # No legend — intensity is visual only.
+    per_model_cmaps = {
+        m: mcolors.LinearSegmentedColormap.from_list(
+            f"cmap_{m}", ["#ffffff", color_map[m]]
+        )
+        for m in _heatmap_models
+    }
+    per_model_norms = {}
+    for m in _heatmap_models:
+        m_cols = [(mm, lim) for (mm, lim) in rr_pivot.columns if mm == m]
+        m_vals = rr_pivot[m_cols].values if m_cols else np.array([])
+        m_vals = m_vals[~np.isnan(m_vals)] if m_vals.size else m_vals
+        if m_vals.size:
+            vmin_m = float(np.nanmin(m_vals))
+            vmax_m = float(np.nanmax(m_vals))
+            if vmax_m <= vmin_m:
+                vmax_m = vmin_m + 1e-6
+        else:
+            vmin_m, vmax_m = 0.0, 1.0
+        per_model_norms[m] = mcolors.Normalize(vmin=vmin_m, vmax=vmax_m)
 
     for row_i, ta in enumerate(ta_order):
         for col_i, (model_name, limit) in enumerate(col_order):
             rr_val = rr_pivot.loc[ta, (model_name, limit)] if (model_name, limit) in rr_pivot.columns else np.nan
-            np_val = np_pivot.loc[ta, (model_name, limit)] if (model_name, limit) in np_pivot.columns else np.nan
-            color  = cmap(norm(rr_val)) if pd.notna(rr_val) else (0.85, 0.85, 0.85, 1)
+            cmap_m = per_model_cmaps[model_name]
+            norm_m = per_model_norms[model_name]
+            color  = cmap_m(norm_m(rr_val)) if pd.notna(rr_val) else (0.85, 0.85, 0.85, 1)
             rect   = plt.Rectangle([col_i, row_i], 1, 1, color=color)
             ax.add_patch(rect)
             if pd.notna(rr_val):
-                ax.text(col_i + 0.5, row_i + 0.62, f"{rr_val:.2f}",
+                ax.text(col_i + 0.5, row_i + 0.5, f"{rr_val:.2f}",
                         ha="center", va="center", fontsize=8, fontweight="bold")
-                if pd.notna(np_val):
-                    ax.text(col_i + 0.5, row_i + 0.28, f"n={int(np_val)}",
-                            ha="center", va="center", fontsize=6.5, color="#333333")
 
     # Axis labels
     ax.set_xlim(0, n_cols)
@@ -792,7 +854,7 @@ def evaluate(
     ax.set_xticks([i + 0.5 for i in range(n_cols)])
     ax.set_xticklabels(
         [f"{model_display.get(m, m)}@{lim}" for m, lim in col_order],
-        rotation=35, ha="right", fontsize=9,
+        rotation=0, ha="center", fontsize=9,
     )
     ax.set_yticks([i + 0.5 for i in range(n_rows)])
     ax.set_yticklabels(ta_order, fontsize=9)
@@ -809,15 +871,15 @@ def evaluate(
         sep_row = ta_order.index("average primary therapeutic area")
         ax.axhline(sep_row, color="white", linewidth=2)
 
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    plt.colorbar(sm, ax=ax, shrink=0.6, label="Relative risk")
-    ax.set_title("Relative risk by method and therapeutic area", pad=30, fontsize=11)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_title("", pad=0)
     fig.tight_layout()
 
     out_path = plots_dir / "relative_risk_by_ta_heatmap.png"
     logger.info(f"Saving plot to {out_path}")
-    fig.savefig(str(out_path), dpi=150, bbox_inches="tight", facecolor="white")
+    fig.savefig(str(out_path), dpi=300, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
     # Plot 6: RR delta vs RDG heatmap (green = better than RDG, red = worse)
@@ -838,6 +900,7 @@ def evaluate(
             fig_h_d = max(5, n_rows_d * 0.45 + 1.5)
             fig_w_d = max(6, n_cols_d * 1.2 + 2.5)
             fig_d, ax_d = plt.subplots(figsize=(fig_w_d, fig_h_d))
+            fig_d.patch.set_facecolor("white")
             ax_d.set_aspect("auto")
 
             delta_vals = delta_pivot.values[~np.isnan(delta_pivot.values)]
@@ -865,7 +928,7 @@ def evaluate(
             ax_d.set_xticks([i + 0.5 for i in range(n_cols_d)])
             ax_d.set_xticklabels(
                 [f"{model_display.get(m, m)}@{lim}" for m, lim in delta_cols],
-                rotation=35, ha="right", fontsize=9,
+                rotation=0, ha="center", fontsize=9,
             )
             ax_d.set_yticks([i + 0.5 for i in range(n_rows_d)])
             ax_d.set_yticklabels(ta_order, fontsize=9)
@@ -880,75 +943,64 @@ def evaluate(
                 sep_row = ta_order.index("average primary therapeutic area")
                 ax_d.axhline(sep_row, color="white", linewidth=2)
 
+            for spine in ax_d.spines.values():
+                spine.set_visible(False)
+
             sm_d = plt.cm.ScalarMappable(cmap=cmap_d, norm=norm_d)
             sm_d.set_array([])
             plt.colorbar(sm_d, ax=ax_d, shrink=0.6, label="RR delta vs RDG")
-            ax_d.set_title("Relative risk vs RDG (green = better, red = worse)", pad=30, fontsize=11)
+            ax_d.set_title("", pad=0)
             fig_d.tight_layout()
 
             out_path_d = plots_dir / "relative_risk_delta_vs_rdg.png"
             logger.info(f"Saving plot to {out_path_d}")
-            fig_d.savefig(str(out_path_d), dpi=150, bbox_inches="tight", facecolor="white")
+            fig_d.savefig(str(out_path_d), dpi=300, bbox_inches="tight", facecolor="white")
             plt.close(fig_d)
 
-    # Plot 5: Figure 11 — one subplot per RR@N, dots+boxplot per model, p-value per subplot
+    # Plot 5: RR distributions across primary TAs — boxplot + jitter per model, faceted by limit
     _dist_limits = [10, 20, 50, 100]
+    p3_slug  = model_display.get("p3_lambdarank", "EAHGT")
     rdg_slug = model_display.get("rdg__no_time__positive", "RDG")
-    ots_slug = model_display.get("ots__all", "OTS")
     model_order = [model_display.get(m, m) for m in all_model_names]
-    rng = np.random.default_rng(42)
 
-    n_subplots = len(_dist_limits)
-    fig, axes = plt.subplots(1, n_subplots, figsize=(4 * n_subplots, 5), sharey=True)
-    if n_subplots == 1:
-        axes = [axes]
+    rr_dist_df = rr_by_ta_primary[rr_by_ta_primary["limit"].isin(_dist_limits)].copy()
+    rr_dist_df["model_slug"] = pd.Categorical(rr_dist_df["model_slug"], categories=model_order, ordered=True)
 
-    for ax, limit in zip(axes, _dist_limits):
-        grp = rr_by_ta_primary[rr_by_ta_primary["limit"] == limit].copy()
-        valid_slugs = [s for s in model_order if s in grp["model_slug"].values]
-
-        box_data = [grp[grp["model_slug"] == s]["relative_risk"].dropna().values for s in valid_slugs]
-        bp = ax.boxplot(box_data, positions=range(len(valid_slugs)), widths=0.5,
-                        patch_artist=True, zorder=2, showfliers=False)
-        for patch, slug in zip(bp["boxes"], valid_slugs):
-            patch.set_facecolor(slug_colors.get(slug, "#aaaaaa"))
-            patch.set_alpha(0.4)
-        for element in ["whiskers", "caps", "medians"]:
-            for line in bp[element]:
-                line.set_color("black")
-                line.set_linewidth(0.8)
-
-        for i, slug in enumerate(valid_slugs):
-            vals = grp[grp["model_slug"] == slug]["relative_risk"].dropna().values
-            jitter = rng.uniform(-0.15, 0.15, size=len(vals))
-            ax.scatter(i + jitter, vals, color=slug_colors.get(slug, "#aaaaaa"),
-                       s=25, zorder=3, alpha=0.85)
-
-        ax.axhline(1, linestyle="--", color="grey", linewidth=0.8)
-        ax.set_xticks(range(len(valid_slugs)))
-        ax.set_xticklabels(valid_slugs, rotation=35, ha="right", fontsize=8)
-        ax.set_title(f"RR@{limit}", fontsize=10)
-        if ax is axes[0]:
-            ax.set_ylabel("Relative risk")
-
-        # Wilcoxon p-value (p3 > RDG) for this limit
-        p3_slug = model_display.get("p3_lambdarank", "p3_lambdarank")
+    # Compute Wilcoxon p-values per limit — embed in facet label
+    limit_label_order = []
+    for limit in _dist_limits:
+        grp = rr_by_ta_primary[rr_by_ta_primary["limit"] == limit]
         p3_v  = grp[grp["model_slug"] == p3_slug].set_index("therapeutic_area_name")["relative_risk"]
         rdg_v = grp[grp["model_slug"] == rdg_slug].set_index("therapeutic_area_name")["relative_risk"]
         paired = pd.concat([p3_v, rdg_v], axis=1, keys=["p3", "rdg"]).dropna()
         if len(paired) >= 3 and (paired["p3"] - paired["rdg"]).abs().sum() > 0:
             _, pval = wilcoxon(paired["p3"], paired["rdg"], alternative="greater")
             pval_str = f"p={pval:.3f}" if pval >= 0.001 else f"p={pval:.2e}"
-            ax.text(0.5, -0.28, f"Wilcoxon {pval_str}\n(p3 > RDG)",
-                    ha="center", va="top", transform=ax.transAxes, fontsize=7.5, color="#333333")
+            label = f"N={limit} (Wilcoxon {pval_str})"
+        else:
+            label = f"N={limit}"
+        limit_label_order.append(label)
 
-    fig.suptitle("Relative risk distributions across select therapeutic areas", fontsize=11, y=1.02)
-    fig.tight_layout()
+    rr_dist_df["limit_label"] = rr_dist_df["limit"].map(dict(zip(_dist_limits, limit_label_order)))
+    rr_dist_df["limit_label"] = pd.Categorical(rr_dist_df["limit_label"], categories=limit_label_order, ordered=True)
 
-    out_path = plots_dir / "rr_distributions_ta.png"
-    logger.info(f"Saving plot to {out_path}")
-    fig.savefig(str(out_path), dpi=150, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
+    _save_plot(
+        pn.ggplot(rr_dist_df, pn.aes(x="model_slug", y="relative_risk", fill="model_slug"))
+        + pn.geom_boxplot(outlier_size=0, alpha=0.5, width=0.5)
+        + pn.geom_jitter(pn.aes(color="model_slug"), width=0.15, size=1.5, alpha=0.85)
+        + pn.geom_hline(yintercept=1, linetype="dashed", color="grey")
+        + pn.facet_wrap("~ limit_label", nrow=1, scales="free_y")
+        + pn.scale_fill_manual(values=slug_colors)
+        + pn.scale_color_manual(values=slug_colors)
+        + pn.labs(x="", y="relative risk")
+        + pn.theme_minimal()
+        + pn.theme(
+            figure_size=(4 * len(_dist_limits), 5),
+            legend_position="none",
+            axis_text_x=pn.element_text(rotation=35, ha="right"),
+        ),
+        plots_dir / "rr_distributions_ta.png",
+    )
 
     # ------------------------------------------------------------------
     # Stratified plots (novelty × evidence sparsity)
@@ -956,116 +1008,85 @@ def evaluate(
     _stratum_order = [
         "all", "pioneer", "known",
         "evidence_free", "literature_only", "direct_evidence",
-        "pioneer__evidence_free", "pioneer__literature_only", "pioneer__direct_evidence",
-        "known__evidence_free",   "known__literature_only",   "known__direct_evidence",
     ]
+    _stratum_n = {
+        s: (len(strata_test) if pair_strata[s] is None else len(pair_strata[s]))
+        for s in _stratum_order
+    }
+    _stratum_display = {
+        "all":             "All test pairs",
+        "pioneer":         "Target entering Phase 2 for the first time across any disease",
+        "known":           "Target has reached Phase 2 in another disease context",
+        "evidence_free":   "No prior target–disease evidence",
+        "literature_only": "Prior text-mining evidence only",
+        "direct_evidence": "Prior experimental evidence",
+    }
+    _stratum_label = {
+        s: "\n".join(textwrap.wrap(f"{_stratum_display[s]} (n={_stratum_n[s]})", width=30))
+        for s in _stratum_order
+    }
+    _stratum_label_order = [_stratum_label[s] for s in _stratum_order]
 
-    # Stratified classification metrics bar chart (TA == 'all' rows only)
-    cm_strat = classification_metrics[classification_metrics["therapeutic_area_name"] == "all"].copy()
+    # Stratified classification metrics boxplot across primary TAs (stratum × TA)
+    cm_strat = classification_metrics[
+        classification_metrics["therapeutic_area_name"].isin(primary_therapeutic_areas)
+        & classification_metrics["stratum"].isin(_stratum_order)
+    ].copy()
     cm_strat["model_slug"] = cm_strat["models"].map(model_display)
-    cm_strat["stratum"] = pd.Categorical(cm_strat["stratum"], categories=_stratum_order, ordered=True)
+    cm_strat["stratum_label"] = cm_strat["stratum"].map(_stratum_label)
+    cm_strat["stratum_label"] = pd.Categorical(
+        cm_strat["stratum_label"], categories=_stratum_label_order, ordered=True
+    )
     cm_strat_melt = cm_strat.melt(
-        id_vars=["model_slug", "stratum"], value_vars=["roc_auc", "average_precision"],
+        id_vars=["model_slug", "stratum_label", "therapeutic_area_name"],
+        value_vars=["roc_auc", "average_precision"],
         var_name="metric", value_name="value",
     )
     _save_plot(
-        pn.ggplot(cm_strat_melt, pn.aes(x="stratum", y="value", fill="model_slug"))
-        + pn.geom_col(position="dodge")
-        + pn.facet_wrap("~ metric", ncol=1, scales="free_y")
+        pn.ggplot(cm_strat_melt, pn.aes(x="model_slug", y="value", fill="model_slug"))
+        + pn.geom_boxplot(outlier_size=1, alpha=0.6)
+        + pn.geom_jitter(width=0.15, size=1.2, alpha=0.7)
+        + pn.facet_grid("metric ~ stratum_label", scales="free_y")
         + pn.scale_fill_manual(values=slug_colors)
         + pn.labs(x="", y="", fill="model")
         + pn.theme_minimal()
-        + pn.theme(figure_size=(10, 6), axis_text_x=pn.element_text(rotation=40, ha="right")),
-        plots_dir / "classification_metrics_by_stratum.png",
+        + pn.theme(figure_size=(14, 7),
+                   axis_text_x=pn.element_text(rotation=40, ha="right"),
+                   legend_position="none"),
+        plots_dir / "classification_metrics_by_stratum_by_ta.png",
     )
 
-    # Stratified RR-by-limit line chart (mean over primary TAs per stratum)
-    rr_strat = rr_by_limit_full.copy()
-    rr_strat["stratum"] = pd.Categorical(rr_strat["stratum"], categories=_stratum_order, ordered=True)
+    # Stratified RR-by-limit line chart
+    rr_strat = rr_by_limit_full[rr_by_limit_full["stratum"].isin(_stratum_order)].copy()
+    rr_strat["stratum_label"] = rr_strat["stratum"].map(_stratum_label)
+    rr_strat["stratum_label"] = pd.Categorical(
+        rr_strat["stratum_label"], categories=_stratum_label_order, ordered=True
+    )
     _save_plot(
         pn.ggplot(rr_strat, pn.aes(x="limit", y="relative_risk", color="model_slug", group="model_slug"))
         + pn.geom_line(size=0.9, alpha=0.85)
+        + pn.geom_point(size=1.5, alpha=0.85)
         + pn.geom_hline(yintercept=1, linetype="dashed")
-        + pn.facet_wrap("~ stratum", ncol=3, scales="free_y")
+        + pn.facet_wrap("~ stratum_label", ncol=3, scales="free_y")
         + pn.scale_color_manual(values=slug_colors)
         + pn.scale_x_continuous(breaks=np.arange(10, 101, 20).tolist())
+        + pn.scale_y_continuous(limits=(0, None))
         + pn.labs(x="N top target-disease pairs", y="relative risk", color="model")
         + pn.theme_minimal()
-        + pn.theme(figure_size=(13, 10)),
+        + pn.theme(figure_size=(13, 7)),
         plots_dir / "relative_risk_by_limit_by_stratum.png",
     )
 
-    # 2×3 risk matrix heatmap: ROC-AUC for a focal model (prefer p3_lambdarank)
     focal_model = next(
         (m for m in ["p3_lambdarank", *external_model_names] if m in all_model_names),
         all_model_names[-1] if all_model_names else None,
     )
-    if focal_model is not None:
-        cell_rows = ["pioneer", "known"]
-        cell_cols = ["evidence_free", "literature_only", "direct_evidence"]
-        auc_mat = np.full((2, 3), np.nan)
-        n_mat   = np.zeros((2, 3), dtype=int)
-
-        # n per cell from strata_test
-        for i, nov in enumerate(cell_rows):
-            for j, ev in enumerate(cell_cols):
-                sub = strata_test[
-                    (strata_test["novelty_stratum"] == nov)
-                    & (strata_test["evidence_stratum"] == ev)
-                ]
-                n_mat[i, j] = len(sub)
-
-        # ROC-AUC per cell from classification_metrics (TA=='all', focal model)
-        cm_focal = classification_metrics[
-            (classification_metrics["models"] == focal_model)
-            & (classification_metrics["therapeutic_area_name"] == "all")
-        ].set_index("stratum")
-        for i, nov in enumerate(cell_rows):
-            for j, ev in enumerate(cell_cols):
-                key = f"{nov}__{ev}"
-                if key in cm_focal.index:
-                    auc_mat[i, j] = cm_focal.loc[key, "roc_auc"]
-
-        fig_rm, ax_rm = plt.subplots(figsize=(7, 3.5))
-        cmap_rm = plt.get_cmap("RdYlGn")
-        finite = auc_mat[np.isfinite(auc_mat)]
-        vmin = float(finite.min()) if finite.size else 0.5
-        vmax = float(finite.max()) if finite.size else 1.0
-        if vmin == vmax:
-            vmin, vmax = vmin - 0.01, vmax + 0.01
-        norm_rm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-        for i in range(2):
-            for j in range(3):
-                auc_val = auc_mat[i, j]
-                color = cmap_rm(norm_rm(auc_val)) if np.isfinite(auc_val) else (0.85, 0.85, 0.85, 1)
-                ax_rm.add_patch(plt.Rectangle([j, i], 1, 1, color=color))
-                label = f"AUC={auc_val:.3f}" if np.isfinite(auc_val) else "—"
-                ax_rm.text(j + 0.5, i + 0.62, label, ha="center", va="center",
-                           fontsize=10, fontweight="bold")
-                ax_rm.text(j + 0.5, i + 0.30, f"n={n_mat[i, j]}", ha="center", va="center",
-                           fontsize=8.5, color="#222222")
-        ax_rm.set_xlim(0, 3)
-        ax_rm.set_ylim(0, 2)
-        ax_rm.set_xticks([0.5, 1.5, 2.5])
-        ax_rm.set_xticklabels(cell_cols, fontsize=10)
-        ax_rm.set_yticks([0.5, 1.5])
-        ax_rm.set_yticklabels(cell_rows, fontsize=10)
-        ax_rm.invert_yaxis()
-        ax_rm.xaxis.tick_top()
-        ax_rm.tick_params(length=0)
-        ax_rm.set_title(f"Risk matrix — ROC-AUC ({model_display.get(focal_model, focal_model)})",
-                        pad=25, fontsize=11)
-        fig_rm.tight_layout()
-        rm_path = plots_dir / "risk_matrix_heatmap.png"
-        logger.info(f"Saving plot to {rm_path}")
-        fig_rm.savefig(str(rm_path), dpi=150, bbox_inches="tight", facecolor="white")
-        plt.close(fig_rm)
 
     # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     logger.info(f"\nAll results saved to {results_dir}")
-    overall = cm_overall.set_index("models")[["roc_auc", "average_precision"]].sort_values("roc_auc", ascending=False)
+    overall = cm_all[cm_all["therapeutic_area_name"] == "all"].set_index("models")[["roc_auc", "average_precision"]].sort_values("roc_auc", ascending=False)
     print("\n=== Classification Metrics (overall) ===")
     print(overall.round(4).to_string())
     rr50 = rr_by_limit[rr_by_limit["limit"] == 50][["model_name", "relative_risk"]].sort_values("relative_risk", ascending=False)
@@ -1084,10 +1105,6 @@ def evaluate(
         )
         print(f"\n=== ROC-AUC by stratum ({model_display.get(focal_model, focal_model)}) ===")
         print(strat_auc.round(4).to_string())
-
-        risk_df = pd.DataFrame(auc_mat, index=cell_rows, columns=cell_cols)
-        print(f"\n=== Risk matrix (ROC-AUC, {model_display.get(focal_model, focal_model)}) ===")
-        print(risk_df.round(4).to_string())
 
 
 if __name__ == "__main__":
