@@ -52,3 +52,34 @@ datatypes:
     label: "Animal model"
     datasources:
       impc: 0.2
+
+
+  clinical_trial_positive:
+    label: "Clinical trial - positive outcome"
+    datasources:
+      chembl: 1.0
+
+  clinical_trial_adverse_effects:
+    label: "Clinical trial - adverse effects"
+    datasources:
+      chembl: 1.0
+
+  clinical_trial_unmet_efficacy:
+    label: "Clinical trial - unmet efficacy"
+    datasources:
+      chembl: 1.0
+
+  clinical_trial_unknown_operational:
+    label: "Clinical trial - unknown/operational"
+    datasources:
+      chembl: 1.0
+
+  protein_interaction:
+    label: "Protein interaction"
+    datasources:
+      intact: 1.0
+
+  gene_ontology:
+    label: "Gene ontology"
+    datasources:
+      gene_ontology: 1.0

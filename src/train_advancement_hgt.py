@@ -170,7 +170,7 @@ def run_epoch(model, loader, optimizer, device, train=True, edge_feat_cols=(0, 1
                 },
             )
             labels = batch[ADV_ETYPE].edge_label.float()
-            logits = out["logits_exist"].squeeze(-1)
+            logits = out
             pw = pos_weight.to(device) if pos_weight is not None else None
             if focal_gamma is not None:
                 loss = focal_loss(logits, labels, pos_weight=pw, gamma=focal_gamma)
@@ -319,7 +319,7 @@ def evaluate(model, loader, device, edge_feat_cols=(0, 1), pos_weight=None, foca
                 and batch[et].edge_attr is not None
             },
         )
-        all_logits.append(out["logits_exist"].squeeze(-1).cpu())
+        all_logits.append(out.cpu())
         all_labels.append(batch[ADV_ETYPE].edge_label.cpu())
 
     logits_t = torch.cat(all_logits)
@@ -375,8 +375,9 @@ def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighb
                 if et != ADV_ETYPE and hasattr(batch[et], 'edge_attr')
                 and batch[et].edge_attr is not None
             },
+            edge_label_time=getattr(batch[ADV_ETYPE], "edge_label_time", None),
         )
-        all_logits.append(out["logits_exist"].squeeze(-1).cpu())
+        all_logits.append(out.cpu())
         all_labels.append(batch[ADV_ETYPE].edge_label.cpu())
 
     logits = torch.cat(all_logits).numpy()

@@ -12,7 +12,8 @@ import torch.nn.functional as F
 from .hgt_conv_rte import HGTConv
 from torch_geometric.nn import Linear
 from typing import Dict, List, Tuple, Optional
-from .decoder import DualHeadDecoder
+from .decoder import Decoder
+from .time_encoder import TimeEncoder
 
 
 class HGT(nn.Module):
@@ -160,6 +161,10 @@ class HGTLinkPredictor(nn.Module):
         use_rte: bool = False,
         use_edge_features: bool = False,
         edge_feat_dim: int = 2,
+        use_recency: bool = False,
+        time_dim: int = 0,
+        t_min: float = 0.0,
+        t_max: float = 1.0,
     ):
         """
         Initialize link predictor.
@@ -171,6 +176,9 @@ class HGTLinkPredictor(nn.Module):
             use_rte: Enable Relative Temporal Encoding
             use_edge_features: Enable stored edge feature injection into attention
             edge_feat_dim: Dimension of stored edge features
+            use_recency: Condition the scoring head on the per-pair entry year
+            time_dim: Width of the time embedding passed to the decoder
+            t_min, t_max: Year range used to normalise t_entry (train-set bounds)
         """
         super().__init__()
 
@@ -187,9 +195,17 @@ class HGTLinkPredictor(nn.Module):
             use_edge_features=use_edge_features,
             edge_feat_dim=edge_feat_dim,
         )
-        
-        # Decoder input dim must match encoder output (hidden_dim)
-        self.decoder = DualHeadDecoder(hidden_dim)
+
+        self.use_recency = use_recency
+        if use_recency:
+            assert time_dim > 0, "time_dim must be > 0 when use_recency=True"
+            self.time_encoder = TimeEncoder(time_dim, t_min, t_max)
+            decoder_time_dim = time_dim
+        else:
+            self.time_encoder = None
+            decoder_time_dim = 0
+
+        self.decoder = Decoder(hidden_dim, time_dim=decoder_time_dim)
     
     def encode(
         self,
@@ -216,19 +232,21 @@ class HGTLinkPredictor(nn.Module):
         self,
         z_src: torch.Tensor,
         z_dst: torch.Tensor,
+        t_emb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Decode link scores using DualHeadDecoder.
-        
+        Decode link scores.
+
         Args:
             z_src: Source node embeddings [num_edges, hidden_dim]
             z_dst: Destination node embeddings [num_edges, hidden_dim]
-            
+            t_emb: Optional time embedding [num_edges, time_dim]
+
         Returns:
-            Dict containing 'logits_exist' and 'logits_prob'
+            Ranking logits [num_edges]
         """
-        return self.decoder(z_src, z_dst)
-    
+        return self.decoder(z_src, z_dst, t_emb=t_emb)
+
     def forward(
         self,
         x_dict: Dict[str, torch.Tensor],
@@ -238,6 +256,7 @@ class HGTLinkPredictor(nn.Module):
         dst_type: str,
         edge_time_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
         edge_feat_dict: Optional[Dict[Tuple[str, str, str], torch.Tensor]] = None,
+        edge_label_time: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for link prediction.
@@ -252,14 +271,20 @@ class HGTLinkPredictor(nn.Module):
             edge_feat_dict: Optional stored edge features per edge type
 
         Returns:
-            Dict with 'logits_exist' and 'logits_prob'
+            Ranking logits [num_edges]
         """
         # Encode all nodes
         z_dict = self.encode(x_dict, edge_index_dict, edge_time_dict, edge_feat_dict)
-        
+
         # Get embeddings for edges to predict
         z_src = z_dict[src_type][edge_label_index[0]]
         z_dst = z_dict[dst_type][edge_label_index[1]]
-        
-        # Decode link scores
-        return self.decode(z_src, z_dst)
+
+        t_emb = None
+        if self.use_recency:
+            assert edge_label_time is not None, (
+                "edge_label_time must be provided when use_recency=True"
+            )
+            t_emb = self.time_encoder(edge_label_time)
+
+        return self.decode(z_src, z_dst, t_emb=t_emb)

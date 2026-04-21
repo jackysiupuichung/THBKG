@@ -60,9 +60,10 @@ def run_epoch_lambdarank(model, loader, optimizer, device, edge_feat_cols, sigma
                     if et != ADV_ETYPE and hasattr(batch[et], 'edge_attr')
                     and batch[et].edge_attr is not None
                 },
+                edge_label_time=getattr(batch[ADV_ETYPE], "edge_label_time", None),
             )
             labels = batch[ADV_ETYPE].edge_label.float()
-            logits = out["logits_exist"].squeeze(-1)
+            logits = out
             loss = lambdarank_loss(logits, labels, sigma=sigma, k=ndcg_k)
 
             if train:
@@ -98,8 +99,9 @@ def evaluate_lambdarank(model, loader, device, edge_feat_cols, sigma, ndcg_k):
                 if et != ADV_ETYPE and hasattr(batch[et], 'edge_attr')
                 and batch[et].edge_attr is not None
             },
+            edge_label_time=getattr(batch[ADV_ETYPE], "edge_label_time", None),
         )
-        all_logits.append(out["logits_exist"].squeeze(-1).cpu())
+        all_logits.append(out.cpu())
         all_labels.append(batch[ADV_ETYPE].edge_label.cpu())
 
     logits_t = torch.cat(all_logits)
@@ -182,6 +184,16 @@ def main(cfg):
     print("Building context graph...")
     context = build_context_graph(data)
 
+    use_recency = bool(cfg.model.get("use_recency", False))
+    time_dim = int(cfg.model.get("time_dim", 0))
+    if use_recency:
+        train_times = edge_time[train_mask].float()
+        t_min_val = float(train_times.min().item())
+        t_max_val = float(train_times.max().item())
+        print(f"Recency encoder: time_dim={time_dim}, t_min={t_min_val}, t_max={t_max_val}")
+    else:
+        t_min_val, t_max_val = 0.0, 1.0
+
     model = build_model(
         model_name=cfg.model.name,
         data=context,
@@ -193,6 +205,10 @@ def main(cfg):
         use_rte=cfg.model.get("use_rte", False),
         use_edge_features=cfg.model.get("use_edge_features", False),
         edge_feat_dim=cfg.model.get("edge_feat_dim", 2),
+        use_recency=use_recency,
+        time_dim=time_dim,
+        t_min=t_min_val,
+        t_max=t_max_val,
     ).to(device)
     print(f"Model: {cfg.model.name}")
 

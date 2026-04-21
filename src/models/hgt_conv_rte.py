@@ -186,9 +186,6 @@ class HGTConv(MessagePassing):
     ) -> None:
         """Helper function to validate inputs for temporal encoding."""
         if not self.use_RTE and edge_time_diff_dict is not None:
-            warnings.warn(
-                "'use_RTE' is False, but 'edge_time_diff_dict' was provided. "
-                "The temporal data will be ignored.", stacklevel=2)
             return
 
         if self.use_RTE:

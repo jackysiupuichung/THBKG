@@ -2,27 +2,60 @@ experiment:
   name: p3_eahgt_both
 
 data:
-  graph_file: output/graph/hetero_graph_with_features.pt
-  mappings_file: output/graph/temporal_graph_mappings.pt
+  graph_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/graph/hetero_graph_with_features_datatype.pt
+  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_datatype_mappings.pt
 
 model:
   name: hgt
-  hidden_dim: 64
-  num_heads: 4
+  hidden_dim: 32
+  num_heads: 1
   num_layers: 2
-  dropout: 0.1
-  use_rte: true
+  dropout: 0.2
+  use_rte: false
   use_edge_features: true
   edge_feat_cols: [0, 1]
   edge_feat_dim: 2
 
 train:
-  output_dir: runs/p3_eahgt_both
+  output_dir: /gpfs/scratch/bty414/opentarget_evidences/23.06/runs/p3_eahgt_both_tuned
   num_epochs: 50
-  lr: 0.001
-  weight_decay: 0.0001
+  lr: 0.0002880497839949814
+  weight_decay: 2.141361368779832e-05
+  eta_min: 1.0e-6
   batch_size: 512
-  num_neighbors: [20, 10]
+  num_neighbors: [30, 20]
+  focal_gamma: 2.0
   early_stopping:
     enabled: true
     patience: 10
+
+tune:
+  study_name: p3_eahgt_both_tune
+  n_trials: 50
+  n_jobs: 1
+  timeout: null          # seconds; null = no wall-clock limit
+  pruner: median         # median | hyperband | none
+  storage: null          # e.g. sqlite:///optuna.db; null = in-memory (not resumable)
+
+  search_space:
+    # Lists → suggest_categorical.  Dicts with low/high → suggest_float/int.
+    # The config's own values must appear in each list / range so Optuna
+    # can confirm or improve upon the baseline.
+
+    # model
+    hidden_dim:       [32, 64, 128]               # dropped 128 — OOMs with depth≥2 + large batch
+    num_heads:        [1, 2, 4]                 # 8 heads + hidden_dim=64 gives 8-dim/head, rarely useful
+    num_layers:       {low: 1, high: 2}      # depth≥3 OOMs with larger hidden; best trials used 2–3 layers
+    dropout:          {low: 0.0, high: 0.3, step: 0.05}  # baseline: 0.1
+
+    # optimiser
+    lr:               {low: 5.0e-5, high: 1.0e-3, log: true}   # baseline: 0.001; HGT unstable above 1e-3
+    weight_decay:     {low: 1.0e-6, high: 1.0e-3, log: true}   # baseline: 0.0001
+
+    # data loading
+    batch_size:       [256, 512]             # 1024 OOMs with any config that has depth≥3
+    num_neighbors_0:  [10, 20, 30]           # baseline: 20
+    num_neighbors_1:  [5, 10, 20]            # baseline: 10
+
+    # loss — focal_gamma showed no consistent benefit; narrow to avoid wasting trials
+    focal_gamma:      [null, 2.0]            # null=BCE (strong baseline), 2.0=original

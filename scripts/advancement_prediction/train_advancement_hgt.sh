@@ -18,12 +18,13 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="/data/home/bty414/opentarget_temporal_study/src/opentarget_het_graph"
 cd "$REPO_ROOT"
 
+source .venv/bin/activate
+
 CONFIG="config/experiments/advancement_hgt.yaml"
-WANDB_MODE_VAL="disabled"
+WANDB_MODE_VAL="online"
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do

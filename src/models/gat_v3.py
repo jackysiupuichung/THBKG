@@ -8,7 +8,7 @@ from torch_geometric.nn.inits import glorot, zeros
 from torch_geometric.utils import softmax
 from torch_geometric.nn import Linear
 from typing import Dict, List, Optional, Union
-from .decoder import DualHeadDecoder
+from .decoder import Decoder
 
 class GATv3Conv(MessagePassing):
     """
@@ -231,28 +231,34 @@ class GATv3(nn.Module):
     def __init__(self, hidden_dim, out_dim, num_heads, num_layers=2, metadata=None, dropout=0.1):
         super().__init__()
         self.node_types, self.edge_types = metadata
-        
+
+        # Per-node-type input projection (like HGT)
+        self.lin_dict = nn.ModuleDict({
+            nt: Linear(-1, hidden_dim) for nt in self.node_types
+        })
+
         self.convs = nn.ModuleList()
+        self.norms = nn.ModuleList()
         for _ in range(num_layers):
-            # Create a GATv3Conv for each edge type
             conv_dict = {
                 str(edge_type): GATv3Conv(
-                    -1, 
-                    hidden_dim, 
-                    heads=num_heads, 
-                    dropout=dropout, 
-                    add_self_loops=False, 
-                    bias=True # GATv3 has bias
+                    -1,
+                    hidden_dim,
+                    heads=num_heads,
+                    dropout=dropout,
+                    add_self_loops=False,
+                    bias=True
                 )
                 for edge_type in self.edge_types
             }
-            # Wrap in GATv3HeteroConv
-            # Note: GATv3HeteroConv learns separate alpha^e for each edge type
             conv = GATv3HeteroConv(conv_dict, aggr='sum')
             self.convs.append(conv)
-            
+            self.norms.append(nn.ModuleDict({
+                nt: nn.LayerNorm(hidden_dim * num_heads) for nt in self.node_types
+            }))
+
         self.lin = Linear(-1, out_dim)
-        self.decoder = DualHeadDecoder(out_dim)
+        self.decoder = Decoder(out_dim)
 
     def forward(
         self, 
@@ -274,11 +280,14 @@ class GATv3(nn.Module):
         return x_dict
 
     def encode(self, x_dict, edge_index_dict):
-        for conv in self.convs:
+        # Project each node type to hidden_dim
+        x_dict = {nt: self.lin_dict[nt](x).relu() for nt, x in x_dict.items() if nt in self.lin_dict}
+
+        for i, conv in enumerate(self.convs):
             x_dict = conv(x_dict, edge_index_dict)
-            x_dict = {key: F.relu(x) for key, x in x_dict.items()}
-        
-        # Final projection 
+            x_dict = {nt: torch.nan_to_num(self.norms[i][nt](x.relu())) for nt, x in x_dict.items() if nt in self.norms[i]}
+
+        # Final projection
         x_dict = {key: self.lin(x) for key, x in x_dict.items()}
         return x_dict
 
@@ -292,7 +301,6 @@ class GATv3(nn.Module):
             return self.decoder(emb_src, emb_dst)
         else:
             # Full pairwise matrix product
-            # Not supported by DualHeadDecoder efficiently yet for all pairs
-            raise NotImplementedError("Full matrix decoding not yet implemented for DualHeadDecoder")
+            raise NotImplementedError("Full matrix decoding not yet implemented for GATv3")
 
 

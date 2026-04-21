@@ -2,7 +2,7 @@ experiment:
   name: advancement_hgt
 
 data:
-  graph_file: output/graph/hetero_graph_with_features.pt
+  graph_file: output/graph/hetero_graph_with_advancement.pt
   mappings_file: output/graph/temporal_graph_mappings.pt
 
 model:
@@ -23,6 +23,7 @@ train:
   weight_decay: 0.0001
   batch_size: 512
   num_neighbors: [20, 10]
+  focal_gamma: 2.0  # set to null to disable focal loss and use plain BCE
   early_stopping:
     enabled: true
-    patience: 10
+    patience: 5

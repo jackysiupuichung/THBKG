@@ -32,13 +32,6 @@ def harmonic_sum(scores, max_harmonic=1.644):
     return np.sum(s / (idx ** 2)) / max_harmonic
 
 
-def max_score(scores):
-    """Return the maximum score."""
-    if len(scores) == 0:
-        return 0.0
-    return np.max(scores)
-
-
 # Novelty decay parameters (Open Targets paper values)
 NOVELTY_SCALE = 2.0   # logistic steepness k
 NOVELTY_SHIFT = 3.0   # sigmoid midpoint m
@@ -59,7 +52,6 @@ def compute_novelty_series(year_scores: np.ndarray,
 
     Args:
         year_scores: 1-D array of cumulative scores, one per year in `years`
-        years:       1-D int array of corresponding years (sorted ascending)
         scale:       logistic steepness k
         shift:       sigmoid midpoint m
         window:      number of years after peak year to apply decay
@@ -68,29 +60,25 @@ def compute_novelty_series(year_scores: np.ndarray,
         novelty: 1-D float array, same length as year_scores
     """
     n = len(year_scores)
-    novelty = np.zeros(n, dtype=float)
+    # Precompute decay weights for offsets 0..window (only `window+1` values)
+    offsets = np.arange(window + 1, dtype=float)
+    decay_weights = 1.0 / (1.0 + np.exp(scale * (offsets - shift)))  # shape: (window+1,)
 
-    for p in range(n):
-        # Score delta vs previous year (first year compared against 0)
-        prev_score = year_scores[p - 1] if p > 0 else 0.0
-        peak = year_scores[p] - prev_score
-        if peak <= 0:
-            continue
-        # Apply logistic decay over the window
-        for w in range(window + 1):
-            t = p + w
-            if t >= n:
-                break
-            nov = peak / (1.0 + np.exp(scale * (w - shift)))
-            if nov > novelty[t]:
-                novelty[t] = nov
+    # Positive deltas (peaks) at each year
+    peaks = np.diff(year_scores, prepend=0.0).clip(min=0)  # shape: (n,)
+
+    novelty = np.zeros(n, dtype=float)
+    peak_indices = np.nonzero(peaks)[0]
+    for p in peak_indices:
+        end = min(p + window + 1, n)
+        w = end - p  # number of offsets that fit
+        np.maximum(novelty[p:end], peaks[p] * decay_weights[:w], out=novelty[p:end])
 
     return novelty
 
 
 def compute_novelty_per_datasource(dynamic_edges: pd.DataFrame,
-                                    start_year: int, end_year: int,
-                                    aggregation_method: str = 'harmonic_sum') -> pd.DataFrame:
+                                    start_year: int, end_year: int) -> pd.DataFrame:
     """
     Compute per-datasource novelty scores for every (sourceId, targetId, datasourceId)
     triplet across the full year range.
@@ -103,56 +91,88 @@ def compute_novelty_per_datasource(dynamic_edges: pd.DataFrame,
                                  relation, datasourceId, year, novelty
     """
     years = np.arange(start_year, end_year + 1)
-    records = []
+    n_years = len(years)
+    year_to_idx = {yr: i for i, yr in enumerate(years)}
 
     id_cols = ['sourceId', 'targetId', 'source_type', 'target_type', 'relation', 'datasourceId']
-    groups = dynamic_edges.groupby(id_cols)
 
+    # Pre-aggregate scores per (group_key, year) using harmonic_sum in one vectorised pass
+    annual = dynamic_edges.groupby(id_cols + ['year'], as_index=False)['score'].apply(
+        lambda s: harmonic_sum(s.values)
+    )
+    if 'score' not in annual.columns:
+        annual = annual.rename(columns={annual.columns[-1]: 'score'})
+
+    all_records = []
+
+    groups = annual.groupby(id_cols)
     for key, grp in tqdm(groups, desc="Computing novelty"):
-        # Build cumulative score series for this triplet
-        year_scores = np.zeros(len(years), dtype=float)
-        for i, yr in enumerate(years):
-            cumulative = grp[grp['year'] <= yr]['score']
-            if len(cumulative):
-                year_scores[i] = aggregate_scores(cumulative.values, method=aggregation_method)
+        # Map years to indices and build cumulative score array
+        year_scores = np.zeros(n_years, dtype=float)
+        for _, row in grp.iterrows():
+            idx = year_to_idx.get(row['year'])
+            if idx is not None:
+                year_scores[idx] = row['score']
+
+        # Make cumulative (scores are annual aggregates; cumulate forward)
+        np.maximum.accumulate(year_scores, out=year_scores)
 
         novelty_series = compute_novelty_series(year_scores)
 
+        nz = np.nonzero(novelty_series)[0]
+        if len(nz) == 0:
+            continue
+
         src_id, tgt_id, src_type, tgt_type, relation, datasource = key
-        for i, yr in enumerate(years):
-            if novelty_series[i] > 0:
-                records.append({
-                    'sourceId':    src_id,
-                    'targetId':    tgt_id,
-                    'source_type': src_type,
-                    'target_type': tgt_type,
-                    'relation':    relation,
-                    'datasourceId': datasource,
-                    'year':        yr,
-                    'novelty':     novelty_series[i],
-                })
+        chunk = pd.DataFrame({
+            'sourceId':     src_id,
+            'targetId':     tgt_id,
+            'source_type':  src_type,
+            'target_type':  tgt_type,
+            'relation':     relation,
+            'datasourceId': datasource,
+            'year':         years[nz],
+            'novelty':      novelty_series[nz],
+        })
+        all_records.append(chunk)
 
-    if not records:
+    if not all_records:
         return pd.DataFrame(columns=id_cols + ['year', 'novelty'])
-    return pd.DataFrame(records)
+    return pd.concat(all_records, ignore_index=True)
 
 
-def aggregate_scores(scores, method='harmonic_sum'):
-    """Aggregate scores using specified method.
-    
-    Args:
-        scores: Array of scores
-        method: 'harmonic_sum' or 'max'
-    
-    Returns:
-        Aggregated score
-    """
-    if method == 'harmonic_sum':
-        return harmonic_sum(scores)
-    elif method == 'max':
-        return max_score(scores)
-    else:
-        raise ValueError(f"Unknown aggregation method: {method}. Use 'harmonic_sum' or 'max'")
+def aggregate_scores(scores):
+    return harmonic_sum(scores)
+
+
+def apply_cutoffs(edges, config):
+    """Apply per-datasource score cutoffs from config['datasources']."""
+    if 'datasources' not in config:
+        return edges
+
+    filtered = []
+    configured = set()
+
+    for datasource, params in config['datasources'].items():
+        ds_edges = edges[edges['datasourceId'] == datasource].copy()
+        configured.add(datasource)
+        if ds_edges.empty:
+            continue
+        if 'cutoff' in params and 'score' in ds_edges.columns:
+            cutoff = params['cutoff']
+            ds_edges = ds_edges[ds_edges['score'] >= cutoff]
+            print(f"   {datasource}: {len(ds_edges):,} edges (cutoff >= {cutoff})")
+        else:
+            print(f"   {datasource}: {len(ds_edges):,} edges")
+        filtered.append(ds_edges)
+
+    # Pass through unconfigured datasources unchanged
+    unconfigured = edges[~edges['datasourceId'].isin(configured)]
+    if not unconfigured.empty:
+        print(f"   Other datasources: {len(unconfigured):,} edges")
+        filtered.append(unconfigured)
+
+    return pd.concat(filtered, ignore_index=True) if filtered else edges.iloc[0:0]
 
 
 def load_datatype_mapping(config_path):
@@ -228,7 +248,6 @@ def build_event_list(
     input_dir: str,
     config_path: str,
     output_file: str,
-    aggregation_method: str = 'harmonic_sum',
     sample_ratio: float = None,
     datatype_mapping_file: str = None,
 ):
@@ -241,14 +260,13 @@ def build_event_list(
         input_dir: Directory with raw edges
         config_path: Path to progression config
         output_file: Output parquet file
-        aggregation_method: 'harmonic_sum' or 'max' (default: 'harmonic_sum')
         sample_ratio: Optional float (0.0-1.0) to sample edges (e.g., 0.01 for 1:100 test)
         datatype_mapping_file: Optional path to datatype mapping YAML
     """
     print("\n" + "="*80)
     sample_info = f" [SAMPLE: {sample_ratio*100:.1f}%]" if sample_ratio else ""
     mode_str = "DATATYPE-level" if datatype_mapping_file else "datasource-level"
-    print(f"BUILDING TEMPORAL EVENT GRAPH ({mode_str}, aggregation: {aggregation_method}){sample_info}")
+    print(f"BUILDING TEMPORAL EVENT GRAPH ({mode_str}){sample_info}")
     print("="*80)
     
     # Load datatype mapping
@@ -291,7 +309,13 @@ def build_event_list(
     
     dynamic_edges = edges[edges['year'].notna()].copy()
     print(f"📊 Dynamic edges: {len(dynamic_edges):,}")
-    
+
+    # Apply per-datasource score cutoffs
+    if 'datasources' in config:
+        print(f"\n✂️ Applying datasource cutoffs...")
+        dynamic_edges = apply_cutoffs(dynamic_edges, config)
+        print(f"✅ {len(dynamic_edges):,} edges after cutoffs")
+
     # Add datatype info if using datatype aggregation
     if datatype_mapping:
         print(f"\n🏷️  Adding datatype information...")
@@ -350,7 +374,7 @@ def build_event_list(
                 # DATATYPE MODE:
                 # Step 1: Harmonic sum per datasource (within each datatype group)
                 datasource_scores = other_edges.groupby(datasource_group_cols, as_index=False).agg({
-                    'score': lambda x: aggregate_scores(x.values, method=aggregation_method),
+                    'score': lambda x: aggregate_scores(x.values),
                     'datasource_weight': 'first'  # Keep weight
                 })
                 
@@ -361,14 +385,14 @@ def build_event_list(
                 
                 # Step 3: Harmonic sum of weighted datasource scores -> datatype score
                 datatype_agg = datasource_scores.groupby(group_cols, as_index=False).agg({
-                    'weighted_score': lambda x: aggregate_scores(x.values, method=aggregation_method)
+                    'weighted_score': lambda x: aggregate_scores(x.values)
                 }).rename(columns={'weighted_score': 'score'})
                 
                 dfs_to_concat.append(datatype_agg)
             else:
                 # DATASOURCE MODE: Simple harmonic sum per datasource
                 other_agg = other_edges.groupby(group_cols, as_index=False).agg({
-                    'score': lambda x: aggregate_scores(x.values, method=aggregation_method)
+                    'score': lambda x: aggregate_scores(x.values)
                 })
                 dfs_to_concat.append(other_agg)
             
@@ -414,7 +438,7 @@ def build_event_list(
     print(f"\n🔬 Computing per-datasource novelty...")
     # Always computed at datasource level then aggregated up
     novelty_ds = compute_novelty_per_datasource(
-        dynamic_edges, start_year, end_year, aggregation_method=aggregation_method
+        dynamic_edges, start_year, end_year
     )
     print(f"   Novelty records: {len(novelty_ds):,}")
 
@@ -489,13 +513,6 @@ def main():
         help="Output parquet file"
     )
     parser.add_argument(
-        "--aggregation-method",
-        type=str,
-        default="harmonic_sum",
-        choices=["harmonic_sum", "max"],
-        help="Score aggregation method: 'harmonic_sum' (default) or 'max'"
-    )
-    parser.add_argument(
         "--sample-ratio",
         type=float,
         default=None,
@@ -512,7 +529,6 @@ def main():
     build_event_list(
         input_dir=args.input_dir,
         config_path=args.config,
-        aggregation_method=args.aggregation_method,
         sample_ratio=args.sample_ratio,
         datatype_mapping_file=args.datatype_mapping,
         output_file=args.output,

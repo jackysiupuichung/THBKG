@@ -40,6 +40,10 @@ def build_model(
     use_rte: bool = False,
     use_edge_features: bool = False,
     edge_feat_dim: int = 2,
+    use_recency: bool = False,
+    time_dim: int = 0,
+    t_min: float = 0.0,
+    t_max: float = 1.0,
 ) -> torch.nn.Module:
     """
     Build model from HeteroData.
@@ -88,6 +92,14 @@ def build_model(
             use_rte=use_rte,
             use_edge_features=use_edge_features,
             edge_feat_dim=edge_feat_dim,
+            use_recency=use_recency,
+            time_dim=time_dim,
+            t_min=t_min,
+            t_max=t_max,
+        )
+    elif use_recency:
+        raise ValueError(
+            f"use_recency is only wired for model_name='hgt' (got '{model_name}')"
         )
     elif model_name == 'gatv2':
         model = GATv2(

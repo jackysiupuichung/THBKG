@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch_geometric.nn import GATv2Conv, HeteroConv, Linear
-from .decoder import DualHeadDecoder
+from .decoder import Decoder
 
 class GATv2(nn.Module):
     """
@@ -12,21 +12,29 @@ class GATv2(nn.Module):
         self.node_types, self.edge_types = metadata
         self.edge_feat_dim = edge_feat_dim
 
+        # Per-node-type input projection (like HGT)
+        self.lin_dict = nn.ModuleDict({
+            nt: Linear(-1, hidden_dim) for nt in self.node_types
+        })
+
         self.convs = nn.ModuleList()
+        self.norms = nn.ModuleList()
         for _ in range(num_layers):
             conv = HeteroConv({
                 edge_type: GATv2Conv(
                     -1, hidden_dim, heads=num_heads, dropout=dropout,
                     add_self_loops=False,
+                    concat=False,  # average heads -> output stays at hidden_dim
                     edge_dim=edge_feat_dim if edge_feat_dim > 0 else None,
                 )
                 for edge_type in self.edge_types
             }, aggr='sum')
             self.convs.append(conv)
-            
-        # Dual heads for Multi-Task Probabilistic Learning
-        # GATv2Conv concatenates heads by default, so output dim is hidden_dim * num_heads
-        self.decoder = DualHeadDecoder(hidden_dim * num_heads)
+            self.norms.append(nn.ModuleDict({
+                nt: nn.LayerNorm(hidden_dim) for nt in self.node_types
+            }))
+
+        self.decoder = Decoder(hidden_dim)
 
     def forward(
         self,
@@ -49,28 +57,20 @@ class GATv2(nn.Module):
         return x_dict
 
     def encode(self, x_dict, edge_index_dict, edge_feat_dict=None):
-        for conv in self.convs:
+        # Project each node type to hidden_dim
+        x_dict = {nt: self.lin_dict[nt](x).relu() for nt, x in x_dict.items() if nt in self.lin_dict}
+
+        for i, conv in enumerate(self.convs):
             if self.edge_feat_dim > 0 and edge_feat_dict is not None:
-                # HeteroConv passes edge_attr per type when supplied as edge_attr_dict
                 x_dict = conv(x_dict, edge_index_dict, edge_attr_dict=edge_feat_dict)
             else:
                 x_dict = conv(x_dict, edge_index_dict)
-            x_dict = {key: x.relu() for key, x in x_dict.items()}
+            x_dict = {nt: torch.nan_to_num(self.norms[i][nt](x.relu())) for nt, x in x_dict.items() if nt in self.norms[i]}
         return x_dict
 
     def decode(self, z_src, z_dst, edge_label_index=None):
         if edge_label_index is not None:
-            # Multi-head decoding on specific edges
             row, col = edge_label_index
-            
-            # Get node embeddings
-            emb_src = z_src[row]
-            emb_dst = z_dst[col]
-            
-            return self.decoder(emb_src, emb_dst)
+            return self.decoder(z_src[row], z_dst[col])
         else:
-            # Evaluation/Inference (returning embeddings or full matrix not easily supported with dual heads yet)
-            # For now, we assume this usage is always paired with edge_label_index in our training loop.
-            raise NotImplementedError("Full matrix decoding not yet implemented for dual-head GATv2")
-
-
+            raise NotImplementedError("Full matrix decoding not yet implemented for GATv2")

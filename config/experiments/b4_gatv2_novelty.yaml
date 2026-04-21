@@ -2,25 +2,26 @@ experiment:
   name: b4_gatv2_novelty
 
 data:
-  graph_file: output/graph/hetero_graph_with_features.pt
-  mappings_file: output/graph/temporal_graph_mappings.pt
+  graph_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/graph/hetero_graph_with_features_datatype.pt
+  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_datatype_mappings.pt
 
 model:
   name: gatv2
-  hidden_dim: 64
+  hidden_dim: 32
   num_heads: 4
-  num_layers: 2
-  dropout: 0.1
+  num_layers: 1
+  dropout: 0.25
   edge_feat_cols: [1]
   edge_feat_dim: 1
 
 train:
-  output_dir: runs/b4_gatv2_novelty
+  output_dir: /gpfs/scratch/bty414/opentarget_evidences/23.06/runs/b4_gatv2_novelty_datatype
   num_epochs: 50
-  lr: 0.001
-  weight_decay: 0.0001
-  batch_size: 512
-  num_neighbors: [20, 10]
+  lr: 0.0007017392426675233
+  weight_decay: 1.3382693305349503e-06
+  batch_size: 256
+  num_neighbors: [10, 20]
+  focal_gamma: 2.0
   early_stopping:
     enabled: true
     patience: 10

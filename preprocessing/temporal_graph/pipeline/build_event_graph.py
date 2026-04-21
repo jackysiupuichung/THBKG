@@ -257,7 +257,7 @@ def build_hetero_graph(edges: pd.DataFrame, edge_type_mode: str = 'relation_data
         
         # Add edge attributes — always [E, 2]: [edge_weight, edge_novelty]
         if has_edge_weight:
-            w = torch.tensor(group['edge_weight'].values, dtype=torch.float).unsqueeze(-1)
+            w = torch.tensor(group['edge_weight'].fillna(0.0).values, dtype=torch.float).unsqueeze(-1)
             n = torch.tensor(
                 group['edge_novelty'].fillna(0.0).values if has_edge_novelty else [0.0] * len(group),
                 dtype=torch.float
@@ -265,10 +265,14 @@ def build_hetero_graph(edges: pd.DataFrame, edge_type_mode: str = 'relation_data
             hetero_data[edge_type_key].edge_attr = torch.cat([w, n], dim=-1)
         elif has_score:
             # Snapshot-based: use score; novelty not available → 0
-            w = torch.tensor(group['score'].values, dtype=torch.float).unsqueeze(-1)
+            w = torch.tensor(group['score'].fillna(0.0).values, dtype=torch.float).unsqueeze(-1)
             n = torch.zeros(len(group), 1, dtype=torch.float)
             hetero_data[edge_type_key].edge_attr = torch.cat([w, n], dim=-1)
-        
+        else:
+            # Structural edges (ontology hierarchies etc.) — no score or weight available
+            # Use 1.0, 1.0: fully confident, fully novel
+            hetero_data[edge_type_key].edge_attr = torch.ones(len(group), 2, dtype=torch.float)
+
         # Add temporal attribute
         if has_edge_time:
             hetero_data[edge_type_key].edge_time = torch.tensor(

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 BASE="http://ftp.ebi.ac.uk/pub/databases/opentargets/platform/23.06/output/etl/parquet/"
-OUTDIR="/data/scratch/bty414/opentarget_evidences/23.06/evidenceDated"
+OUTDIR="/gpfs/scratch/bty414/opentarget_evidences/23.06/evidenceDated"
 
 # What to download
 # 25.06
