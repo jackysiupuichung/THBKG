@@ -344,6 +344,48 @@ def load_advancement_edges(train_csv: str, test_csv: str) -> pd.DataFrame:
     return adv
 
 
+def build_literature_sidecar(raw_edges_dir: str, output_path: str):
+    """
+    Build a sidecar parquet mapping (sourceId, targetId, datasourceId, year) -> PMIDs + OT evidence IDs.
+
+    Reads raw edge parquets (which retain the 'literature' and 'id' columns from kg_pipeline),
+    explodes the PMID list so each row is one (edge_key, pmid) pair, and writes the result
+    alongside the graph file for later lookup via get_edge_literature().
+
+    Args:
+        raw_edges_dir: Directory containing raw edge parquets (output of kg_pipeline)
+        output_path: Destination parquet path for the sidecar table
+    """
+    print(f"\n📚 Building literature sidecar from {raw_edges_dir}...")
+
+    dfs = []
+    for pf in glob(os.path.join(raw_edges_dir, "*.parquet")):
+        df = pd.read_parquet(pf)
+        keep = [c for c in ['sourceId', 'targetId', 'datasourceId', 'year', 'literature', 'id'] if c in df.columns]
+        if 'literature' not in keep:
+            continue
+        dfs.append(df[keep])
+
+    if not dfs:
+        print("⚠️  No raw edge parquets with 'literature' column found — skipping sidecar")
+        return
+
+    combined = pd.concat(dfs, ignore_index=True)
+    combined = combined[combined['literature'].notna()]
+
+    # Normalise: literature may be a list or a single string
+    combined['literature'] = combined['literature'].apply(
+        lambda v: v if isinstance(v, list) else [v]
+    )
+
+    exploded = combined.explode('literature').rename(columns={'literature': 'pmid', 'id': 'evidence_id'})
+    exploded = exploded[exploded['pmid'].notna()].drop_duplicates()
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    exploded.to_parquet(output_path, index=False)
+    print(f"✅ Sidecar saved: {output_path}  ({len(exploded):,} rows, {exploded['pmid'].nunique():,} unique PMIDs)")
+
+
 def build_event_graph(
     event_file: str,
     output_file: str,
@@ -351,6 +393,7 @@ def build_event_graph(
     edge_type_mode: str = 'relation_datasource',
     advancement_train_csv: str = None,
     advancement_test_csv: str = None,
+    raw_edges_dir: str = None,
 ):
     """
     Build HeteroData from event list.
@@ -441,10 +484,15 @@ def build_event_graph(
             print(f"   ⚠️  No static edges remain after filtering")
             all_edges = events
     
+    # Build literature sidecar (before graph build; raw edges dir must be provided)
+    if raw_edges_dir:
+        sidecar_path = output_file.replace(".pt", "_literature.parquet")
+        build_literature_sidecar(raw_edges_dir, sidecar_path)
+
     # Build graph
     # build_hetero_graph now supports edge_time and edge_weight
     hetero_data, mappings = build_hetero_graph(all_edges, edge_type_mode=edge_type_mode)
-    
+
     # Save
     print(f"\n💾 Saving event graph to {output_file}...")
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
@@ -515,6 +563,12 @@ def main():
         default=None,
         help="Path to advancement test CSV (optional)"
     )
+    parser.add_argument(
+        "--raw-edges",
+        type=str,
+        default=None,
+        help="Directory of raw edge parquets (from kg_pipeline) used to build literature sidecar (optional)"
+    )
 
     args = parser.parse_args()
 
@@ -526,6 +580,7 @@ def main():
         edge_type_mode=args.edge_type_mode,
         advancement_train_csv=args.advancement_train_csv,
         advancement_test_csv=args.advancement_test_csv,
+        raw_edges_dir=args.raw_edges,
     )
 
 

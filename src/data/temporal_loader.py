@@ -6,6 +6,7 @@ Handles loading of event-based HeteroData and creating temporal masks.
 """
 
 import torch
+import pandas as pd
 from torch_geometric.data import HeteroData
 from typing import Dict, Tuple, Optional, List, Union
 from pathlib import Path
@@ -15,7 +16,7 @@ import torch_geometric.transforms as T
 
 def load_event_graph(
     filepath: str,
-    to_undirected: bool = False,
+    to_undirected: bool = True,
     normalize_features: bool = False,
 ) -> HeteroData:
     """
@@ -369,3 +370,100 @@ def to_temporal_snapshots(
         
     if verbose: print(f"\n✅ Created {len(snapshots)} snapshots ({start_year}-{end_year})")
     return snapshots
+
+
+# ── Literature traceability ───────────────────────────────────────────────────
+
+def load_literature_index(graph_path: str) -> pd.DataFrame:
+    """
+    Load the evidence-literature sidecar parquet built alongside a graph file.
+
+    The sidecar is expected at <graph_path with .pt replaced by _literature.parquet>,
+    e.g. temporal_graph_datasource_literature.parquet next to temporal_graph_datasource.pt.
+    Each row is one (sourceId, targetId, datasourceId, year, pmid, evidence_id) tuple.
+
+    Args:
+        graph_path: Path to the .pt graph file
+
+    Returns:
+        DataFrame with columns: sourceId, targetId, datasourceId, year, pmid, evidence_id
+    """
+    sidecar = graph_path.replace(".pt", "_literature.parquet")
+    if not Path(sidecar).exists():
+        raise FileNotFoundError(
+            f"Literature sidecar not found: {sidecar}\n"
+            "Re-run build_event_graph.py with --raw-edges <RAW_EDGES_DIR> to generate it."
+        )
+    return pd.read_parquet(sidecar)
+
+
+def get_edge_literature(
+    lit_index: pd.DataFrame,
+    source_id: str,
+    target_id: str,
+    datasource_id: str = None,
+    year: int = None,
+    year_max: int = None,
+) -> pd.DataFrame:
+    """
+    Return PMIDs and OT evidence IDs supporting a given edge (or subgraph of edges).
+
+    The lookup key is (sourceId, targetId, datasourceId, year) — all four uniquely
+    identify an evidence stream since the same node pair can appear under multiple
+    datasources and in multiple years.
+
+    Args:
+        lit_index:      DataFrame from load_literature_index()
+        source_id:      Source node ID (e.g. Ensembl gene ID)
+        target_id:      Target node ID (e.g. EFO disease ID)
+        datasource_id:  Filter to one datasource (None = all datasources)
+        year:           Filter to an exact year (None = all years)
+        year_max:       Cumulative cutoff — return rows where row.year <= year_max
+                        (mirrors filter_graph_by_time; takes precedence over `year`)
+
+    Returns:
+        DataFrame subset with columns: sourceId, targetId, datasourceId, year, pmid, evidence_id
+
+    Subgraph use:
+        results = pd.concat([
+            get_edge_literature(lit, src, dst, datasource_id=ds, year_max=cutoff)
+            for (src, dst, ds) in edge_list
+        ]).drop_duplicates()
+    """
+    mask = (lit_index['sourceId'] == source_id) & (lit_index['targetId'] == target_id)
+    if datasource_id is not None:
+        mask &= lit_index['datasourceId'] == datasource_id
+    if year_max is not None:
+        mask &= lit_index['year'] <= year_max
+    elif year is not None:
+        mask &= lit_index['year'] == year
+    return lit_index[mask].reset_index(drop=True)
+
+
+def format_literature_links(
+    result: pd.DataFrame,
+    include_ot: bool = True,
+) -> pd.DataFrame:
+    """
+    Add human-readable URL columns to a get_edge_literature() result.
+
+    Args:
+        result:     DataFrame returned by get_edge_literature()
+        include_ot: Whether to add an OpenTargets evidence link column
+
+    Returns:
+        result with additional columns: pubmed_url (and optionally ot_url)
+    """
+    out = result.copy()
+    out['pubmed_url'] = out['pmid'].apply(
+        lambda p: f"https://pubmed.ncbi.nlm.nih.gov/{p}/" if pd.notna(p) else None
+    )
+    if include_ot:
+        out['ot_url'] = out.apply(
+            lambda r: (
+                f"https://platform.opentargets.org/evidence/{r['sourceId']}/{r['targetId']}"
+                if pd.notna(r['sourceId']) and pd.notna(r['targetId']) else None
+            ),
+            axis=1,
+        )
+    return out
