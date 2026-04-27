@@ -19,7 +19,8 @@ PUBMED_CACHE = {}
 
 
 REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]
-YEAR_PRIORITY = ["curationYear", "studyYear", "publicationYear", "studyStartDate"]
+# First four are legacy columns (pre-26.03); last two are the unified date columns in 26.03+
+YEAR_PRIORITY = ["curationYear", "studyYear", "publicationYear", "studyStartDate", "publicationDate", "evidenceDate"]
 
 
 def fetch_pubmed_years(pubmed_ids):
@@ -77,11 +78,12 @@ def fetch_pubmed_years(pubmed_ids):
 
 
 class BaseParser:
-    def __init__(self, root_dir: str, schema_file: str, output_dir: str, node_store: None, static: bool = False):
+    def __init__(self, root_dir: str, schema_file: str, output_dir: str, node_store: None, static: bool = False, debug: bool = False):
         self.root_dir = root_dir
         self.output_dir = output_dir
         self.node_store = node_store or {}  # used by EdgeParser validation
         self.static = static  # used by EdgeParser for year handling
+        self.debug = debug  # if True, only read one file per datasource subdir
         with open(schema_file, "r") as f:
             self.schema = yaml.safe_load(f)
         os.makedirs(self.output_dir, exist_ok=True)
@@ -89,23 +91,26 @@ class BaseParser:
     def deserialise(self, parquet_file: str) -> pd.DataFrame:
         return pd.read_parquet(parquet_file)
 
-    def serialise(self, df: pd.DataFrame, out_path: str):
+    def serialise(self, df: pd.DataFrame, out_path: str) -> int:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         df.to_parquet(out_path, index=False)
         print(f"💾 Saved → {out_path} ({len(df)} rows)")
+        return len(df)
 
     def parse(self):
         """
         Parse all schema-defined sources.
         """
         all_data = {}
+        # tracks raw row counts before serialise filtering, keyed by datasource name
+        raw_counts = {}
 
         for name, spec in self.schema.items():
             print(f"📦 Processing schema entry: {name}")
-            
+
             # normalise spec to list
             specs = spec if isinstance(spec, list) else [spec]
-            
+
             # Use explicit input_dir from the first spec if available, otherwise fallback to name
             input_dir = specs[0].get("input_dir", name) if isinstance(specs[0], dict) else name
             subdir_path = os.path.join(self.root_dir, input_dir)
@@ -114,14 +119,18 @@ class BaseParser:
                 print(f"⚠️ No directory for {subdir_path}, skipping")
                 continue
 
-            for pq in glob(os.path.join(subdir_path, "*.parquet")):
+            parquet_files = glob(os.path.join(subdir_path, "*.parquet"))
+            if self.debug and parquet_files:
+                parquet_files = parquet_files[:1]
+                print(f"🐛 [DEBUG] Limiting to 1 file: {parquet_files[0]}")
+            for pq in parquet_files:
                 try:
                     df = self.deserialise(pq)
                     for sub_spec in specs:
                         try:
                             df_sub = self.apply_spec(df.copy(), sub_spec, name)
                             df_sub = self.validate(df_sub, sub_spec, name)
-                            
+
                             if df_sub.empty:
                                 continue
 
@@ -133,19 +142,21 @@ class BaseParser:
                                     temp_spec = sub_spec.copy()
                                     temp_spec["relation_name"] = relation_val
                                     out_name = self.output_name(name, temp_spec, group_df)
-                                    
+
                                     if out_name in all_data:
                                         all_data[out_name] = pd.concat([all_data[out_name], group_df], ignore_index=True)
                                     else:
                                         all_data[out_name] = group_df
+                                    raw_counts[out_name] = raw_counts.get(out_name, 0) + len(group_df)
                             else:
                                 # Normal flow for non-ChEMBL edges
                                 out_name = self.output_name(name, sub_spec, df_sub)
-                                
+
                                 if out_name in all_data:
                                     all_data[out_name] = pd.concat([all_data[out_name], df_sub], ignore_index=True)
                                 else:
                                     all_data[out_name] = df_sub
+                                raw_counts[out_name] = raw_counts.get(out_name, 0) + len(df_sub)
 
                         except Exception as e:
                             print(f"⚠️ Error applying spec for {sub_spec}: {e}")
@@ -154,10 +165,21 @@ class BaseParser:
                     print(f"⚠️ Error reading {pq}: {e}")
                     break
 
-        # 🔹 Serialise once per unique output name
+        # 🔹 Serialise once per unique output name, collect retained counts
+        retained_counts = {}
         for out_name, df in all_data.items():
             out_path = os.path.join(self.output_dir, f"{out_name}.parquet")
-            self.serialise(df, out_path)
+            retained_counts[out_name] = self.serialise(df, out_path)
+
+        # 🔹 Retention summary
+        print("\n📊 Retention summary:")
+        print(f"  {'datasource':<55} {'raw':>7}  {'retained':>8}  {'%':>6}")
+        print(f"  {'-'*55}  {'-'*7}  {'-'*8}  {'-'*6}")
+        for out_name in sorted(raw_counts):
+            raw = raw_counts[out_name]
+            kept = retained_counts.get(out_name) or 0
+            pct = (kept / raw * 100) if raw else 0.0
+            print(f"  {out_name:<55} {raw:>7,}  {kept:>8,}  {pct:>5.1f}%")
 
         return all_data
 
@@ -318,12 +340,15 @@ class EdgeParser(BaseParser):
         # Handle year
         if "year" in props:
             # Dynamic edges → pick best year candidate
+            DATE_COLS = {"studyStartDate", "publicationDate", "evidenceDate"}
             for col in YEAR_PRIORITY:
                 if col in row and pd.notnull(row[col]):
-                    if col == "studyStartDate":
+                    if col in DATE_COLS:
                         try:
-                            edge["year"] = pd.to_datetime(row[col], errors="coerce").year
-                            return edge
+                            yr = pd.to_datetime(row[col], errors="coerce").year
+                            if pd.notnull(yr):
+                                edge["year"] = yr
+                                return edge
                         except Exception:
                             continue
                     else:
@@ -522,7 +547,7 @@ class EdgeParser(BaseParser):
         missing_cols = [c for c in required_cols if c not in df.columns]
         if missing_cols:
             print(f"⚠️ Skipping save for {out_path}, missing columns: {missing_cols}")
-            return
+            return 0
 
         # -----------------------------------
         # Drop rows missing required fields
@@ -564,5 +589,7 @@ class EdgeParser(BaseParser):
             print(df.head())
             df.to_parquet(out_path, index=False)
             print(f"💾 Saved → {out_path} ({len(df)} rows)")
+            return len(df)
         else:
             print(f"⚠️ No valid edges left for {out_path}, skipping save.")
+            return 0

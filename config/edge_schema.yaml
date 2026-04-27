@@ -1,4 +1,4 @@
-# TODO: what about edges with no temporal information? e.g. intogen, progeny (supp file temporal trend)
+# NOTE: intogen now carries publicationDate/evidenceDate in 26.03 (78% coverage) and is wired below
 
 gene_ontology:
   input_dir: targets
@@ -21,19 +21,39 @@ cancer_biomarkers:
   relation_name: somatic_mutation
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
-chembl:
-  - input_dir: sourceId=chembl
-    name: chembl
-    sourceId: diseaseId
-    targetId: targetId
-    relation_name: clinical_trial
-    props: [source_type=constant:disease, target_type=constant:target, clinicalStatus, studyStopReasonCategories, datasourceId, score, year, id]
+# chembl: removed — evidence_chembl absent from 26.03 FTP; replaced by clinical_precedence below
+# chembl:
+#   - input_dir: sourceId=chembl
+#     name: chembl
+#     sourceId: diseaseId
+#     targetId: targetId
+#     relation_name: clinical_trial
+#     props: [source_type=constant:disease, target_type=constant:target, datasourceId, score, year, id]
+#
+#   - name: chembl
+#     sourceId: targetId
+#     targetId: drugId
+#     relation_name: modulated_by
+#     props: [source_type=constant:target, target_type=constant:molecule, datasourceId, score=constant:1.0, year, id]
 
-  - name: chembl
-    sourceId: targetId
-    targetId: drugId
+clinical_precedence:
+  - input_dir: sourceId=clinical_precedence
+    sourceId: drugId
+    targetId: diseaseId
+    relation_name: clinical_trial
+    props: [source_type=constant:molecule, target_type=constant:disease, datasourceId, score, year, id]
+
+  - input_dir: sourceId=clinical_precedence
+    sourceId: drugId
+    targetId: targetId
     relation_name: modulated_by
-    props: [source_type=constant:target, target_type=constant:molecule, datasourceId, score=constant:1.0, year, id]
+    props: [source_type=constant:molecule, target_type=constant:target, datasourceId, score=constant:1.0, year, id]
+
+  - input_dir: sourceId=clinical_precedence
+    sourceId: targetId
+    targetId: diseaseId
+    relation_name: clinically_associated
+    props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 reactome:
   - input_dir: sourceId=reactome
@@ -43,17 +63,25 @@ reactome:
     relation_name: affected_pathway
     props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
-  - name: reactome
-    sourceId: targetId
-    targetId: pathways.id
-    relation_name: involved_in
-    props: [source_type=constant:target, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
+  # In 25.03 pathways.id moved from evidence to targets node; disease->reactome linkage no longer available
+  # - name: reactome
+  #   sourceId: diseaseId
+  #   targetId: pathways.id
+  #   relation_name: associated_with
+  #   props: [source_type=constant:disease, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
 
-  - name: reactome
-    sourceId: diseaseId
-    targetId: pathways.id
-    relation_name: associated_with
-    props: [source_type=constant:disease, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
+target_reactome:
+  input_dir: targets
+  sourceId: id
+  targetId: pathways.pathwayId
+  relation_name: involved_in
+  props: [
+    datasourceId=constant:reactome,
+    score=constant:1.0,
+    source_type=constant:target,
+    target_type=constant:reactome,
+    year
+  ]
 
 clingen:
   input_dir: sourceId=clingen
@@ -79,22 +107,24 @@ gene_burden:
   relation_name: genetic_association
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
-slapenrich:
-  - input_dir: sourceId=slapenrich
-    sourceId: targetId
-    targetId: diseaseId
-    relation_name: affected_pathway
-    props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
+# slapenrich: removed — superseded by other sources (OpenTargets 26.03)
+# slapenrich:
+#   - input_dir: sourceId=slapenrich
+#     sourceId: targetId
+#     targetId: diseaseId
+#     relation_name: affected_pathway
+#     props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
-  - sourceId: targetId
-    targetId: pathways.id
-    relation_name: involved_in
-    props: [source_type=constant:target, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
+  # pathways.id (nested Reactome pathway IDs) removed in 25.03 unified schema
+  # - sourceId: targetId
+  #   targetId: pathways.id
+  #   relation_name: involved_in
+  #   props: [source_type=constant:target, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
 
-  - sourceId: diseaseId
-    targetId: pathways.id
-    relation_name: associated_with
-    props: [source_type=constant:disease, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
+  # - sourceId: diseaseId
+  #   targetId: pathways.id
+  #   relation_name: associated_with
+  #   props: [source_type=constant:disease, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
 
 crispr:
   input_dir: sourceId=crispr
@@ -124,12 +154,13 @@ orphanet:
   relation_name: genetic_association
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
-sysbio:
-  input_dir: sourceId=sysbio
-  sourceId: targetId
-  targetId: diseaseId
-  relation_name: affected_pathway
-  props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
+# sysbio (Gene Signatures): removed — superseded by other sources (OpenTargets 26.03)
+# sysbio:
+#   input_dir: sourceId=sysbio
+#   sourceId: targetId
+#   targetId: diseaseId
+#   relation_name: affected_pathway
+#   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 cancer_gene_census:
   input_dir: sourceId=cancer_gene_census
@@ -185,4 +216,18 @@ uniprot_variants:
   sourceId: targetId
   targetId: diseaseId
   relation_name: genetic_association
+  props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
+
+gwas_credible_sets:
+  input_dir: sourceId=gwas_credible_sets
+  sourceId: targetId
+  targetId: diseaseId
+  relation_name: genetic_association
+  props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
+
+intogen:
+  input_dir: sourceId=intogen
+  sourceId: targetId
+  targetId: diseaseId
+  relation_name: somatic_mutation
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
