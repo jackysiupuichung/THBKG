@@ -8,9 +8,9 @@ data:
 model:
   name: hgt
   hidden_dim: 128
-  num_heads: 4
+  num_heads: 2
   num_layers: 2
-  dropout: 0.5
+  dropout: 0.2
   use_rte: false
   use_edge_features: true
   edge_feat_cols: [0, 1]
@@ -19,16 +19,22 @@ model:
 train:
   output_dir: runs/advancement_lambdarank
   num_epochs: 50
-  lr: 0.0001
-  weight_decay: 0.005
+  lr: 0.0004346878320299101
+  weight_decay: 0.0018260646941480677
   eta_min: 1e-6
   cosine_t_max: 10
-  batch_size: 512
-  num_neighbors: [20, 10]
+  batch_size: 1024
+  num_neighbors: [20, 5]
   lambdarank:
-    sigma: 1.0
+    sigma: 1.4319388789983414
     ndcg_k: 100
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@10
+    metric: ndcg@50
+
+eval:
+  prospective:
+    diseases: []
+    cutoff_year: 2015
+    ks: [100, 200, 500]

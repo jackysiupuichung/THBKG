@@ -17,4 +17,4 @@ cd "$REPO_ROOT"
 source .venv/bin/activate
 export WANDB_MODE="disabled"
 
-python src/train_advancement_hgt.py --config config/experiments/p3_eahgt_both.yaml
+python src/train_advancement_lambdarank.py --config config/experiments/p3_eahgt_both.yaml

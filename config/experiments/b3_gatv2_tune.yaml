@@ -1,0 +1,55 @@
+experiment:
+  name: b3_gatv2_tune
+
+data:
+  graph_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/graph/hetero_graph_with_features_datatype.pt
+  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_datatype_mappings.pt
+  undirected: true
+
+# Study A — Model comparison: GATv2 with NO edge features.
+model:
+  name: gatv2
+  hidden_dim: 64
+  num_heads: 2
+  num_layers: 1
+  dropout: 0.2
+  edge_feat_cols: []
+  edge_feat_dim: 0
+
+train:
+  output_dir: /gpfs/scratch/bty414/opentarget_evidences/23.06/runs/b3_gatv2_tune
+  num_epochs: 50
+  lr: 0.0004346878320299101
+  weight_decay: 0.0018260646941480677
+  eta_min: 1.0e-6
+  cosine_t_max: 10
+  batch_size: 512
+  num_neighbors: [20, 10]
+  lambdarank:
+    sigma: 1.4319388789983414
+    ndcg_k: 50
+  early_stopping:
+    enabled: true
+    patience: 5
+    metric: ndcg@50
+
+tune:
+  study_name: b3_gatv2_tune
+  n_trials: 40
+  metric: val/ndcg@50
+
+  search_space:
+    hidden_dim:       [48, 64, 128]
+    num_heads:        [2, 4]
+    num_layers:       {low: 1, high: 2}
+    dropout:          {low: 0.1, high: 0.4, step: 0.1}
+
+    lr:               {low: 3.0e-5, high: 5.0e-3, log: true}
+    weight_decay:     {low: 1.0e-5, high: 1.0e-2, log: true}
+    cosine_t_max:     [5, 10, 20]
+
+    batch_size:       [256, 512, 1024]
+    num_neighbors_0:  [10, 20, 30]
+    num_neighbors_1:  [5, 10, 20]
+
+    sigma:            {low: 0.5, high: 2.0}

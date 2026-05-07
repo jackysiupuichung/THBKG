@@ -21,6 +21,7 @@ python -m src.tune_advancement_lambdarank \
 import os
 import sys
 import argparse
+import multiprocessing as mp
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -112,6 +113,9 @@ def run_trial(cfg: DictConfig, device: torch.device,
     ndcg_k        = wc.get("ndcg_k", cfg.train.lambdarank.get("ndcg_k", 100))
     cosine_t_max  = wc.cosine_t_max
     num_neighbors = [wc.num_neighbors_0, wc.num_neighbors_1]
+    # Optional model-specific knob (CompGCN composition op). Pulled from sweep
+    # config when present, otherwise from the base config, otherwise None (model default).
+    composition   = wc.get("composition", cfg.model.get("composition", None))
 
     _edge_feat_cols = list(cfg.model.get("edge_feat_cols", [0, 1]))
     patience = cfg.train.early_stopping.patience if cfg.train.early_stopping.enabled else int(1e9)
@@ -124,14 +128,17 @@ def run_trial(cfg: DictConfig, device: torch.device,
     run_dir = output_dir / wandb.run.id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    model = build_model(
+    build_kwargs = dict(
         model_name=cfg.model.name, data=context,
         hidden_dim=hidden_dim, out_dim=hidden_dim,
         num_heads=num_heads, num_layers=num_layers, dropout=dropout,
         use_rte=cfg.model.get("use_rte", False),
         use_edge_features=cfg.model.get("use_edge_features", False),
         edge_feat_dim=cfg.model.get("edge_feat_dim", 2),
-    ).to(device)
+    )
+    if composition is not None and cfg.model.name == "compgcn":
+        build_kwargs["composition"] = composition
+    model = build_model(**build_kwargs).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=int(cosine_t_max), eta_min=cfg.train.get("eta_min", 1e-6),
@@ -197,6 +204,157 @@ def run_trial(cfg: DictConfig, device: torch.device,
 
 
 # ---------------------------------------------------------------------------
+# Subprocess worker — runs one trial in an isolated CUDA context.
+# ---------------------------------------------------------------------------
+
+
+def _trial_worker(config_path: str, sweep_overrides: dict, run_id: str,
+                  output_dir_str: str, queue) -> None:
+    """Child process: load graph, build model, train, stream metrics via `queue`.
+
+    Communicates with parent (which owns the W&B run) by pushing tagged tuples
+    onto `queue`:
+      ("log", {metric_name: value, ..., "__step": int})  — log dict at step
+      ("summary", {key: value, ...})                     — set wandb summary key
+      ("print", str)                                     — append to parent stdout
+      None                                               — sentinel: end of trial
+    """
+    import os
+    import sys
+    import numpy as np
+    import torch
+    from omegaconf import OmegaConf
+    from pathlib import Path
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from src.data.temporal_loader import load_event_graph
+    from src.models.utils import build_model
+    from torch_geometric.loader import LinkNeighborLoader
+    from src.train_advancement_hgt import (
+        ADV_ETYPE, split_advancement_edges, build_context_graph,
+    )
+    from src.train_advancement_lambdarank import (
+        run_epoch_lambdarank, evaluate_lambdarank,
+    )
+
+    try:
+        cfg = OmegaConf.load(config_path)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Load and split graph.
+        data = load_event_graph(cfg.data.graph_file,
+                                to_undirected=bool(cfg.data.get("undirected", False)))
+        train_mask, val_mask, _, _ = split_advancement_edges(data)
+        edge_index = data[ADV_ETYPE].edge_index
+        edge_attr  = data[ADV_ETYPE].edge_attr
+        edge_time  = data[ADV_ETYPE].edge_time
+        train_idx = train_mask.nonzero(as_tuple=True)[0]
+        val_idx   = val_mask.nonzero(as_tuple=True)[0]
+        context = build_context_graph(data)
+
+        # Resolve sweep-overridden hyperparameters.
+        wc = sweep_overrides
+        hidden_dim    = int(wc["hidden_dim"])
+        num_heads     = int(wc["num_heads"])
+        num_layers    = int(wc["num_layers"])
+        dropout       = float(wc["dropout"])
+        lr            = float(wc["lr"])
+        weight_decay  = float(wc["weight_decay"])
+        batch_size    = int(wc["batch_size"])
+        sigma         = float(wc["sigma"])
+        ndcg_k        = int(wc.get("ndcg_k", cfg.train.lambdarank.get("ndcg_k", 100)))
+        cosine_t_max  = int(wc["cosine_t_max"])
+        num_neighbors = [int(wc["num_neighbors_0"]), int(wc["num_neighbors_1"])]
+        composition   = wc.get("composition", cfg.model.get("composition", None))
+
+        edge_feat_cols = list(cfg.model.get("edge_feat_cols", [0, 1]))
+        patience  = cfg.train.early_stopping.patience if cfg.train.early_stopping.enabled else int(1e9)
+        es_metric = str(cfg.train.early_stopping.get("metric", "ndcg@10"))
+        log_keys  = {"average_precision", "roc_auc",
+                     "rr@10", "rr@50", "rr@100",
+                     "ndcg@10", "ndcg@30", "ndcg@50", "ndcg@100",
+                     "val_loss"}
+
+        # Build model (with optional composition for CompGCN).
+        build_kwargs = dict(
+            model_name=cfg.model.name, data=context,
+            hidden_dim=hidden_dim, out_dim=hidden_dim,
+            num_heads=num_heads, num_layers=num_layers, dropout=dropout,
+            use_rte=cfg.model.get("use_rte", False),
+            use_edge_features=cfg.model.get("use_edge_features", False),
+            edge_feat_dim=cfg.model.get("edge_feat_dim", 2),
+        )
+        if composition is not None and cfg.model.name == "compgcn":
+            build_kwargs["composition"] = composition
+
+        model = build_model(**build_kwargs).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cosine_t_max, eta_min=cfg.train.get("eta_min", 1e-6),
+        )
+
+        train_loader = LinkNeighborLoader(
+            data=context, num_neighbors=num_neighbors,
+            edge_label_index=(ADV_ETYPE, edge_index[:, train_idx]),
+            edge_label=edge_attr[train_idx, 0],
+            edge_label_time=edge_time[train_idx],
+            time_attr="edge_time", temporal_strategy="last",
+            batch_size=batch_size, shuffle=True,
+        )
+        val_loader = LinkNeighborLoader(
+            data=context, num_neighbors=num_neighbors,
+            edge_label_index=(ADV_ETYPE, edge_index[:, val_idx]),
+            edge_label=edge_attr[val_idx, 0],
+            edge_label_time=edge_time[val_idx],
+            time_attr="edge_time", temporal_strategy="last",
+            batch_size=batch_size, shuffle=False,
+        )
+
+        best_val = -1.0
+        best_epoch = 1
+        patience_ctr = 0
+
+        for epoch in range(1, cfg.train.num_epochs + 1):
+            train_loss = run_epoch_lambdarank(
+                model, train_loader, optimizer, device,
+                edge_feat_cols=edge_feat_cols, sigma=sigma, ndcg_k=ndcg_k, train=True,
+            )
+            val_metrics = evaluate_lambdarank(
+                model, val_loader, device,
+                edge_feat_cols=edge_feat_cols, sigma=sigma, ndcg_k=ndcg_k,
+            )
+            val_score = val_metrics.get(es_metric, float("nan"))
+            if np.isnan(val_score):
+                val_score = -1.0
+            scheduler.step()
+
+            log_payload = {"train/loss": train_loss, "epoch": epoch, "__step": epoch}
+            log_payload.update({f"val/{k}": float(v) for k, v in val_metrics.items() if k in log_keys})
+            queue.put(("log", log_payload))
+
+            if val_score > best_val:
+                best_val   = val_score
+                best_epoch = epoch
+                patience_ctr = 0
+            else:
+                patience_ctr += 1
+                if patience_ctr >= patience:
+                    queue.put(("print", f"  early stop at epoch {epoch} (best epoch {best_epoch})"))
+                    break
+
+        queue.put(("summary", {f"best_val_{es_metric}": best_val}))
+        queue.put(("log", {f"val/{es_metric}": best_val}))
+        queue.put(("print", f"  trial best {es_metric}={best_val:.4f}  best_epoch={best_epoch}  "
+                            f"(train={len(train_idx)}, val={len(val_idx)})"))
+    except Exception as e:
+        import traceback
+        queue.put(("print", f"  ⚠️  trial worker exception: {e}\n{traceback.format_exc()}"))
+    finally:
+        queue.put(None)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -235,43 +393,62 @@ def main():
     else:
         print(f"Joining sweep: {sweep_id}")
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-    print(f"Device: {device}")
+    # Parent never touches the GPU — each trial does its own CUDA init in a
+    # subprocess so memory is fully released between trials.
+    print(f"GPU visible: {torch.cuda.is_available()}")
 
-    print(f"Loading graph from {cfg.data.graph_file}")
-    data = load_event_graph(cfg.data.graph_file)
+    # Note: the graph is loaded inside each trial subprocess (see _trial_worker).
+    # Loading once in the parent and passing tensors to children is unsafe with
+    # CUDA: any tensor accessed in the parent gets the parent's CUDA context
+    # baked in, which leaks across forked children. Per-child load is the
+    # cleanest way to guarantee a fresh CUDA context per trial.
 
-    train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(data)
-
-    edge_index = data[ADV_ETYPE].edge_index
-    edge_attr  = data[ADV_ETYPE].edge_attr
-    edge_time  = data[ADV_ETYPE].edge_time
-
-    train_idx = train_mask.nonzero(as_tuple=True)[0]
-    val_idx   = val_mask.nonzero(as_tuple=True)[0]
-    print(f"Cutoff year: {cutoff_year} | train edges: {len(train_idx)} "
-          f"| val edges: {len(val_idx)} | test edges: {int(test_mask.sum())}")
-
-    context = build_context_graph(data)
+    cfg_dict_static = OmegaConf.to_container(cfg, resolve=True)
+    config_path = str(Path(args.config).resolve())
 
     def _run_trial():
+        """Parent-side: init W&B, spawn child for actual training, stream metrics back."""
         wandb.init(
             project=project,
             entity=entity,
             group=tune_cfg.study_name,
-            config=OmegaConf.to_container(cfg, resolve=True),
+            config=cfg_dict_static,
         )
-        run_trial(
-            cfg, device,
-            context, edge_index, edge_attr, edge_time,
-            train_idx, val_idx,
-            output_dir,
+        # Resolve sweep-suggested overrides from the W&B run config.
+        wc = dict(wandb.config)
+        run_id = wandb.run.id
+
+        # Use spawn to get a fresh Python interpreter + fresh CUDA context.
+        ctx = mp.get_context("spawn")
+        q = ctx.Queue()
+        proc = ctx.Process(
+            target=_trial_worker,
+            args=(config_path, dict(wc), run_id, str(output_dir), q),
         )
+        proc.start()
+
+        # Drain the queue: child sends per-epoch metrics dicts and a final
+        # summary dict; we forward each to wandb in the parent.
+        while True:
+            msg = q.get()
+            if msg is None:
+                break
+            kind, payload = msg
+            if kind == "log":
+                step = payload.pop("__step", None)
+                if step is None:
+                    wandb.log(payload)
+                else:
+                    wandb.log(payload, step=step)
+            elif kind == "summary":
+                for k, v in payload.items():
+                    wandb.summary[k] = v
+            elif kind == "print":
+                print(payload)
+
+        proc.join()
+        if proc.exitcode != 0:
+            print(f"  ⚠️  trial subprocess exited with code {proc.exitcode}")
         wandb.finish()
 
     count = args.n_trials or tune_cfg.get("n_trials", 50)

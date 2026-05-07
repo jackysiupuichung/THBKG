@@ -1,0 +1,38 @@
+experiment:
+  name: b7_compgcn
+
+data:
+  graph_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/graph/hetero_graph_with_features_datatype.pt
+  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_datatype_mappings.pt
+  undirected: true
+
+# HPs from b7_compgcn_tune sweep (W&B sweep t0oyfqib, best trial distinctive-sweep-21):
+# val ndcg@10=1.000, ndcg@50=0.958, ndcg@100=0.623, rr@10=13.95, rr@50=13.83, rr@100=7.51.
+# Picked over sparkling-sweep-17 (lr=4.4e-5) — both tied on val, this one has healthier
+# learning rate (3.5e-4) so more likely to generalize.
+model:
+  name: compgcn
+  hidden_dim: 128
+  num_heads: 1               # unused by CompGCN
+  num_layers: 2
+  dropout: 0.2
+  use_rte: false
+  use_edge_features: false
+  composition: sub
+
+train:
+  output_dir: /gpfs/scratch/bty414/opentarget_evidences/23.06/runs/b7_compgcn_lambdarank_v2
+  num_epochs: 50
+  lr: 0.0003481660303759135
+  weight_decay: 0.0006458897131093361
+  eta_min: 1.0e-6
+  cosine_t_max: 5
+  batch_size: 512
+  num_neighbors: [10, 5]
+  lambdarank:
+    sigma: 1.721125250358148
+    ndcg_k: 50
+  early_stopping:
+    enabled: true
+    patience: 5
+    metric: ndcg@50

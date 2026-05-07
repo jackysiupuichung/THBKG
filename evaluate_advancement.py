@@ -38,35 +38,25 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _SCRATCH = "/gpfs/scratch/bty414/opentarget_evidences/23.06/runs"
 
-# DEFAULT_RUNS: dict[str, str] = {
-#     # Ablation baselines
-#     # "b1_hgt":                f"{_SCRATCH}/b1_hgt_datatype",
-#     # "b2_hgt_rte":            f"{_SCRATCH}/b2_hgt_rte_datatype",
-#     # "b3_gatv2_score":        f"{_SCRATCH}/b3_gatv2_score_datatype",
-#     # "b4_gatv2_novelty":      f"{_SCRATCH}/b4_gatv2_novelty_datatype",
-#     # "b5_gatv2_both":         f"{_SCRATCH}/b5_gatv2_both_datatype",
-#     # EA-HGT ablations
-#     # "p1_eahgt_score":        f"{_SCRATCH}/p1_eahgt_score_datatype",
-#     # "p2_eahgt_novelty":      f"{_SCRATCH}/p2_eahgt_novelty_datatype",
-#     "p3_eahgt_both_ap@50":         f"{_SCRATCH}/p3_eahgt_both_datatype",
-#     "p3_validation": f"{_SCRATCH}/p3_tuned_with_val",
-#     "p3_test":       f"{_SCRATCH}/p3_tuned_with_test",
-# }
-
 
 DEFAULT_RUNS: dict[str, str] = {
-    # Ablation baselines
-    # "b1_hgt":          f"{_SCRATCH}/b1_hgt_datatype",
-    # "b2_hgt_rte":      f"{_SCRATCH}/b2_hgt_rte_datatype",
-    # "b3_gatv2_score":  f"{_SCRATCH}/b3_gatv2_score_datatype",
-    # "b4_gatv2_novelty": f"{_SCRATCH}/b4_gatv2_novelty_datatype",
-    # "b5_gatv2_both":   f"{_SCRATCH}/b5_gatv2_both_datatype",
-    # # EA-HGT ablations
-    # "p1_eahgt_score":   f"{_SCRATCH}/p1_eahgt_score_datatype",
-    # "p2_eahgt_novelty": f"{_SCRATCH}/p2_eahgt_novelty_datatype",
-    # "p3_eahgt_both":    f"{_SCRATCH}/p3_tuned_with_test",
-    # LambdaRank is the active p3 representative
-    "p3_lambdarank": "runs/advancement_lambdarank",
+    # p3_lambdarank: directed graph (canonical)
+    "p3_lambdarank_directed": "runs/advancement_lambdarank",
+    # Undirected experiments (same base HP as v1, varying dropout and early-stop/ndcg_k)
+    "undirected_v1": f"{_SCRATCH}/advancement_lambdarank_undirected_v1",  # dropout=0.2, ndcg_k=50,  metric=ndcg@10
+    "unidirected_additive": f"{_SCRATCH}/advancement_lambdarank_undirected_v1_additive",  # dropout=0.2, ndcg_k=50,  metric=ndcg@10
+    "undirected_v2": f"{_SCRATCH}/advancement_lambdarank_undirected_v2",  # dropout=0.3, ndcg_k=50,  metric=ndcg@50
+    "undirected_v3": f"{_SCRATCH}/advancement_lambdarank_undirected_v3",  # dropout=0.3, ndcg_k=100, metric=ndcg@100
+    "undirected_v4": f"{_SCRATCH}/advancement_lambdarank_undirected_v4",  # dropout=0.4, ndcg_k=50,  metric=ndcg@50
+    # Study A — Model comparison (no edge features; per-encoder tuned)
+    "b1_hgt":           f"{_SCRATCH}/b1_hgt_lambdarank_v2",
+    "b3_gatv2":         f"{_SCRATCH}/b3_gatv2_lambdarank_v2",
+    "b6_rgcn":          f"{_SCRATCH}/b6_rgcn_lambdarank_v2",
+    "b7_compgcn":       f"{_SCRATCH}/b7_compgcn_lambdarank_v2",
+    # Study B — EAHGT ablation (HGT + edge feature variants; canonical HPs)
+    "p1_eahgt_score":   f"{_SCRATCH}/p1_eahgt_score_lambdarank_v2",
+    "p2_eahgt_novelty": f"{_SCRATCH}/p2_eahgt_novelty_lambdarank_v2",
+    "p3_eahgt_both":    f"{_SCRATCH}/p3_eahgt_both_lambdarank_v2",
 }
 
 # ---------------------------------------------------------------------------
@@ -218,7 +208,10 @@ def _collect_inject(
 
     runs = dict(DEFAULT_RUNS)
     if only is not None:
-        names = [n.strip() for n in only.split(",") if n.strip()]
+        if isinstance(only, (list, tuple)):
+            names = [str(n).strip() for n in only if str(n).strip()]
+        else:
+            names = [n.strip() for n in only.split(",") if n.strip()]
         unknown = [n for n in names if n not in runs]
         if unknown:
             raise ValueError(f"Unknown run name(s): {unknown}. Available: {list(runs.keys())}")
@@ -274,8 +267,8 @@ def _compute_classification_metrics(evaluation_dataset: xr.Dataset,
                                      therapeutic_areas: pd.DataFrame,
                                      model_names: list[str],
                                      pair_filter: set | None = None) -> pd.DataFrame:
-    """ROC AUC and average precision per model per TA."""
-    from sklearn.metrics import roc_auc_score, average_precision_score
+    """ROC AUC, average precision, and MCC (at score-optimal threshold) per model per TA."""
+    from sklearn.metrics import roc_auc_score, average_precision_score, matthews_corrcoef
 
     outcomes = evaluation_dataset.outcome.squeeze("outcomes").to_series().reset_index()
     outcomes.columns = ["target_id", "disease_id", "outcome"]
@@ -300,11 +293,26 @@ def _compute_classification_metrics(evaluation_dataset: xr.Dataset,
             y, s = ta_grp["outcome"].astype(int), ta_grp["score"]
             if y.nunique() < 2:
                 continue
+            # MCC at threshold that maximizes MCC across unique score values
+            s_arr = s.to_numpy()
+            y_arr = y.to_numpy()
+            uniq = np.unique(s_arr)
+            if len(uniq) > 200:
+                uniq = np.quantile(s_arr, np.linspace(0, 1, 200))
+            best_mcc = -1.0
+            for thr in uniq:
+                pred = (s_arr >= thr).astype(int)
+                if pred.sum() == 0 or pred.sum() == len(pred):
+                    continue
+                m = matthews_corrcoef(y_arr, pred)
+                if m > best_mcc:
+                    best_mcc = m
             rows.append({
                 "models": model,
                 "therapeutic_area_name": ta,
                 "roc_auc": roc_auc_score(y, s),
                 "average_precision": average_precision_score(y, s),
+                "mcc": best_mcc,
                 "n_samples": len(y),
                 "n_positives": y.sum(),
             })
@@ -500,12 +508,30 @@ def evaluate(
                    if m in evaluation_dataset.coords["models"].values]
     all_model_names = base_models + external_model_names
 
-    model_display = {
+    _STATIC_DISPLAY = {
         "rdg__no_time__positive": "RDG",
         "ots__all":               "OTS",
-        "p3_lambdarank":          "EAHGT",
+        "p3_lambdarank_directed": "EAHGT-dir",
+        "undirected_v1":          "EAHGT-undir-v1",
+        "undirected_v2":          "EAHGT-undir-v2",
+        "undirected_v3":          "EAHGT-undir-v3",
+        "undirected_v4":          "EAHGT-undir-v4",
+        "unidirected_additive":   "EAHGT-undir-add",
+        # Study A — Model comparison
+        "b1_hgt":                 "HGT",
+        "b3_gatv2":               "GATv2",
+        "b6_rgcn":                "R-GCN",
+        "b7_compgcn":             "CompGCN",
+        # Study B — EAHGT ablation
+        "p1_eahgt_score":         "EAHGT-score",
+        "p2_eahgt_novelty":       "EAHGT-novelty",
+        "p3_eahgt_both":          "EAHGT",
+    }
+    model_display = {
+        **_STATIC_DISPLAY,
         **{n: n.upper().replace("__", "-")[:12]
-           for n in external_model_names if n != "p3_lambdarank"},
+           for n in external_model_names
+           if n not in _STATIC_DISPLAY},
     }
     color_map  = _build_color_map(all_model_names)
     slug_colors = {model_display.get(m, m): color_map[m] for m in all_model_names}
@@ -710,7 +736,7 @@ def evaluate(
     _pct1  = max(1, round(_n_pairs_total * 0.01))
     _pct2  = max(1, round(_n_pairs_total * 0.02))
     _max_limit_plot = 250
-    _eahgt_slug = model_display.get("p3_lambdarank", "EAHGT")
+    _eahgt_slug = model_display.get("p3_lambdarank_undirected", model_display.get("p3_lambdarank_directed", "EAHGT"))
     _rr_mor_katz = rr_mor[rr_mor["model_slug"] == _eahgt_slug].copy()
     _rr_pooled_katz = rr_pooled[rr_pooled["model_slug"] == _eahgt_slug].copy()
     _rr_plot_max = min(6.0, float(_rr_pooled_katz["relative_risk_high"].max()))
@@ -747,27 +773,46 @@ def evaluate(
     ].copy()
     cm_ta["model_slug"] = cm_ta["models"].map(model_display)
     cm_ta_melt = cm_ta.melt(
-        id_vars=["model_slug", "therapeutic_area_name"], value_vars=["roc_auc", "average_precision"],
+        id_vars=["model_slug", "therapeutic_area_name"], value_vars=["roc_auc", "average_precision", "mcc"],
         var_name="metric", value_name="value"
     )
     _save_plot(
         pn.ggplot(cm_ta_melt, pn.aes(x="model_slug", y="value", fill="model_slug"))
         + pn.geom_boxplot(outlier_size=1, alpha=0.6)
         + pn.geom_jitter(width=0.15, size=1.5, alpha=0.7)
-        + pn.facet_wrap("~ metric", scales="free_y", ncol=2)
+        + pn.facet_wrap("~ metric", scales="free_y", ncol=3)
         + pn.scale_fill_manual(values=slug_colors)
         + pn.labs(x="", y="", fill="model")
         + pn.theme_minimal()
-        + pn.theme(figure_size=(7, 5), legend_position="none",
+        + pn.theme(figure_size=(10, 5), legend_position="none",
                    axis_text_x=pn.element_text(rotation=40, ha="right")),
         plots_dir / "classification_metrics_by_ta.png",
+    )
+
+    # Plot 3b: MCC per model (overall, stratum='all', TA='all')
+    cm_overall_mcc = cm_all[cm_all["therapeutic_area_name"] == "all"].copy()
+    cm_overall_mcc["model_slug"] = cm_overall_mcc["models"].map(model_display)
+    _save_plot(
+        pn.ggplot(cm_overall_mcc, pn.aes(x="model_slug", y="mcc", fill="model_slug"))
+        + pn.geom_col(alpha=0.85)
+        + pn.geom_text(pn.aes(label="mcc"), format_string="{:.3f}", va="bottom", size=8)
+        + pn.scale_fill_manual(values=slug_colors)
+        + pn.labs(x="", y="MCC (best threshold)", fill="model",
+                  title="Matthews correlation coefficient per model")
+        + pn.theme_minimal()
+        + pn.theme(figure_size=(8, 4.5), legend_position="none",
+                   axis_text_x=pn.element_text(rotation=40, ha="right")),
+        plots_dir / "mcc_by_model.png",
     )
 
     # Plot 4: Figure 12 — RR heatmap by model × TA (table style)
     # Columns: {model_slug}@{N} for selected limits; rows: TAs; cell = RR.
     _heatmap_limits  = [10, 20, 30, 40, 50, 100]
     _heatmap_models  = [
-        m for m in ["ots__all", "rdg__no_time__positive", "p3_lambdarank"]
+        m for m in ["ots__all", "rdg__no_time__positive",
+                    "p3_lambdarank_directed",
+                    "undirected_v1", "undirected_v2",
+                    "undirected_v3", "undirected_v4"]
         if m in all_model_names
     ]
 
@@ -854,7 +899,7 @@ def evaluate(
     ax.set_xticks([i + 0.5 for i in range(n_cols)])
     ax.set_xticklabels(
         [f"{model_display.get(m, m)}@{lim}" for m, lim in col_order],
-        rotation=0, ha="center", fontsize=9,
+        rotation=90, ha="center", fontsize=9,
     )
     ax.set_yticks([i + 0.5 for i in range(n_rows)])
     ax.set_yticklabels(ta_order, fontsize=9)
@@ -928,7 +973,7 @@ def evaluate(
             ax_d.set_xticks([i + 0.5 for i in range(n_cols_d)])
             ax_d.set_xticklabels(
                 [f"{model_display.get(m, m)}@{lim}" for m, lim in delta_cols],
-                rotation=0, ha="center", fontsize=9,
+                rotation=90, ha="center", fontsize=9,
             )
             ax_d.set_yticks([i + 0.5 for i in range(n_rows_d)])
             ax_d.set_yticklabels(ta_order, fontsize=9)
@@ -959,7 +1004,7 @@ def evaluate(
 
     # Plot 5: RR distributions across primary TAs — boxplot + jitter per model, faceted by limit
     _dist_limits = [10, 20, 50, 100]
-    p3_slug  = model_display.get("p3_lambdarank", "EAHGT")
+    p3_slug  = model_display.get("p3_lambdarank_undirected", model_display.get("p3_lambdarank_directed", "EAHGT"))
     rdg_slug = model_display.get("rdg__no_time__positive", "RDG")
     model_order = [model_display.get(m, m) for m in all_model_names]
 
@@ -1039,7 +1084,7 @@ def evaluate(
     )
     cm_strat_melt = cm_strat.melt(
         id_vars=["model_slug", "stratum_label", "therapeutic_area_name"],
-        value_vars=["roc_auc", "average_precision"],
+        value_vars=["roc_auc", "average_precision", "mcc"],
         var_name="metric", value_name="value",
     )
     _save_plot(
@@ -1078,7 +1123,7 @@ def evaluate(
     )
 
     focal_model = next(
-        (m for m in ["p3_lambdarank", *external_model_names] if m in all_model_names),
+        (m for m in ["p3_lambdarank_undirected", "p3_lambdarank_directed", *external_model_names] if m in all_model_names),
         all_model_names[-1] if all_model_names else None,
     )
 
@@ -1086,7 +1131,7 @@ def evaluate(
     # Summary
     # ------------------------------------------------------------------
     logger.info(f"\nAll results saved to {results_dir}")
-    overall = cm_all[cm_all["therapeutic_area_name"] == "all"].set_index("models")[["roc_auc", "average_precision"]].sort_values("roc_auc", ascending=False)
+    overall = cm_all[cm_all["therapeutic_area_name"] == "all"].set_index("models")[["roc_auc", "average_precision", "mcc"]].sort_values("roc_auc", ascending=False)
     print("\n=== Classification Metrics (overall) ===")
     print(overall.round(4).to_string())
     rr50 = rr_by_limit[rr_by_limit["limit"] == 50][["model_name", "relative_risk"]].sort_values("relative_risk", ascending=False)
@@ -1099,7 +1144,7 @@ def evaluate(
                 (classification_metrics["models"] == focal_model)
                 & (classification_metrics["therapeutic_area_name"] == "all")
             ]
-            .set_index("stratum")[["roc_auc", "average_precision", "n_samples"]]
+            .set_index("stratum")[["roc_auc", "average_precision", "mcc", "n_samples"]]
             .reindex(_stratum_order)
             .dropna(how="all")
         )

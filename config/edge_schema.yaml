@@ -18,7 +18,7 @@ cancer_biomarkers:
   name: cancer_biomarker
   sourceId: targetId
   targetId: diseaseId
-  relation_name: somatic_mutation
+  relation_name: affected_pathway
   props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 # chembl: removed — evidence_chembl absent from 26.03 FTP; replaced by clinical_precedence below
@@ -63,25 +63,12 @@ reactome:
     relation_name: affected_pathway
     props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
-  # In 25.03 pathways.id moved from evidence to targets node; disease->reactome linkage no longer available
-  # - name: reactome
-  #   sourceId: diseaseId
-  #   targetId: pathways.id
-  #   relation_name: associated_with
-  #   props: [source_type=constant:disease, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
-
-target_reactome:
-  input_dir: targets
-  sourceId: id
-  targetId: pathways.pathwayId
-  relation_name: involved_in
-  props: [
-    datasourceId=constant:reactome,
-    score=constant:1.0,
-    source_type=constant:target,
-    target_type=constant:reactome,
-    year
-  ]
+  - input_dir: sourceId=reactome
+    name: reactome
+    sourceId: targetId
+    targetId: pathways.id
+    relation_name: involved_in
+    props: [source_type=constant:target, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
 
 clingen:
   input_dir: sourceId=clingen

@@ -13,11 +13,3 @@ time_range:
   first_year: 1995
   last_year: 2025
 
-datasources:
-  # Per-datasource score cutoffs. Edges below the cutoff are excluded before aggregation.
-  # 'cutoff': Minimum score threshold (optional). No cutoff means all edges are included.
-
-  eva:
-    cutoff: 0.6
-  europepmc:
-    cutoff: 0.3

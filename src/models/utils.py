@@ -9,6 +9,8 @@ from typing import Dict, List, Tuple
 from .hgt import HGTLinkPredictor
 from .gat_v2 import GATv2
 from .gat_v3 import GATv3
+from .rgcn import RGCN
+from .compgcn import CompGCN
 
 
 
@@ -44,6 +46,7 @@ def build_model(
     time_dim: int = 0,
     t_min: float = 0.0,
     t_max: float = 1.0,
+    composition: str = "sub",
 ) -> torch.nn.Module:
     """
     Build model from HeteroData.
@@ -119,6 +122,27 @@ def build_model(
             num_layers=num_layers,
             metadata=metadata,
             dropout=dropout
+        )
+    elif model_name == 'rgcn':
+        model = RGCN(
+            in_channels=in_channels,
+            hidden_dim=hidden_dim,
+            out_dim=out_dim,
+            num_layers=num_layers,
+            node_types=node_types,
+            edge_types=edge_types,
+            dropout=dropout,
+        )
+    elif model_name == 'compgcn':
+        model = CompGCN(
+            in_channels=in_channels,
+            hidden_dim=hidden_dim,
+            out_dim=out_dim,
+            num_layers=num_layers,
+            node_types=node_types,
+            edge_types=edge_types,
+            dropout=dropout,
+            composition=composition,
         )
     else:
         raise ValueError(f"Unknown model name: {model_name}")

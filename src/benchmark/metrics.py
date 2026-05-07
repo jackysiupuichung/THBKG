@@ -103,6 +103,128 @@ def ndcg_at_k(
     return dcg / idcg
 
 
+def ndcg_ta_mean_at_k(
+    scores: torch.Tensor,
+    labels: torch.Tensor,
+    ta_per_item: List[List[str]],
+    k: int,
+    primary_tas: Optional[List[str]] = None,
+) -> float:
+    """
+    TA-grouped NDCG@k. For each therapeutic area, restrict to the items
+    belonging to that TA, compute NDCG@k on that subset, then average across
+    TAs (mean-of-ratios over therapeutic areas, mirroring the eval-time RR).
+
+    Items can belong to multiple TAs (one disease → many TAs); each TA gets
+    counted once. TAs with zero positives in the val set are skipped.
+
+    Args:
+        scores: [N] predicted scores
+        labels: [N] binary labels
+        ta_per_item: list of length N; each entry a list of TA names
+        k: top-k cutoff
+        primary_tas: optional whitelist of TAs to average over. If None, uses
+            all TAs that appear in `ta_per_item`.
+
+    Returns:
+        Mean NDCG@k across TAs, or 0.0 if no TA had any positives.
+    """
+    if labels.sum() == 0:
+        return 0.0
+
+    by_ta_idx: Dict[str, List[int]] = {}
+    for i, tas in enumerate(ta_per_item):
+        for ta in tas:
+            if primary_tas is not None and ta not in primary_tas:
+                continue
+            by_ta_idx.setdefault(ta, []).append(i)
+
+    if not by_ta_idx:
+        return 0.0
+
+    vals = []
+    for ta, idx_list in by_ta_idx.items():
+        idx = torch.as_tensor(idx_list, dtype=torch.long)
+        ta_scores = scores[idx]
+        ta_labels = labels[idx]
+        if ta_labels.sum() == 0:
+            continue
+        vals.append(ndcg_at_k(ta_scores, ta_labels, k))
+
+    if not vals:
+        return 0.0
+    return float(sum(vals) / len(vals))
+
+
+def rr_ta_mean_at_k(
+    scores: torch.Tensor,
+    labels: torch.Tensor,
+    ta_per_item: List[List[str]],
+    k: int,
+    primary_tas: Optional[List[str]] = None,
+) -> float:
+    """
+    TA-grouped relative-risk-at-K, mean across therapeutic areas.
+
+    Mirrors `_compute_rr_by_ta` in `evaluate_advancement.py`: within each TA,
+    take the top-k items by score, then RR = P(pos | exposed) / P(pos | control).
+    Skips TAs where the TA has fewer than k items, or where the control group
+    has zero positives (RR undefined). Average across the remaining TAs.
+
+    Items can belong to multiple TAs (one disease → many TAs); each TA gets
+    counted once.
+
+    Args:
+        scores: [N] predicted scores
+        labels: [N] binary labels
+        ta_per_item: list of length N; each entry a list of TA names
+        k: top-k cutoff (per TA)
+        primary_tas: optional whitelist of TAs to average over
+
+    Returns:
+        Mean RR@k across qualifying TAs, or 0.0 if none qualify.
+    """
+    if labels.sum() == 0:
+        return 0.0
+
+    by_ta_idx: Dict[str, List[int]] = {}
+    for i, tas in enumerate(ta_per_item):
+        for ta in tas:
+            if primary_tas is not None and ta not in primary_tas:
+                continue
+            by_ta_idx.setdefault(ta, []).append(i)
+
+    if not by_ta_idx:
+        return 0.0
+
+    scores_np = scores.detach().cpu().numpy() if isinstance(scores, torch.Tensor) else np.asarray(scores)
+    labels_np = labels.detach().cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+
+    vals = []
+    for ta, idx_list in by_ta_idx.items():
+        if len(idx_list) <= k:
+            continue
+        idx = np.asarray(idx_list, dtype=np.int64)
+        ta_scores = scores_np[idx]
+        ta_labels = labels_np[idx]
+
+        order = np.argsort(ta_scores)[::-1]
+        threshold = ta_scores[order[k - 1]]
+        exposed_mask = ta_scores >= threshold
+        control_mask = ~exposed_mask
+        if exposed_mask.sum() == 0 or control_mask.sum() == 0:
+            continue
+        p_exposed = ta_labels[exposed_mask].sum() / exposed_mask.sum()
+        p_control = ta_labels[control_mask].sum() / control_mask.sum()
+        if p_control == 0:
+            continue
+        vals.append(float(p_exposed / p_control))
+
+    if not vals:
+        return 0.0
+    return float(sum(vals) / len(vals))
+
+
 def mean_reciprocal_rank(
     scores: torch.Tensor,
     labels: torch.Tensor,

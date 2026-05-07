@@ -30,12 +30,12 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@10
+    metric: ndcg@50
 
 tune:
   study_name: advancement_lambdarank_tune
   n_trials: 50
-  metric: val/ndcg@10
+  metric: val/ndcg@50
 
   search_space:
     # model capacity

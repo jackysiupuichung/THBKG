@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH -J collecting_node_features_03
 #SBATCH -o %x.o%j
-#SBATCH -p compute
-#SBATCH -n 4
-#SBATCH -t 12:0:0
-#SBATCH --mem-per-cpu=32G
+#SBATCH -p gpushort
+#SBATCH -n 8
+#SBATCH --cpus-per-gpu=8
+#SBATCH -t 1:0:0
+#SBATCH --mem-per-cpu=11G
+#SBATCH --gres=gpu:1
 
 set -euo pipefail
 
@@ -12,16 +14,16 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Configuration ===
-OUTPUT_BASE="/gpfs/scratch/bty414/opentarget_evidences/23.06"
-MAPPINGS_FILE="/gpfs/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_mappings.pt"
-EVIDENCE_DIR="/gpfs/scratch/bty414/opentarget_evidences/23.06/evidenceDated"
-FEATURE_DATA_DIR="/gpfs/scratch/bty414/opentarget_evidences/23.06/features/raw"
-FEATURE_OUTPUT_DIR="/gpfs/scratch/bty414/opentarget_evidences/23.06/features/processed"
-TEMP_NODE_DIR="/gpfs/scratch/bty414/opentarget_evidences/23.06/features/temp_nodes"
+OUTPUT_BASE="/gpfs/scratch/bty414/opentarget_evidences/26.03"
+MAPPINGS_FILE="/gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_mappings.pt"
+EVIDENCE_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/evidenceDated"
+FEATURE_DATA_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/features/raw"
+FEATURE_OUTPUT_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/features/processed"
+TEMP_NODE_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/features/temp_nodes"
 
 # OUTPUT_BASE="output"
 # MAPPINGS_FILE="${OUTPUT_BASE}/progression/temporal_graph_sample_mappings.pt"
-# EVIDENCE_DIR="data/evidenceDated_subset/23.06"
+# EVIDENCE_DIR="data/evidenceDated_subset/26.03"
 # FEATURE_DATA_DIR="data/node_features"
 # FEATURE_OUTPUT_DIR="${OUTPUT_BASE}/features/processed"
 # TEMP_NODE_DIR="${OUTPUT_BASE}/features/temp_nodes"

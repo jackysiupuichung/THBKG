@@ -1,0 +1,35 @@
+experiment:
+  name: b6_rgcn
+
+data:
+  graph_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/graph/hetero_graph_with_features_datatype.pt
+  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_datatype_mappings.pt
+  undirected: true
+
+# HPs from b6_rgcn_tune sweep (W&B sweep rsoc4n91, best trial icy-sweep-16):
+# val ndcg@10=1.000, ndcg@50=0.825, ndcg@100=0.610, rr@10=13.95, rr@50=11.02, rr@100=7.51
+model:
+  name: rgcn
+  hidden_dim: 128
+  num_heads: 1               # unused by R-GCN
+  num_layers: 1
+  dropout: 0.3
+  use_rte: false
+  use_edge_features: false
+
+train:
+  output_dir: /gpfs/scratch/bty414/opentarget_evidences/23.06/runs/b6_rgcn_lambdarank_v2
+  num_epochs: 50
+  lr: 0.0012210662097848076
+  weight_decay: 0.004576350199545482
+  eta_min: 1.0e-6
+  cosine_t_max: 20
+  batch_size: 512
+  num_neighbors: [30, 20]
+  lambdarank:
+    sigma: 1.2063299196579966
+    ndcg_k: 50
+  early_stopping:
+    enabled: true
+    patience: 5
+    metric: ndcg@50

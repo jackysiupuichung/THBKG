@@ -346,7 +346,7 @@ def evaluate(model, loader, device, edge_feat_cols=(0, 1), pos_weight=None, foca
 
 
 @torch.no_grad()
-def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighbors, batch_size, device, edge_feat_cols=(0, 1)):
+def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighbors, batch_size, device, edge_feat_cols=(0, 1), num_workers=0):
     """Score test edges using temporally-constrained subgraphs."""
     model.eval()
     loader = LinkNeighborLoader(
@@ -359,6 +359,8 @@ def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighb
         temporal_strategy="last",
         batch_size=batch_size,
         shuffle=False,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
     )
     all_logits, all_labels = [], []
     for batch in loader:

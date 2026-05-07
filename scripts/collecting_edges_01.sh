@@ -4,7 +4,7 @@
 #SBATCH -p compute
 #SBATCH -n 1
 #SBATCH -t 240:0:0
-#SBATCH --mem-per-cpu=32G
+#SBATCH --mem-per-cpu=64G
 
 set -euo pipefail
 
@@ -12,8 +12,8 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Debug mode: set to "--debug" to read only 1 file per datasource subdir ===
-# DEBUG_FLAG=""
-DEBUG_FLAG="--debug"
+DEBUG_FLAG=""
+# DEBUG_FLAG="--debug"
 
 # === Configuration ===
 CONFIG="config/event_graph_config.yaml"
@@ -35,27 +35,26 @@ RAW_NODES_DIR="${KG_OUTPUT_DIR}/nodes"
 STATIC_EDGES_DIR="${KG_OUTPUT_DIR}/static_edges"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
 
-# === 0. KG Pipeline (Raw Evidence -> Nodes/Edges) ===
-echo "🚀 [1/2] Running KG Pipeline..."
-echo "   Input: $INPUT_EVIDENCE_DIR"
-echo "   Output: $KG_OUTPUT_DIR"
+# === 0. KG Pipeline (Raw Evidence -> Nodes/Edges) === [already completed]
+# echo "🚀 [1/2] Running KG Pipeline..."
+# echo "   Input: $INPUT_EVIDENCE_DIR"
+# echo "   Output: $KG_OUTPUT_DIR"
 
-python preprocessing/temporal_graph/pipeline/kg_pipeline.py \
-  --input "$INPUT_EVIDENCE_DIR" \
-  --node-input "$NODE_INPUT_DIR" \
-  --node-schema "$NODE_SCHEMA" \
-  --edge-schema "$EDGE_SCHEMA" \
-  --static-edge-schema "$STATIC_EDGE_SCHEMA" \
-  --node-output "$RAW_NODES_DIR" \
-  --edge-output "$RAW_EDGES_DIR" \
-  --static-edge-output "$STATIC_EDGES_DIR" \
-  $DEBUG_FLAG
+# python preprocessing/temporal_graph/pipeline/kg_pipeline.py \
+#   --input "$INPUT_EVIDENCE_DIR" \
+#   --node-input "$NODE_INPUT_DIR" \
+#   --node-schema "$NODE_SCHEMA" \
+#   --edge-schema "$EDGE_SCHEMA" \
+#   --static-edge-schema "$STATIC_EDGE_SCHEMA" \
+#   --node-output "$RAW_NODES_DIR" \
+#   --edge-output "$RAW_EDGES_DIR" \
+#   --static-edge-output "$STATIC_EDGES_DIR" \
+#   $DEBUG_FLAG
 
 # === 1. Build Event Lists ===
 echo "🚀 [2/3] Building Event Lists (datasource-level and datatype-level)..."
 if [ ! -f "$CONFIG" ]; then echo "❌ Config $CONFIG not found!"; exit 1; fi
 
-EVENTS_DATASOURCE_FILE="${EVENT_OUTPUT_DIR}/events_datasource.parquet"
 EVENTS_DATATYPE_FILE="${EVENT_OUTPUT_DIR}/events_datatype.parquet"
 
 # --- Datatype-level ---
@@ -71,4 +70,4 @@ echo "   [datasource-level]"
 python preprocessing/temporal_graph/pipeline/build_event_list.py \
   --input-dir "$RAW_EDGES_DIR" \
   --config "$CONFIG" \
-  --output "$EVENTS_DATASOURCE_FILE" \
+  --output "${EVENT_OUTPUT_DIR}/events_datasource.parquet"

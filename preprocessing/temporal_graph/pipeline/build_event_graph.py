@@ -12,6 +12,7 @@ with edge_time and edge_weight, and saves to .pt file.
 import os
 import sys
 import argparse
+import numpy as np
 import pandas as pd
 import torch
 from pathlib import Path
@@ -373,13 +374,18 @@ def build_literature_sidecar(raw_edges_dir: str, output_path: str):
     combined = pd.concat(dfs, ignore_index=True)
     combined = combined[combined['literature'].notna()]
 
-    # Normalise: literature may be a list or a single string
-    combined['literature'] = combined['literature'].apply(
-        lambda v: v if isinstance(v, list) else [v]
-    )
+    # Normalise: literature may be a list, ndarray, or a single scalar
+    def _to_list(v):
+        if isinstance(v, (list, tuple)):
+            return list(v)
+        if isinstance(v, np.ndarray):
+            return v.tolist()
+        return [v]
+    combined['literature'] = combined['literature'].apply(_to_list)
 
     exploded = combined.explode('literature').rename(columns={'literature': 'pmid', 'id': 'evidence_id'})
-    exploded = exploded[exploded['pmid'].notna()].drop_duplicates()
+    exploded['pmid'] = exploded['pmid'].astype(str)
+    exploded = exploded[exploded['pmid'].notna() & (exploded['pmid'] != 'nan')].drop_duplicates()
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     exploded.to_parquet(output_path, index=False)
@@ -449,40 +455,22 @@ def build_event_graph(
     all_edges = events
     
     if not static_edges.empty:
-        print("\n➕ Filtering and merging static edges...")
-        
-        # Get all node IDs from events (dynamic edges)
+        print("\n➕ Merging static edges (no endpoint filtering — static nodes may introduce new nodes)...")
+
         event_node_ids = set()
         event_node_ids.update(events['sourceId'].astype(str).unique())
         event_node_ids.update(events['targetId'].astype(str).unique())
-        
+
+        static_src = set(static_edges['sourceId'].astype(str).unique())
+        static_tgt = set(static_edges['targetId'].astype(str).unique())
+        new_nodes = (static_src | static_tgt) - event_node_ids
+
         print(f"   Unique nodes in events: {len(event_node_ids):,}")
-        print(f"   Static edges before filtering: {len(static_edges):,}")
-        
-        # Filter static edges: keep only if BOTH source and target exist in events
-        static_edges['sourceId_str'] = static_edges['sourceId'].astype(str)
-        static_edges['targetId_str'] = static_edges['targetId'].astype(str)
-        
-        valid_mask = (
-            static_edges['sourceId_str'].isin(event_node_ids) & 
-            static_edges['targetId_str'].isin(event_node_ids)
-        )
-        
-        filtered_static = static_edges[valid_mask].copy()
-        
-        # Drop temporary string columns
-        filtered_static = filtered_static.drop(columns=['sourceId_str', 'targetId_str'])
-        
-        print(f"   Static edges after filtering: {len(filtered_static):,}")
-        print(f"   Filtered out: {len(static_edges) - len(filtered_static):,} edges (nodes not in events)")
-        
-        # Concat
-        if not filtered_static.empty:
-            all_edges = pd.concat([events, filtered_static], ignore_index=True)
-            print(f"   Combined Total: {len(all_edges):,} edges")
-        else:
-            print(f"   ⚠️  No static edges remain after filtering")
-            all_edges = events
+        print(f"   Static edges: {len(static_edges):,}")
+        print(f"   New nodes introduced by static edges: {len(new_nodes):,}")
+
+        all_edges = pd.concat([events, static_edges], ignore_index=True)
+        print(f"   Combined Total: {len(all_edges):,} edges")
     
     # Build literature sidecar (before graph build; raw edges dir must be provided)
     if raw_edges_dir:

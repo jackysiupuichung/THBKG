@@ -32,6 +32,31 @@ def harmonic_sum(scores, max_harmonic=1.644):
     return np.sum(s / (idx ** 2)) / max_harmonic
 
 
+def harmonic_sum_grouped(df: pd.DataFrame,
+                          group_cols: list,
+                          score_col: str = 'score',
+                          max_harmonic: float = 1.644,
+                          top_k: int = 50) -> pd.DataFrame:
+    """Vectorized harmonic-top-K sum per group.
+
+    Equivalent to df.groupby(group_cols)[score_col].apply(harmonic_sum) but
+    avoids per-group Python calls. Returns DataFrame of group_cols + [score_col].
+    """
+    if df.empty:
+        out = df[group_cols].head(0).copy()
+        out[score_col] = pd.Series([], dtype=float)
+        return out
+
+    sorted_df = df.sort_values(group_cols + [score_col], ascending=[True] * len(group_cols) + [False], kind='stable')
+    rank = sorted_df.groupby(group_cols, sort=False).cumcount() + 1
+    mask = rank <= top_k
+    contrib = (sorted_df[score_col].to_numpy() / (rank.to_numpy() ** 2)) * mask.to_numpy()
+    sorted_df = sorted_df.assign(_contrib=contrib)
+    agg = sorted_df.groupby(group_cols, as_index=False, sort=False)['_contrib'].sum()
+    agg[score_col] = agg['_contrib'] / max_harmonic
+    return agg.drop(columns=['_contrib'])
+
+
 # Novelty decay parameters (Open Targets paper values)
 NOVELTY_SCALE = 2.0   # logistic steepness k
 NOVELTY_SHIFT = 3.0   # sigmoid midpoint m
@@ -96,12 +121,8 @@ def compute_novelty_per_datasource(dynamic_edges: pd.DataFrame,
 
     id_cols = ['sourceId', 'targetId', 'source_type', 'target_type', 'relation', 'datasourceId']
 
-    # Pre-aggregate scores per (group_key, year) using harmonic_sum in one vectorised pass
-    annual = dynamic_edges.groupby(id_cols + ['year'], as_index=False)['score'].apply(
-        lambda s: harmonic_sum(s.values)
-    )
-    if 'score' not in annual.columns:
-        annual = annual.rename(columns={annual.columns[-1]: 'score'})
+    # Pre-aggregate scores per (group_key, year) — vectorized harmonic-top-50
+    annual = harmonic_sum_grouped(dynamic_edges, id_cols + ['year'], 'score')
 
     all_records = []
 
@@ -325,85 +346,91 @@ def build_event_list(
     # Build cumulative temporal events
     print(f"\n🔢 Building cumulative temporal events...")
     print(f"   For each year {start_year}-{end_year}: include all evidences up to that year")
-    
+
     # Group columns (without year)
     if datatype_mapping:
         # Datatype-level: group by datatypeId
-        group_cols = ['sourceId', 'targetId', 'source_type', 'target_type', 
+        group_cols = ['sourceId', 'targetId', 'source_type', 'target_type',
                       'relation', 'datatypeId']
-        datasource_group_cols = ['sourceId', 'targetId', 'source_type', 'target_type', 
+        datasource_group_cols = ['sourceId', 'targetId', 'source_type', 'target_type',
                                  'relation', 'datatypeId', 'datasourceId']
     else:
         # Datasource-level: group by datasourceId
-        group_cols = ['sourceId', 'targetId', 'source_type', 'target_type', 
+        group_cols = ['sourceId', 'targetId', 'source_type', 'target_type',
                       'relation', 'datasourceId']
         datasource_group_cols = group_cols
-    
+
+    # Pre-split clinical vs non-clinical once (was done every year before)
+    mask_clinical_full = dynamic_edges['relation'].str.contains('clinical_trial', case=False)
+    clinical_full = dynamic_edges[mask_clinical_full]
+    other_full = dynamic_edges[~mask_clinical_full]
+
+    # Prune non-clinical to top-50-by-score per datasource_group: harmonic_sum only uses top 50,
+    # so any evidence outside the top 50 of its group can never contribute regardless of year.
+    if not other_full.empty:
+        n_before = len(other_full)
+        other_full = other_full.sort_values(
+            datasource_group_cols + ['score'],
+            ascending=[True] * len(datasource_group_cols) + [False],
+            kind='stable',
+        )
+        rank_ds = other_full.groupby(datasource_group_cols, sort=False).cumcount() + 1
+        other_full = other_full[rank_ds <= 50].copy()
+        print(f"   Pruned non-clinical evidences to top-50 per group: {n_before:,} → {len(other_full):,}")
+
     # Store all year-score combinations
     all_events = []
-    
+
     # For each year, calculate cumulative harmonic sum
     for year in tqdm(range(start_year, end_year + 1), desc="Processing years"):
-        # Get all edges up to and including this year (CUMULATIVE)
-        cumulative_edges = dynamic_edges[dynamic_edges['year'] <= year].copy()
-        
-        if cumulative_edges.empty:
+        clinical_edges = clinical_full[clinical_full['year'] <= year]
+        other_edges = other_full[other_full['year'] <= year]
+
+        if clinical_edges.empty and other_edges.empty:
             continue
-            
-        # Split into Clinical (MAX) and Others (Harmonic Sum)
-        mask_clinical = cumulative_edges['relation'].str.contains('clinical_trial', case=False)
-        clinical_edges = cumulative_edges[mask_clinical]
-        other_edges = cumulative_edges[~mask_clinical]
-        
+
         dfs_to_concat = []
-        
+
         # 1. Clinical Trials -> MAX (always at datasource level, no datatype aggregation)
         if not clinical_edges.empty:
             clinical_agg = clinical_edges.groupby(
                 ['sourceId', 'targetId', 'source_type', 'target_type', 'relation', 'datasourceId'],
-                as_index=False
+                as_index=False, sort=False,
             )['score'].max()
-            # Add datatypeId if needed
             if datatype_mapping:
                 clinical_agg['datatypeId'] = clinical_agg['datasourceId']
             dfs_to_concat.append(clinical_agg)
-            
+
         # 2. Others -> Process differently based on mode
         if not other_edges.empty:
             if datatype_mapping:
                 # DATATYPE MODE:
-                # Step 1: Harmonic sum per datasource (within each datatype group)
-                datasource_scores = other_edges.groupby(datasource_group_cols, as_index=False).agg({
-                    'score': lambda x: aggregate_scores(x.values),
-                    'datasource_weight': 'first'  # Keep weight
-                })
-                
+                # Step 1: Harmonic sum per datasource (within each datatype group) — vectorized
+                datasource_scores = harmonic_sum_grouped(other_edges, datasource_group_cols, 'score')
+                # Re-attach datasource_weight (constant per datasource)
+                weights = other_edges[['datasourceId', 'datasource_weight']].drop_duplicates('datasourceId')
+                datasource_scores = datasource_scores.merge(weights, on='datasourceId', how='left')
+
                 # Step 2: Weight datasource scores
                 datasource_scores['weighted_score'] = (
                     datasource_scores['score'] * datasource_scores['datasource_weight']
                 )
-                
-                # Step 3: Harmonic sum of weighted datasource scores -> datatype score
-                datatype_agg = datasource_scores.groupby(group_cols, as_index=False).agg({
-                    'weighted_score': lambda x: aggregate_scores(x.values)
-                }).rename(columns={'weighted_score': 'score'})
-                
+
+                # Step 3: Harmonic sum of weighted datasource scores -> datatype score — vectorized
+                weighted = datasource_scores[group_cols].copy()
+                weighted['score'] = datasource_scores['weighted_score'].values
+                datatype_agg = harmonic_sum_grouped(weighted, group_cols, 'score')
                 dfs_to_concat.append(datatype_agg)
             else:
-                # DATASOURCE MODE: Simple harmonic sum per datasource
-                other_agg = other_edges.groupby(group_cols, as_index=False).agg({
-                    'score': lambda x: aggregate_scores(x.values)
-                })
+                # DATASOURCE MODE: Simple harmonic sum per datasource — vectorized
+                other_agg = harmonic_sum_grouped(other_edges, group_cols, 'score')
                 dfs_to_concat.append(other_agg)
-            
+
         if not dfs_to_concat:
             continue
-            
+
         year_scores = pd.concat(dfs_to_concat, ignore_index=True)
-        
-        # Add year column
         year_scores['year'] = year
-        
         all_events.append(year_scores)
     
     if not all_events:
@@ -446,9 +473,8 @@ def build_event_list(
         # Aggregate datasource novelties → datatype novelty (same two-level scheme as scores)
         novelty_ds = add_datatype_info(novelty_ds, datatype_mapping)
         novelty_ds['weighted_novelty'] = novelty_ds['novelty'] * novelty_ds['datasource_weight']
-        novelty_agg = novelty_ds.groupby(group_cols + ['year'], as_index=False).agg(
-            novelty=('weighted_novelty', lambda x: harmonic_sum(x.values))
-        )
+        novelty_input = novelty_ds.drop(columns=['novelty']).rename(columns={'weighted_novelty': 'novelty'})
+        novelty_agg = harmonic_sum_grouped(novelty_input, group_cols + ['year'], 'novelty')
     else:
         novelty_agg = novelty_ds[group_cols + ['year', 'novelty']].copy()
 

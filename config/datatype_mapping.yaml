@@ -21,22 +21,23 @@ datatypes:
       cancer_gene_census: 1.0
       intogen: 1.0
       eva_somatic: 1.0
-      cancer_biomarkers: 1.0
-    
-  known_drug:
-    label: "Known drug"
+
+  clinical_trial:
+    label: "Clinical trial"
     datasources:
-      chembl: 1.0
-    
+      clinical_precedence: 1.0
+
   affected_pathway:
     label: "Affected pathway"
     datasources:
+      cancer_biomarkers: 0.5
       crispr_screen: 1.0
       crispr: 1.0
-      slapenrich: 0.5
-      progeny: 0.5
       reactome: 1.0
-      sysbio: 0.5
+      # slapenrich: 0.5  # removed — superseded by other sources
+      # progeny: 0.5    # removed — superseded by other sources
+      # sysbio: 0.5     # removed — superseded by other sources (Gene Signatures)
+
       
   literature:
     label: "Literature"
@@ -53,26 +54,6 @@ datatypes:
     datasources:
       impc: 0.2
 
-
-  clinical_trial_positive:
-    label: "Clinical trial - positive outcome"
-    datasources:
-      chembl: 1.0
-
-  clinical_trial_adverse_effects:
-    label: "Clinical trial - adverse effects"
-    datasources:
-      chembl: 1.0
-
-  clinical_trial_unmet_efficacy:
-    label: "Clinical trial - unmet efficacy"
-    datasources:
-      chembl: 1.0
-
-  clinical_trial_unknown_operational:
-    label: "Clinical trial - unknown/operational"
-    datasources:
-      chembl: 1.0
 
   protein_interaction:
     label: "Protein interaction"

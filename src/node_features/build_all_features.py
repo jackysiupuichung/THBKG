@@ -229,7 +229,7 @@ def main():
             disease_args = [
                 "--disease-dir", f"{evidence_dir}/diseases",
                 "--output-dir", output_dir,
-                "--parquet-glob", "part-*.parquet",
+                "--parquet-glob", "*.parquet",
                 "--batch-size", "128",
                 "--kg-ids-file", node_files['disease']
             ]

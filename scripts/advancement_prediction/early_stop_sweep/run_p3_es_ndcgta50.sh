@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J b5_gatv2_both
+#SBATCH -J p3_es_ndcgta50
 #SBATCH -o %x.o%j
 #SBATCH -p gpushort
 #SBATCH -n 8
@@ -11,10 +11,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${SLURM_SUBMIT_DIR:-$(dirname "$(dirname "$SCRIPT_DIR")")}"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")}"
 cd "$REPO_ROOT"
 
 source .venv/bin/activate
 export WANDB_MODE="disabled"
 
-python src/train_advancement_hgt.py --config config/experiments/b5_gatv2_both.yaml
+python src/train_advancement_lambdarank.py \
+  --config config/experiments/early_stop_sweep/p3_es_ndcgta50.yaml

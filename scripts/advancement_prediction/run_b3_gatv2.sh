@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J b2_hgt_rte
+#SBATCH -J b3_gatv2
 #SBATCH -o %x.o%j
 #SBATCH -p gpushort
 #SBATCH -n 8
@@ -17,4 +17,4 @@ cd "$REPO_ROOT"
 source .venv/bin/activate
 export WANDB_MODE="disabled"
 
-python src/train_advancement_hgt.py --config config/experiments/b2_hgt_rte.yaml
+python src/train_advancement_lambdarank.py --config config/experiments/b3_gatv2.yaml
