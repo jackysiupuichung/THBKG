@@ -978,9 +978,9 @@ We report RR@$N$ at $N \in \{10, 20, 30, 40, 50, 100\}$, matching the
 cutoffs used in Czech et al.'s primary results table (Figure~4 of
 \citet{Czech2024CLINICALFORECASTING}), as well as at the top-1\% and top-2\% cutoffs used
 in their main performance figure. Results are reported as equally-weighted
-averages across the 13 retained therapeutic areas, with 95\% Katz
-log-method confidence intervals \citep{Katz1978ObtainingStudies} around each RR@$N$
-point estimate.
+averages across the 13 retained therapeutic areas; per-therapeutic-area
+RR@$N$ point estimates carry 95\% Katz log-method confidence intervals
+\citep{Katz1978ObtainingStudies}.
 
 \textbf{AUROC} and \textbf{Average Precision (AP)} are reported as
 secondary metrics, again following Czech et al.\ \citep{Czech2024CLINICALFORECASTING}. Czech
@@ -1187,16 +1187,18 @@ $N = 100$, with the largest absolute gains in the $N = 30$--$50$ range
 ($\Delta$RR up to +4.25 at $N = 50$). At $N = 100$, \eahgt{} maintains
 RR $\approx$ 4.82 versus 1.68 for RDG --- a $2.9\times$ enrichment ---
 showing that the advantage persists across the actionable range of the
-ranking. The 95\% Katz confidence interval for \eahgt{} lies entirely
-above the RDG point estimates across all cutoffs
-(Figure~\ref{fig:rr_by_limit}).
+ranking (Figure~\ref{fig:rr_by_limit}). Among the ablation conditions
+(Section~\ref{sec:ablation}) the same figure shows that the
+\hgt{}-with-edge-feature variants and \rgcn{} also exceed RDG, while
+the edge-feature-free \hgt{} and \compgcn{} do not.
 
 \begin{table}[h]
 \tableparts{%
 \caption{Relative risk at top-$N$ (RR@$N$) for \eahgt{} (P3) and RDG,
 computed as the mean across 13 primary therapeutic areas (Open Targets
-23.06). $\Delta$ denotes the difference P3 $-$ RDG. 95\% Katz confidence
-intervals for \eahgt{} are shown in Figure~\ref{fig:rr_by_limit}.}
+23.06). $\Delta$ denotes the difference P3 $-$ RDG. The full RR@$N$
+curves for all experimental conditions are shown in
+Figure~\ref{fig:rr_by_limit}.}
 \label{tab:rr_main}%
 }{%
 \begin{tabular*}{\columnwidth}{@{}r@{\extracolsep{\fill}}rrr@{}}
@@ -1220,14 +1222,15 @@ $N$ & RDG & \textbf{\eahgt{}} & $\Delta$ \\
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/results/relative_risk_by_limit_katz95.png}
-\caption{Relative risk as a function of top-$N$ cutoff for \eahgt{}
-(P3), RDG, and OTS, averaged across 13 therapeutic areas under
-decision-aligned evaluation. Vertical dotted lines mark the top 1\%
-and top 2\% of all test pairs. A 95\% Katz log-method confidence
-interval is overlaid for \eahgt{}, derived from pooled counts across
-the full test set; the CI band lies entirely above the RDG line from
-$N = 10$ onwards.}
+\includegraphics[width=\columnwidth]{figures/results/relative_risk_by_limit_ablation.png}
+\caption{Relative risk as a function of top-$N$ cutoff for all seven
+experimental conditions of Table~\ref{tab:conditions} plus the RDG and
+OTS references, averaged across 13 therapeutic areas under
+decision-aligned evaluation (Open Targets 23.06). Vertical dotted lines
+mark the top 1\% and top 2\% of all test pairs. The proposed P3
+(\eahgt{} with both edge features) is the top model at every cutoff;
+all \hgt{}-with-edge-features variants and \rgcn{} exceed RDG across
+the actionable range.}
 \label{fig:rr_by_limit}
 \end{figure}
 
@@ -1338,8 +1341,8 @@ hyperparameters, split, sampling, and loss --- varying only the encoder
 and the edge-feature subset. Headline metrics (TA-averaged RR@$N$,
 plus aggregate AUROC and average precision over all evaluation pairs)
 are reported in Table~\ref{tab:ablation} alongside the two external
-references; the full RR@$N$ curves for all conditions appear in
-Figure~\ref{fig:rr_by_limit_ablation}, and per-TA and per-stratum
+references; the full RR@$N$ curves for all conditions are shown in
+Figure~\ref{fig:rr_by_limit}, and per-TA and per-stratum
 breakdowns in Supplementary Figures~\ref{fig:classification_by_ta}
 and~\ref{fig:rr_by_stratum}.
 
@@ -1371,17 +1374,6 @@ P2 \eahgt{} ($n$)   & 0.43 & 1.45 & 1.58 & 1.34 & 0.61 & 0.10 \\
 \end{tabular*}%
 }{}
 \end{table}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{figures/results/relative_risk_by_limit_ablation.png}
-\caption{Relative risk by top-$N$ cutoff for all seven experimental
-conditions plus RDG and OTS, averaged across 13 therapeutic areas under
-decision-aligned evaluation (Open Targets 23.06). Vertical dotted lines
-mark the top 1\% and top 2\% of all test pairs. The proposed P3
-(\eahgt{} with both edge features) is the top model at every cutoff.}
-\label{fig:rr_by_limit_ablation}
-\end{figure}
 
 Four observations follow:
 
