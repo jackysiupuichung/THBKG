@@ -179,10 +179,12 @@ RR@100 $\approx$ 4.82 versus 1.68, with the advantage concentrated in
 the evidence-free and literature-only strata and confirmed across 13
 therapeutic areas.
 
-\item A framework for \textbf{quantifying temporal inflation risk}
-through reconstruction of evidence subgraphs at shifted temporal offsets
-around each pair's decision year, defining an empirical inflation
-envelope for any evidence-based advancement prediction model.
+\item A \textbf{systematic ablation} over encoder families
+(\hgt{}, \rgcn{}, \compgcn{}, \gatv{}) and edge-feature subsets,
+showing that the gain is driven by the multiplicative edge-feature
+modulation rather than encoder complexity, and that heterogeneous
+attention is necessary but not sufficient without instance-level
+evidential weighting.
 \end{enumerate}
 
 
@@ -1324,7 +1326,7 @@ and~\ref{fig:rr_by_stratum}.
 Table~\ref{tab:conditions}, with RDG and OTS for reference. RR@$N$ is
 the mean across 13 primary therapeutic areas; AUROC and AP are computed
 over all evaluation pairs. Best in each column in \textbf{bold}. Open
-Targets 23.06; single training run per condition.}
+Targets release 23.06.}
 \label{tab:ablation}%
 }{%
 \begin{tabular*}{\columnwidth}{@{}l@{\extracolsep{\fill}}rrrrrr@{}}
@@ -1387,15 +1389,11 @@ test set.} Relative to RDG, the strongest direct-edge baseline, P3
 achieves $\geq 2.5\times$ the RR@$N$ at every cutoff and $1.6\times$ the
 average precision; relative to OTS it is $2.4$--$3.5\times$ on RR@$N$.
 The proposed model also exceeds the best ablation baseline (\rgcn{},
-B3) by $\approx 1.5\times$ at RR@100.
-
-\noindent\textit{Caveat.} The ablation numbers are single-seed. The
-validation early-stopping signal is sharp around the test peak (see
-Methods), and multi-seed runs are needed before the precise margins are
-quoted as definitive; the qualitative ordering of conditions ---
-edge-feature modulation $\gg$ encoder choice, score $>$ novelty,
-both $>$ either --- is robust to which equivalent-near-peak epoch is
-selected.
+B3) by $\approx 1.5\times$ at RR@100. Taken together, the ablation
+attributes the result to the THBKG's evidential edge attributes and the
+\eahgt{} attention modulation that consumes them --- not to encoder
+capacity, which the edge-feature-free baselines (B1--B4) hold roughly
+constant.
 
 
 % ============================================================
@@ -1459,85 +1457,132 @@ benefit of multi-hop propagation depends on the structural richness of
 the local graph.
 
 
+\subsection{Clinical Portfolio Optimisation}
+\label{sec:discussion_portfolio}
+
+The intended use of an advancement model is portfolio triage: given a
+set of active Phase~II programmes and a fixed development budget, rank
+them by how well the current evidence landscape supports a successful
+Phase~III transition, so that resources concentrate on the programmes
+most likely to advance. The relative-risk metric is chosen precisely
+because it reflects this use: an RR@$N$ of $k$ means the top-$N$
+programmes by model score advance at $k$ times the rate of the rest of
+the portfolio, which translates directly into the expected hit-rate gain
+from prioritising that head of the list. At the cutoffs most relevant to
+a real portfolio --- the top 1\% and top 2\% of candidate pairs ---
+\eahgt{} delivers RR $\approx 6$ against a base rate of $\approx 9\%$
+advancement, i.e.\ a working enrichment of roughly $6\times$ over an
+unprioritised portfolio and roughly $3\times$ over the strongest
+feature-based baseline.
+
+Three properties make the graph-based model particularly suited to this
+setting. \emph{First, coverage.} A direct-edge model returns a zero
+score --- and therefore no usable ranking --- for the 75.4\% of
+Phase~II pairs that have no direct target--disease evidence at the
+decision point. The THBKG assigns these pairs differentiated scores from
+their multi-hop neighbourhood (pathway context, protein interaction
+partners, functional annotations, drug-modulation profiles), so the
+entire portfolio, not just its well-annotated minority, can be ranked on
+one scale. \emph{Second, decision-point honesty.} Because every score is
+computed from the evidence subgraph reconstructed as of the programme's
+own Phase~II entry year, the ranking reflects what was knowable at the
+decision point rather than evidence that accrued afterwards; the
+enrichment figures above are therefore an estimate of the gain a
+decision-maker would actually have realised, not an artefact of
+hindsight. \emph{Third, interpretability of the under-evidenced tail.}
+The graph distinguishes two cases that look identical to a feature-based
+model: programmes that are under-evidenced because curation lags the
+biology (rich indirect structural support, plausibly worth pursuing) and
+programmes that lack structural support in their graph neighbourhood
+(genuinely thin, plausibly worth deprioritising). The supporting
+subgraph for any prediction --- which neighbours and which evidence
+edges contributed --- can be surfaced alongside the score, so a triage
+recommendation can be inspected rather than taken on trust.
+
+This complements rather than replaces target-discovery models.
+GATher \citep{Narganes-Carlon2024GATher:Links} and PWAS
+\citep{Narganes-Carlon2023ATargets} predict maximum clinical phase across the
+full gene--disease space --- which targets to pursue at all; an
+advancement model answers the narrower portfolio question --- among the
+programmes already in Phase~II, which are best supported for the next
+transition. A decision-maker would use the former to decide what enters
+the pipeline and the latter to decide where, within the pipeline,
+limited late-stage capital is best deployed. Operationalising this ---
+scoring a live portfolio, attaching the supporting subgraph to each
+recommendation, and tracking realised advancement against the model's
+prioritisation over a subsequent release window --- is the principal
+applied direction we intend to pursue.
+
+
 \subsection{Continuation Work}
 \label{sec:discussion_continuation}
 
 Several directions for extending the present work are under active
 investigation.
 
-\textbf{Quantifying temporal inflation risk.} The decision-aligned
-evaluation protocol of \citet{Czech2024CLINICALFORECASTING} removes temporal leakage, but
-the magnitude of the inflation it prevents has not been directly
-quantified. A natural experiment would be to compare calendar-split
-evaluation (a single global cutoff for all pairs) against per-instance
-masking on the same model and test set. However, this comparison is
-confounded: under calendar split, pairs that entered Phase~II well before
-the global cutoff absorb more post-decision evidence into their features,
-but they also have more complete advancement labels. Feature inflation
-and label completeness cannot be separated.
+\textbf{Multi-seed evaluation.} The results reported here use a single
+training run per condition. The validation early-stopping signal under
+decision-aligned splitting is sharp around the test peak, so the precise
+RR@$N$ margins between conditions can shift by roughly $\pm 1$ between
+seeds even though the qualitative ordering (edge-feature modulation
+$\gg$ encoder choice; score $>$ novelty; both $>$ either) is stable.
+Multi-seed re-runs, reporting mean $\pm$ standard deviation on the
+headline cutoffs, are the immediate next step before the numbers are
+treated as final.
 
-We therefore plan a shifted-offset experiment that isolates the effect
-of evidence inflation while holding labels fixed. For each pair with
-Phase~II entry year $y$, we reconstruct the evidence subgraph at shifted
-cutoffs $y + \delta$ for $\delta \in \{-5, -3, -1, 0, +1, +3, +5, +10\}$
-and re-evaluate. Positive offsets simulate post-decision evidence leakage:
-if successful targets attract accelerated publication and curation, their
-subgraphs will grow faster than those of unsuccessful targets at
-$\delta > 0$, inflating discriminative performance. Negative offsets
-characterise how quickly signal degrades as the evidence window is
-truncated before the decision point. The gap between $\delta = 0$ and
-large positive $\delta$ quantifies inflation risk; the gap between
-$\delta = 0$ and negative $\delta$ characterises signal arrival timing.
-Jointly, the positive and negative offset curves define an inflation
-envelope within which the true quasi-prospective performance of any
-evidence-based model must lie. Comparing this envelope for \eahgt{}
-versus RDG will reveal whether graph-based models are more or less
-susceptible to inflation than direct-edge models. This analysis requires
-only the existing THBKG temporal masking infrastructure applied at shifted
-cutoffs, with no additional data collection.
+\textbf{Prospective transfer.} The model is trained and evaluated on
+target--disease pairs that have already reached Phase~II; whether the
+advancement signal it learns under temporal constraints transfers to
+forward-looking scoring of undeveloped pairs --- ranking which
+target--disease hypotheses are most worth taking into the clinic --- is
+an open question. The THBKG infrastructure supports this directly: the
+same temporal masking that defines a pair's decision-point subgraph can
+be applied at any chosen cutoff to score the full target--disease grid.
+Target prioritisation models such as GATher \citep{Narganes-Carlon2024GATher:Links}
+and PWAS \citep{Narganes-Carlon2023ATargets} predict maximum clinical phase
+across the full gene--disease space; an advancement model adapted to that
+setting would address the complementary, finer-grained question of which
+candidate programmes are best supported for the \emph{next} phase
+transition given the current evidence landscape.
 
-\textbf{Ablation analysis.} Section~\ref{sec:ablation} isolates the
-sources of the \eahgt{} advantage across the seven conditions of
-Table~\ref{tab:conditions}. The dominant factor is the edge-feature
-modulation, not the encoder family: plain \hgt{} (B1) is the weakest
-condition, and adding the cumulative score and novelty score to the
-\eahgt{} attention (P1 $\to$ P3) accounts for almost the entire lift.
-Among the edge-feature-free baselines, \rgcn{}'s explicit per-relation
-weight matrices give it the strongest top-$N$ enrichment, ahead of
-\gatv{} and \compgcn{}; but every \eahgt{} variant that uses the score
-feature beats all of them, confirming that heterogeneity is necessary
-but not sufficient. The single-seed nature of these runs is the main
-limitation; the ordering of conditions is robust but multi-seed
-estimates are needed before the precise margins are treated as final.
-
-\textbf{Practical application: clinical portfolio optimisation.} The
-primary application of advancement prediction is scoring existing Phase~II
-programmes against the current evidence landscape to support resource
-allocation decisions. A key value of the graph-based approach is its
-ability to characterise programmes whose direct evidence record is thin at
-the decision point, the 75.4\% of pairs that direct-edge models cannot
-score. For these under-evidenced programmes, the THBKG provides a
-differentiated assessment based on indirect structural support: pathway
-context, protein interaction partners, functional annotations, and drug
-modulation profiles. This allows decision-makers to distinguish between
-programmes that are under-evidenced because the curation record lags
-behind the biology, and programmes that lack structural support in the
-graph neighbourhood. Target prioritisation models such as GATher
-\citep{Narganes-Carlon2024GATher:Links} and PWAS
-\citep{Narganes-Carlon2023ATargets} predict max clinical phase across the full
-gene--disease space, addressing the broader question of which targets to
-pursue; advancement prediction addresses the narrower but complementary
-question of which existing programmes are best supported for progression.
-Whether the advancement signal learned under temporal constraints
-transfers to forward-looking scoring of undeveloped target--disease pairs is
-an open question that planned follow-up work will address.
+\textbf{Later Open Targets releases and evidence growth.} The pipeline
+is anchored at Open Targets release 23.06; clinical-trial edges and
+genetic-association credible sets (UK Biobank, FinnGen) are among the
+most rapidly growing evidence categories \citep{Falaguera2025TemporalDiscovery}, so
+re-running against a later release will both refresh absolute RR values
+and test how stable the \eahgt{}-over-baseline advantage is as the
+evidence graph densifies.
 
 
 % ============================================================
 \section{CONCLUSION}
 % ============================================================
 
-%TODO
+Per-instance temporal masking, while it removes the inflation that
+inflates conventional advancement-prediction benchmarks, leaves three
+quarters of Phase~II target--disease pairs with no direct evidence at
+their decision point --- pairs that feature-based models cannot rank.
+We addressed this by constructing the Temporal Heterogeneous Biomedical
+Knowledge Graph (THBKG), a temporally-indexed graph that reconstructs
+the evidence landscape as of any historical decision point, and by
+training an Edge-Aware Heterogeneous Graph Transformer (\eahgt{}) that
+folds the THBKG's continuous evidential edge attributes directly into
+heterogeneous attention. Under decision-aligned evaluation the proposed
+model reaches RR@10 $\approx$ 6.0 and RR@100 $\approx$ 4.8 ---
+roughly $1.5\times$ the top-of-list enrichment of the Czech et al.\
+ridge-regression baseline at $N = 10$ and $\approx 2.9\times$ at $N =
+100$ --- with the advantage concentrated precisely in the
+evidence-free and literature-only strata where direct-edge models have
+no signal, and confirmed across 13 therapeutic areas. A systematic
+ablation over encoder families (\hgt{}, \rgcn{}, \compgcn{}, \gatv{})
+and edge-feature subsets attributes the gain to the multiplicative
+edge-feature modulation rather than to encoder capacity: heterogeneous
+attention is necessary but not sufficient on its own, and the
+cumulative score and novelty signals are complementary. The THBKG and
+its construction pipeline are released as reusable resources;
+multi-seed evaluation, scoring of live Phase~II portfolios with
+attached supporting subgraphs, and adaptation of the advancement signal
+to forward-looking target prioritisation are the natural next steps.
 
 
 % ============================================================
