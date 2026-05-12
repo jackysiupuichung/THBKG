@@ -1180,7 +1180,7 @@ prioritisation value is concentrated.
 \subsubsection{Relative risk at top-$N$.}
 
 At the top of the ranking, \eahgt{} substantially outperforms RDG at
-every cutoff (Table~\ref{tab:rr_main}, Figure~\ref{fig:rr_by_limit}).
+every cutoff (Table~\ref{tab:ablation}, Figure~\ref{fig:rr_by_limit}).
 At $N = 10$, \eahgt{} achieves RR $\approx$ 6.02 compared to 4.10 for
 RDG (+1.92). The advantage holds across all cutoffs from $N = 10$ to
 $N = 100$, with the largest absolute gains in the $N = 30$--$50$ range
@@ -1191,34 +1191,6 @@ ranking (Figure~\ref{fig:rr_by_limit}). Among the ablation conditions
 (Section~\ref{sec:ablation}) the same figure shows that the
 \hgt{}-with-edge-feature variants and \rgcn{} also exceed RDG, while
 the edge-feature-free \hgt{} and \compgcn{} do not.
-
-\begin{table}[h]
-\tableparts{%
-\caption{Relative risk at top-$N$ (RR@$N$) for \eahgt{} (P3) and RDG,
-computed as the mean across 13 primary therapeutic areas (Open Targets
-23.06). $\Delta$ denotes the difference P3 $-$ RDG. The full RR@$N$
-curves for all experimental conditions are shown in
-Figure~\ref{fig:rr_by_limit}.}
-\label{tab:rr_main}%
-}{%
-\begin{tabular*}{\columnwidth}{@{}r@{\extracolsep{\fill}}rrr@{}}
-\toprule
-$N$ & RDG & \textbf{\eahgt{}} & $\Delta$ \\
-\colrule
-10  & 4.10 & \textbf{6.02} & +1.92 \\
-20  & 2.74 & \textbf{5.70} & +2.96 \\
-30  & 2.45 & \textbf{5.84} & +3.39 \\
-40  & 2.27 & \textbf{5.88} & +3.61 \\
-50  & 1.94 & \textbf{6.19} & +4.25 \\
-60  & 1.78 & \textbf{5.93} & +4.15 \\
-70  & 1.74 & \textbf{5.45} & +3.71 \\
-80  & 1.73 & \textbf{5.09} & +3.37 \\
-90  & 1.66 & \textbf{4.94} & +3.28 \\
-100 & 1.68 & \textbf{4.82} & +3.14 \\
-\botrule
-\end{tabular*}%
-}{}
-\end{table}
 
 \begin{figure}[t]
 \centering
@@ -1324,7 +1296,7 @@ variance: a handful of small therapeutic areas in which no
 top-ranked \eahgt{} pair advanced (e.g.\ integumentary system
 disease, reproductive system or breast disease) hold the paired test
 below significance at the tightest and widest cutoffs. The
-TA-averaged RR (Table~\ref{tab:rr_main}, the mean rather than the
+TA-averaged RR (Table~\ref{tab:ablation}, the mean rather than the
 median over TAs) is pulled up by the high-RR oncology and
 hematologic areas and shows a $\geq 2.9\times$ \eahgt{} advantage at
 every cutoff. The direction of effect never reverses
