@@ -1,4 +1,4 @@
-\documentclass[a4,center,fleqn]{NAR}
+\documentclass[a4,center]{NAR}
 
 \usepackage{subcaption}
 \usepackage{amsmath, amssymb, bm}
@@ -263,7 +263,7 @@ initial feature representation described in
 Section~\ref{sec:thbkg_features}.}
 \label{tab:ch4-node-types}%
 }{%
-\begin{tabular*}{\columnwidth}{@{}llrr@{}}
+\begin{tabular*}{\columnwidth}{@{}l@{\extracolsep{\fill}}lrr@{}}
 \toprule
 \textbf{Node type} & \textbf{Identifier} & \textbf{Count} &
 \textbf{Feat.\ dim} \\
@@ -352,7 +352,7 @@ graph. Full datasource details in Supplementary
 Table~\ref{tab:edge_types_full}.}
 \label{tab:edge_types_summary}%
 }{%
-\begin{tabular*}{\columnwidth}{@{}llrlc@{}}
+\begin{tabular*}{\columnwidth}{@{}l@{\extracolsep{\fill}}lrl@{}}
 \toprule
 \textbf{Relation} & \textbf{Src $\rightarrow$ Dst} & \textbf{Count} &
 \textbf{Type} \\
@@ -838,23 +838,24 @@ using both.
 \begin{table}[h]
 \tableparts{%
 \caption{Summary of experimental conditions. $s_{ij}$: cumulative
-evidential score. $n_{ij}$: Open Targets novelty score. ``Edge feats''
-denotes whether the continuous per-edge attributes enter message passing.}
+evidential score. $n_{ij}$: Open Targets novelty score. ``Edge
+features'' denotes whether the continuous per-edge attributes enter
+message passing. The claim each condition tests is discussed in the
+text and analysed in Section~\ref{sec:ablation}.}
 \label{tab:conditions}%
 }{%
-\begin{tabular*}{\columnwidth}{@{}lll@{\extracolsep{\fill}}p{4.2cm}@{}}
+\begin{tabular*}{\columnwidth}{@{}l@{\extracolsep{\fill}}ll@{}}
 \toprule
-\textbf{ID} & \textbf{Model} & \textbf{Edge feats} &
-\textbf{Primary claim tested} \\
+\textbf{ID} & \textbf{Model} & \textbf{Edge features} \\
 \colrule
-B1 & \hgt{}     & None               & Type-conditioned attention only \\
-B2 & \gatv{}    & None               & Dynamic attention, external heterogeneity \\
-B3 & \rgcn{}    & None               & Per-relation weight matrices \\
-B4 & \compgcn{} & None               & Composition-based, parameter-efficient relations \\
+B1 & \hgt{}     & None \\
+B2 & \gatv{}    & None \\
+B3 & \rgcn{}    & None \\
+B4 & \compgcn{} & None \\
 \colrule
-P1 & \eahgt{}   & $s_{ij}$ only      & Score modulation with full heterogeneity \\
-P2 & \eahgt{}   & $n_{ij}$ only      & Novelty modulation with full heterogeneity \\
-P3 & \eahgt{}   & $s_{ij},\, n_{ij}$ & Both, the proposed model \\
+P1 & \eahgt{}   & $s_{ij}$ only \\
+P2 & \eahgt{}   & $n_{ij}$ only \\
+P3 & \eahgt{}   & $s_{ij},\, n_{ij}$ \\
 \botrule
 \end{tabular*}%
 }{B1--B4: baseline conditions. P1--P3: proposed \eahgt{} conditions.}
@@ -875,14 +876,17 @@ After $L = 2$ layers of message passing, the encoder produces
 $d$-dimensional embeddings $\mathbf{h}_t \in \mathbb{R}^{d}$ and
 $\mathbf{h}_d \in \mathbb{R}^{d}$ for each target and disease node
 ($d = 128$ in the P3 configuration). A three-layer MLP decoder maps
-their concatenation $[\mathbf{h}_t \concat \mathbf{h}_d] \in
-\mathbb{R}^{2d}$ to a scalar ranking score:
+their concatenation $\mathbf{h} = [\mathbf{h}_t \concat \mathbf{h}_d]
+\in \mathbb{R}^{2d}$ to a scalar ranking score:
 \begin{align}
-    \mathbf{z}_1 &= \operatorname{ReLU}(\mathbf{W}_1\,[\mathbf{h}_t \concat \mathbf{h}_d] + \mathbf{b}_1), &\quad &\mathbf{W}_1 \in \mathbb{R}^{d \times 2d}, \nonumber\\
-    \mathbf{z}_2 &= \operatorname{ReLU}(\mathbf{W}_2\,\mathbf{z}_1 + \mathbf{b}_2), &\quad &\mathbf{W}_2 \in \mathbb{R}^{(d/2) \times d}, \nonumber\\
-    \hat{y} &= \mathbf{w}_3^\top\,\mathbf{z}_2 + b_3, &\quad &\mathbf{w}_3 \in \mathbb{R}^{d/2}.
+    \mathbf{z}_1 &= \operatorname{ReLU}(\mathbf{W}_1\,\mathbf{h} + \mathbf{b}_1), \nonumber\\
+    \mathbf{z}_2 &= \operatorname{ReLU}(\mathbf{W}_2\,\mathbf{z}_1 + \mathbf{b}_2), \nonumber\\
+    \hat{y}      &= \mathbf{w}_3^\top\,\mathbf{z}_2 + b_3,
     \label{eq:decoder}
 \end{align}
+with $\mathbf{W}_1 \in \mathbb{R}^{d \times 2d}$,
+$\mathbf{W}_2 \in \mathbb{R}^{(d/2) \times d}$, and
+$\mathbf{w}_3 \in \mathbb{R}^{d/2}$.
 Dropout ($p = 0.1$) is applied after each ReLU activation. The output
 $\hat{y}$ is an unbounded ranking logit used directly by the LambdaRank
 loss; no sigmoid is applied, as the training objective optimises ranking
@@ -1188,9 +1192,9 @@ EuroPMC $\geq$ 0.3).}
 \label{fig:thbkg_sunburst}
 \end{figure}
 
-\begin{figure*}[t]
+\begin{figure}[t]
 \centering
-\includegraphics[width=\textwidth]{figures/chord_diagram.drawio.png}
+\includegraphics[width=\columnwidth]{figures/chord_diagram.drawio.png}
 \caption{Chord diagrams of the THBKG at five cumulative temporal cutoffs
 ($\leq$2005, $\leq$2010, $\leq$2015, $\leq$2020, $\leq$2025). Each
 node represents a directed edge-type triple; arc size is proportional to
@@ -1198,7 +1202,7 @@ edge count at that cutoff. Ribbons connect triples that co-occur on
 shared entities, weighted by their minimum joint count. Colour encoding
 is consistent across all panels and with Figure~\ref{fig:thbkg_sunburst}.}
 \label{fig:thbkg_chord}
-\end{figure*}
+\end{figure}
 
 
 
@@ -1242,9 +1246,9 @@ ranking (Figure~\ref{fig:rr_by_limit}). Among the ablation conditions
 \hgt{}-with-edge-feature variants and \rgcn{} also exceed RDG, while
 the edge-feature-free \hgt{} and \compgcn{} do not.
 
-\begin{figure}[t]
+\begin{figure*}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/results/relative_risk_by_limit_ablation.png}
+\includegraphics[width=\textwidth]{figures/results/relative_risk_by_limit_ablation.png}
 \caption{Relative risk as a function of top-$N$ cutoff for all seven
 experimental conditions of Table~\ref{tab:conditions} plus the RDG and
 OTS references, averaged across 13 therapeutic areas under
@@ -1254,7 +1258,7 @@ mark the top 1\% and top 2\% of all test pairs. The proposed P3
 all \hgt{}-with-edge-features variants and \rgcn{} exceed RDG across
 the actionable range.}
 \label{fig:rr_by_limit}
-\end{figure}
+\end{figure*}
 
 \begin{figure}[t]
 \centering
