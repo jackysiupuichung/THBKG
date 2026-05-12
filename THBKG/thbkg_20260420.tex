@@ -1532,18 +1532,6 @@ susceptible to inflation than direct-edge models. This analysis requires
 only the existing THBKG temporal masking infrastructure applied at shifted
 cutoffs, with no additional data collection.
 
-\textbf{Open Targets 25.06 update.} All data, graph construction, and
-baseline comparison scores are currently anchored at Open Targets release
-23.06. The full pipeline (edge collection, graph construction, node
-feature engineering, model training, and evaluation) will be re-run
-against the latest 25.06 release to ensure that results reflect current
-evidence coverage and curation state. This update is particularly
-important for clinical trial edges, which are among the most rapidly
-growing evidence categories \citep{Falaguera2025TemporalDiscovery}, and for genetic
-association evidence, where the ongoing expansion of UK Biobank and
-FinnGen credible sets substantially increases coverage for previously
-under-annotated therapeutic areas.
-
 \textbf{Ablation analysis.} Section~\ref{sec:ablation} isolates the
 sources of the \eahgt{} advantage across the seven conditions of
 Table~\ref{tab:conditions}. The dominant factor is the edge-feature
