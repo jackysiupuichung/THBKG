@@ -61,12 +61,20 @@ TRAIN_YEAR_MAX = 2015   # transition years from train_dataset.csv
 TEST_YEAR_MIN  = 2016   # transition years from test_dataset.csv
 
 
-def split_advancement_edges(data, cutoff_year=2010):
+def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_year=None):
     """
     Chronological split of advancement edges.
 
-    cutoff_year=2010 is chosen so the val class balance (~7.3% positive) matches
-    the test set (~8.1%); see the per-year/cutoff sweep for derivation.
+    Default (val_min_year=None, val_max_year=None) preserves the historical
+    split: train = edge_time ≤ cutoff_year, val = (cutoff_year, TRAIN_YEAR_MAX].
+    cutoff_year=2010 was chosen so the val class balance (~7.3% positive)
+    matches the test set (~8.1%); see the per-year/cutoff sweep for derivation.
+
+    Passing explicit ``val_min_year`` / ``val_max_year`` restricts val to the
+    inclusive year range ``[val_min_year, val_max_year]``. Used by the
+    val-window experiment to test whether a narrower, more test-adjacent val
+    set makes the model-selection signal predictive of test performance.
+    Train remains edge_time ≤ cutoff_year regardless.
 
     Returns
     -------
@@ -79,8 +87,13 @@ def split_advancement_edges(data, cutoff_year=2010):
     test_year_mask  = edge_time >= TEST_YEAR_MIN
 
     train_mask = train_year_mask & (edge_time <= cutoff_year)
-    val_mask   = train_year_mask & (edge_time >  cutoff_year)
-    test_mask  = test_year_mask
+    if val_min_year is not None or val_max_year is not None:
+        lo = int(val_min_year) if val_min_year is not None else (cutoff_year + 1)
+        hi = int(val_max_year) if val_max_year is not None else TRAIN_YEAR_MAX
+        val_mask = (edge_time >= lo) & (edge_time <= hi)
+    else:
+        val_mask = train_year_mask & (edge_time > cutoff_year)
+    test_mask = test_year_mask
 
     return train_mask, val_mask, test_mask, cutoff_year
 

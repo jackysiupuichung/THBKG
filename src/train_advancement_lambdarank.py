@@ -373,8 +373,16 @@ def main(cfg):
     print(f"Loading graph from {cfg.data.graph_file} (undirected={to_undirected})")
     data = load_event_graph(cfg.data.graph_file, to_undirected=to_undirected)
 
-    train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(data)
+    _data_cfg = cfg.get("data", {})
+    train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(
+        data,
+        cutoff_year=int(_data_cfg.get("train_cutoff_year", 2010)),
+        val_min_year=_data_cfg.get("val_min_year", None),
+        val_max_year=_data_cfg.get("val_max_year", None),
+    )
     print(f"  Cutoff year: {cutoff_year}")
+    if _data_cfg.get("val_min_year") is not None or _data_cfg.get("val_max_year") is not None:
+        print(f"  Val window:  [{_data_cfg.get('val_min_year','-')}, {_data_cfg.get('val_max_year','-')}]")
     print(f"  Train edges: {train_mask.sum().item()}")
     print(f"  Val   edges: {val_mask.sum().item()}")
     print(f"  Test  edges: {test_mask.sum().item()}")
