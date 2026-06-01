@@ -9,6 +9,7 @@ runs can be compared against the BCE baseline.
 
 import os
 import sys
+import random
 import argparse
 from pathlib import Path
 
@@ -34,7 +35,7 @@ from src.train_advancement_hgt import (
     predict_test,
 )
 from src.losses.lambdaLoss_allrank import lambdaLoss
-from src.benchmark.metrics import ndcg_at_k, ndcg_ta_mean_at_k, rr_ta_mean_at_k
+from src.benchmark.metrics import ndcg_at_k, ndcg_ta_mean_at_k, rs_ta_mean_at_k
 from src.models.utils import build_model
 
 
@@ -333,7 +334,7 @@ def evaluate_lambdarank(
                 scores_t, labels_bin_t, ta_per_item, kk,
                 primary_tas=primary_tas,
             )
-            metrics[f"rr_ta_mean@{kk}"] = rr_ta_mean_at_k(
+            metrics[f"rs_ta_mean@{kk}"] = rs_ta_mean_at_k(
                 scores_t, labels_bin_t, ta_per_item, kk,
                 primary_tas=primary_tas,
             )
@@ -343,8 +344,13 @@ def evaluate_lambdarank(
 
 def main(cfg):
     seed = cfg.get("seed", 42)
-    torch.manual_seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     output_dir = Path(cfg.train.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -431,6 +437,8 @@ def main(cfg):
         time_dim=time_dim,
         t_min=t_min_val,
         t_max=t_max_val,
+        decoder_kind=str(cfg.model.get("decoder_kind", "mlp")),
+        decoder_dropout=float(cfg.model.get("decoder_dropout", cfg.model.get("dropout", 0.1))),
     ).to(device)
     print(f"Model: {cfg.model.name}")
 
@@ -509,7 +517,9 @@ def main(cfg):
     es_enabled = bool(es_cfg.get("enabled", True))
     patience = int(es_cfg.get("patience", 10)) if es_enabled else int(1e9)
     es_metric = str(es_cfg.get("metric", "ndcg@50"))
-    print(f"Early stopping on val/{es_metric}, patience={patience}")
+    es_mode = str(es_cfg.get("mode", "max")).lower()
+    assert es_mode in ("max", "min"), f"early_stopping.mode must be 'max' or 'min', got {es_mode}"
+    print(f"Early stopping on val/{es_metric} ({es_mode}), patience={patience}")
 
     test_edge_index = edge_index[:, test_mask]
     test_edge_labels = edge_attr[test_mask, 0]
@@ -522,7 +532,7 @@ def main(cfg):
             ta_by_disease_idx.get(int(d), []) for d in test_disease_idx
         ]
 
-    best_val = -1.0
+    best_val = float("-inf") if es_mode == "max" else float("inf")
     best_epoch = 0
     patience_ctr = 0
 
@@ -540,9 +550,9 @@ def main(cfg):
         )
         val_score = val_metrics.get(es_metric, float("nan"))
         if np.isnan(val_score):
-            val_score = -1.0
+            val_score = float("-inf") if es_mode == "max" else float("inf")
 
-        # Per-epoch test rr@K tracking (diagnostic only; does not affect ES).
+        # Per-epoch test rs@K tracking (diagnostic only; does not affect ES).
         test_scores_ep, test_labels_ep = predict_test(
             model, context,
             edge_index=test_edge_index,
@@ -554,33 +564,59 @@ def main(cfg):
             edge_feat_cols=_edge_feat_cols,
         )
         test_metrics_ep = compute_metrics(test_labels_ep, test_scores_ep)
-        test_rr = {
-            "rr@10":  float(test_metrics_ep["rr@10"]),
-            "rr@50":  float(test_metrics_ep["rr@50"]),
-            "rr@100": float(test_metrics_ep["rr@100"]),
+        test_rs = {
+            "rs@10":  float(test_metrics_ep["rs@10"]),
+            "rs@50":  float(test_metrics_ep["rs@50"]),
+            "rs@100": float(test_metrics_ep["rs@100"]),
         }
+
+        # Optional diagnostic: dump per-epoch top-K test pairs so we can see
+        # whether the model's top-ranked predictions are stable across epochs
+        # or whether each epoch's rs@K is hitting a different 9/10 positives.
+        # Enable with: SAVE_PER_EPOCH_TOPK=1 (or set to a number = K).
+        _topk_env = os.environ.get("SAVE_PER_EPOCH_TOPK")
+        if _topk_env:
+            _k = int(_topk_env) if _topk_env.isdigit() else 100
+            # argsort returns ascending; reverse with [::-1] gives a
+            # negative-stride view that torch indexing rejects. Materialise
+            # the slice with .copy() so it's a contiguous int64 array.
+            _topk_order = np.argsort(test_scores_ep)[::-1][:_k].copy()
+            _topk_t = torch.as_tensor(_topk_order, dtype=torch.long)
+            _topk_df = pd.DataFrame({
+                "epoch": epoch,
+                "rank": np.arange(_k),
+                "src_idx": test_edge_index[0, _topk_t].cpu().numpy(),
+                "dst_idx": test_edge_index[1, _topk_t].cpu().numpy(),
+                "score":   test_scores_ep[_topk_order],
+                "label":   test_labels_ep[_topk_order].astype(int),
+            })
+            _topk_path = output_dir / "per_epoch_topk.parquet"
+            if _topk_path.exists():
+                _existing = pd.read_parquet(_topk_path)
+                _topk_df = pd.concat([_existing, _topk_df], ignore_index=True)
+            _topk_df.to_parquet(_topk_path, index=False)
         if test_ta_per_item is not None:
             test_scores_t = torch.from_numpy(test_scores_ep)
             test_labels_t = torch.from_numpy(test_labels_ep).float()
             for kk in (10, 30, 50, 100):
-                test_rr[f"ndcg_ta_mean@{kk}"] = ndcg_ta_mean_at_k(
+                test_rs[f"ndcg_ta_mean@{kk}"] = ndcg_ta_mean_at_k(
                     test_scores_t, test_labels_t, test_ta_per_item, kk,
                     primary_tas=primary_tas,
                 )
-                test_rr[f"rr_ta_mean@{kk}"] = rr_ta_mean_at_k(
+                test_rs[f"rs_ta_mean@{kk}"] = rs_ta_mean_at_k(
                     test_scores_t, test_labels_t, test_ta_per_item, kk,
                     primary_tas=primary_tas,
                 )
 
         row = {"epoch": epoch, "train_loss": train_loss}
         row.update({f"val_{k}": float(v) for k, v in val_metrics.items()})
-        row.update({f"test_{k}": v for k, v in test_rr.items()})
+        row.update({f"test_{k}": v for k, v in test_rs.items()})
         epoch_rows.append(row)
 
         wandb.log(
             {"train/loss": train_loss}
             | {f"val/{k}": v for k, v in val_metrics.items()}
-            | {f"test/{k}": v for k, v in test_rr.items()},
+            | {f"test/{k}": v for k, v in test_rs.items()},
             step=epoch,
         )
         ta_str = ""
@@ -588,20 +624,21 @@ def main(cfg):
             ta_str = (
                 f"| val ndcg_ta_mean@10/50: "
                 f"{val_metrics['ndcg_ta_mean@10']:.3f}/{val_metrics['ndcg_ta_mean@50']:.3f} "
-                f"| val rr_ta_mean@10/50: "
-                f"{val_metrics['rr_ta_mean@10']:.3f}/{val_metrics['rr_ta_mean@50']:.3f} "
-                f"| test rr_ta_mean@10/50: "
-                f"{test_rr['rr_ta_mean@10']:.3f}/{test_rr['rr_ta_mean@50']:.3f} "
+                f"| val rs_ta_mean@10/50: "
+                f"{val_metrics['rs_ta_mean@10']:.3f}/{val_metrics['rs_ta_mean@50']:.3f} "
+                f"| test rs_ta_mean@10/50: "
+                f"{test_rs['rs_ta_mean@10']:.3f}/{test_rs['rs_ta_mean@50']:.3f} "
             )
         print(
             f"Epoch {epoch:3d} | train_loss: {train_loss:.4f} "
             f"| val ndcg@10/50/100: {val_metrics['ndcg@10']:.3f}/{val_metrics['ndcg@50']:.3f}/{val_metrics['ndcg@100']:.3f} "
             f"{ta_str}"
-            f"| val rr@10/50/100: {val_metrics['rr@10']:.3f}/{val_metrics['rr@50']:.3f}/{val_metrics['rr@100']:.3f} "
-            f"| test rr@10/50/100: {test_rr['rr@10']:.3f}/{test_rr['rr@50']:.3f}/{test_rr['rr@100']:.3f}"
+            f"| val rs@10/50/100: {val_metrics['rs@10']:.3f}/{val_metrics['rs@50']:.3f}/{val_metrics['rs@100']:.3f} "
+            f"| test rs@10/50/100: {test_rs['rs@10']:.3f}/{test_rs['rs@50']:.3f}/{test_rs['rs@100']:.3f}"
         )
 
-        if val_score > best_val:
+        improved = (val_score > best_val) if es_mode == "max" else (val_score < best_val)
+        if improved:
             best_val = val_score
             best_epoch = epoch
             patience_ctr = 0
@@ -643,7 +680,7 @@ def main(cfg):
                 scores_t, labels_t, test_ta_per_item, kk,
                 primary_tas=primary_tas,
             )
-            test_metrics[f"rr_ta_mean@{kk}"] = rr_ta_mean_at_k(
+            test_metrics[f"rs_ta_mean@{kk}"] = rs_ta_mean_at_k(
                 scores_t, labels_t, test_ta_per_item, kk,
                 primary_tas=primary_tas,
             )
@@ -653,7 +690,7 @@ def main(cfg):
         f"\nTest | roc_auc: {test_metrics['roc_auc']:.4f} "
         f"| ap: {test_metrics['average_precision']:.4f} "
         f"| ndcg@100: {test_metrics['ndcg@100']:.4f} "
-        f"| rr@100: {test_metrics['rr@100']:.4f} "
+        f"| rs@100: {test_metrics['rs@100']:.4f} "
         f"| p@10: {test_metrics['precision@10']:.4f}"
     )
 

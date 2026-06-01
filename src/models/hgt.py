@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from .hgt_conv_rte import HGTConv
 from torch_geometric.nn import Linear
 from typing import Dict, List, Tuple, Optional
-from .decoder import Decoder
+from .decoder import Decoder, build_decoder
 from .time_encoder import TimeEncoder
 
 
@@ -165,6 +165,8 @@ class HGTLinkPredictor(nn.Module):
         time_dim: int = 0,
         t_min: float = 0.0,
         t_max: float = 1.0,
+        decoder_kind: str = "mlp",
+        decoder_dropout: float = 0.1,
     ):
         """
         Initialize link predictor.
@@ -205,7 +207,12 @@ class HGTLinkPredictor(nn.Module):
             self.time_encoder = None
             decoder_time_dim = 0
 
-        self.decoder = Decoder(hidden_dim, time_dim=decoder_time_dim)
+        self.decoder = build_decoder(
+            decoder_kind,
+            in_channels=hidden_dim,
+            dropout=decoder_dropout,
+            time_dim=decoder_time_dim,
+        )
     
     def encode(
         self,

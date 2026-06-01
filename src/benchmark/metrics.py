@@ -156,7 +156,7 @@ def ndcg_ta_mean_at_k(
     return float(sum(vals) / len(vals))
 
 
-def rr_ta_mean_at_k(
+def rs_ta_mean_at_k(
     scores: torch.Tensor,
     labels: torch.Tensor,
     ta_per_item: List[List[str]],
@@ -164,12 +164,12 @@ def rr_ta_mean_at_k(
     primary_tas: Optional[List[str]] = None,
 ) -> float:
     """
-    TA-grouped relative-risk-at-K, mean across therapeutic areas.
+    TA-grouped relative-success-at-K, mean across therapeutic areas.
 
-    Mirrors `_compute_rr_by_ta` in `evaluate_advancement.py`: within each TA,
-    take the top-k items by score, then RR = P(pos | exposed) / P(pos | control).
+    Mirrors `_compute_rs_by_ta` in `evaluate_advancement.py`: within each TA,
+    take the top-k items by score, then RS = P(pos | exposed) / P(pos | control).
     Skips TAs where the TA has fewer than k items, or where the control group
-    has zero positives (RR undefined). Average across the remaining TAs.
+    has zero positives (RS undefined). Average across the remaining TAs.
 
     Items can belong to multiple TAs (one disease → many TAs); each TA gets
     counted once.
@@ -182,7 +182,7 @@ def rr_ta_mean_at_k(
         primary_tas: optional whitelist of TAs to average over
 
     Returns:
-        Mean RR@k across qualifying TAs, or 0.0 if none qualify.
+        Mean RS@k across qualifying TAs, or 0.0 if none qualify.
     """
     if labels.sum() == 0:
         return 0.0
@@ -208,13 +208,16 @@ def rr_ta_mean_at_k(
         ta_scores = scores_np[idx]
         ta_labels = labels_np[idx]
 
-        order = np.argsort(ta_scores)[::-1]
-        threshold = ta_scores[order[k - 1]]
-        exposed_mask = ta_scores >= threshold
+        # Rank-based top-k (standard recommender-systems convention): ties broken
+        # by original index via stable sort, so exposed is exactly k items
+        # regardless of score ties. A threshold-mask (scores >= s[k-1]) would
+        # silently expand exposed past k whenever the k-th score ties with
+        # anything below it, collapsing control to empty and skipping the TA.
+        order = np.argsort(-ta_scores, kind="stable")
+        exposed_mask = np.zeros(len(ta_scores), dtype=bool)
+        exposed_mask[order[:k]] = True
         control_mask = ~exposed_mask
-        if exposed_mask.sum() == 0 or control_mask.sum() == 0:
-            continue
-        p_exposed = ta_labels[exposed_mask].sum() / exposed_mask.sum()
+        p_exposed = ta_labels[exposed_mask].sum() / k
         p_control = ta_labels[control_mask].sum() / control_mask.sum()
         if p_control == 0:
             continue

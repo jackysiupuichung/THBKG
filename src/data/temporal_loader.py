@@ -467,3 +467,100 @@ def format_literature_links(
             axis=1,
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Advancement task helpers
+#
+# These used to be duplicated across the trainers and the explainer. Kept
+# here so there is one source of truth for "what counts as the supervision
+# edge", "which edges leak the label", and how to build the context graph.
+# ---------------------------------------------------------------------------
+
+ADV_ETYPE = ("target", "advancement", "disease")
+REV_ADV_ETYPE = ("disease", "rev_advancement", "target")
+TRAIN_YEAR_MAX = 2015   # transition years from train_dataset.csv
+TEST_YEAR_MIN = 2016    # transition years from test_dataset.csv
+
+
+def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_year=None):
+    """Chronological split of advancement edges. Default (cutoff_year=2010)
+    matches the canonical setup: train = edge_time ≤ 2010, val = 2011..2015,
+    test = ≥ 2016.
+
+    Passing explicit ``val_min_year`` / ``val_max_year`` restricts val to the
+    inclusive year range — used by the val-window experiments.
+
+    Returns: train_mask, val_mask, test_mask, cutoff_year
+    """
+    import torch
+    edge_time = data[ADV_ETYPE].edge_time
+
+    train_year_mask = edge_time <= TRAIN_YEAR_MAX
+    test_year_mask = edge_time >= TEST_YEAR_MIN
+
+    train_mask = train_year_mask & (edge_time <= cutoff_year)
+    if val_min_year is not None or val_max_year is not None:
+        lo = int(val_min_year) if val_min_year is not None else (cutoff_year + 1)
+        hi = int(val_max_year) if val_max_year is not None else TRAIN_YEAR_MAX
+        val_mask = (edge_time >= lo) & (edge_time <= hi)
+    else:
+        val_mask = train_year_mask & (edge_time > cutoff_year)
+    test_mask = test_year_mask
+
+    return train_mask, val_mask, test_mask, cutoff_year
+
+
+def build_context_graph(data, collapse: bool = False):
+    """Remove advancement edges (BOTH directions) from the graph.
+
+    Both the forward ``('target','advancement','disease')`` and the reverse
+    ``('disease','rev_advancement','target')`` edge types are excluded.
+
+    The reverse type is added by ``load_event_graph(to_undirected=True)``
+    for symmetric message passing. If only the forward tuple were dropped,
+    the queried (target, disease) supervision edge would still be visible
+    to the model through its reverse mirror — every positive label has an
+    exact rev_advancement edge with the same edge_time, which passes the
+    ``LinkNeighborLoader`` temporal filter (``edge_time <= edge_label_time``).
+    That was a label-leak in earlier training runs; dropping the rev tuple
+    here closes it. Negatives are unaffected since no forward (and thus
+    no reverse) edge exists for them.
+    """
+    from torch_geometric.data import HeteroData
+
+    context = HeteroData()
+    for node_type in data.node_types:
+        for key, val in data[node_type].items():
+            context[node_type][key] = val
+    for edge_type in data.edge_types:
+        if edge_type == ADV_ETYPE or edge_type == REV_ADV_ETYPE:
+            continue
+        for key, val in data[edge_type].items():
+            context[edge_type][key] = val
+
+    if collapse:
+        context = to_time_agnostic(context)
+
+    return context
+
+
+def build_edge_time_dict(batch, exclude_etype=ADV_ETYPE):
+    """Build edge_time_dict for RTE, covering all context edge types.
+
+    Edge types with no edge_time get zeros so the RTE validator
+    (which requires every edge type in edge_index_dict to be present)
+    does not raise.
+    """
+    import torch
+    result = {}
+    for et in batch.edge_types:
+        if et == exclude_etype:
+            continue
+        store = batch[et]
+        n = store.edge_index.size(1)
+        if hasattr(store, "edge_time") and store.edge_time is not None:
+            result[et] = store.edge_time
+        else:
+            result[et] = torch.zeros(n, dtype=torch.long, device=store.edge_index.device)
+    return result if result else None
