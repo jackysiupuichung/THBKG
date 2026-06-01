@@ -7,7 +7,7 @@ data:
   undirected: true
 
 # HPs from b7_compgcn_tune sweep (W&B sweep t0oyfqib, best trial distinctive-sweep-21):
-# val ndcg@10=1.000, ndcg@50=0.958, ndcg@100=0.623, rr@10=13.95, rr@50=13.83, rr@100=7.51.
+# val ndcg@10=1.000, ndcg@50=0.958, ndcg@100=0.623, rs@10=13.95, rs@50=13.83, rs@100=7.51.
 # Picked over sparkling-sweep-17 (lr=4.4e-5) — both tied on val, this one has healthier
 # learning rate (3.5e-4) so more likely to generalize.
 model:
@@ -37,4 +37,4 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@50
+    metric: ndcg_ta_mean@30

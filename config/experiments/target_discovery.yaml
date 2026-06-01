@@ -36,7 +36,7 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@100       # macro NDCG@100 over val slates
+    metric: ndcg_ta_mean@30       # per-therapeutic-area mean NDCG@30
 
 discovery:
   # Chronological split by first-trial-edge year. None = open-ended.

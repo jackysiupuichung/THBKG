@@ -31,7 +31,7 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@50
+    metric: ndcg_ta_mean@30
 
 eval:
   prospective:

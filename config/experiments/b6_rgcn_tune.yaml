@@ -30,12 +30,12 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@50
+    metric: ndcg_ta_mean@30
 
 tune:
   study_name: b6_rgcn_tune
   n_trials: 40
-  metric: val/ndcg@50
+  metric: val/ndcg_ta_mean@30
 
   search_space:
     hidden_dim:       [64, 128, 256]

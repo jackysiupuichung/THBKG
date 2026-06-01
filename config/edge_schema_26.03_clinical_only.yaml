@@ -1,0 +1,18 @@
+# Fast-path schema: only clinical_precedence edges.
+# Used to re-emit clinical edges after Stage B mutation without re-running
+# every other datasource. See preprocessing/.../apply_trial_resolution.py.
+#
+# GATher-compatible inventory: no drug->disease (reachable as 2-hop via target).
+
+clinical_precedence:
+  - input_dir: sourceId=clinical_precedence
+    sourceId: drugId
+    targetId: targetId
+    relation_name: modulated_by
+    props: [source_type=constant:molecule, target_type=constant:target, datasourceId, score=constant:1.0, year, id]
+
+  - input_dir: sourceId=clinical_precedence
+    sourceId: targetId
+    targetId: diseaseId
+    relation: trial_outcome_bucket
+    props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]

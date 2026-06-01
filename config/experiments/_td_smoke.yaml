@@ -34,7 +34,7 @@ train:
   early_stopping:
     enabled: false
     patience: 5
-    metric: ndcg@100
+    metric: ndcg_ta_mean@30
 discovery:
   split:
     train:

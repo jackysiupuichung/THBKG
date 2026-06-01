@@ -1,0 +1,43 @@
+experiment:
+  name: p3_eahgt_both_26.03_smoke
+
+# First training run on the rebuilt 26.03 graph (bucketed clinical edges,
+# resolved terminal dates, dual-edge ongoing/outcome, GATher-style no
+# drug->disease, 23.06 advancement labels). HPs cloned verbatim from the
+# p3_eahgt_both_leakfix config so any metric delta vs that run reflects the
+# 23.06 -> 26.03 graph swap, not a tuning change.
+
+data:
+  graph_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/graph/hetero_graph_with_features_datatype.pt
+  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_mappings.pt
+  undirected: true
+
+model:
+  name: hgt
+  hidden_dim: 128
+  num_heads: 2
+  num_layers: 2
+  dropout: 0.2
+  use_rte: false
+  use_edge_features: true
+  edge_feat_cols: [0, 1]
+  edge_feat_dim: 2
+
+train:
+  output_dir: /gpfs/scratch/bty414/opentarget_evidences/26.03/runs/p3_eahgt_both_smoke
+  num_epochs: 40
+  lr: 0.0004346878320299101
+  weight_decay: 0.0018260646941480677
+  eta_min: 1.0e-6
+  cosine_t_max: 10
+  batch_size: 256
+  num_neighbors: [20, 10]
+  lambdarank:
+    impl: allrank
+    weighing_scheme: lambdaRank_scheme
+    sigma: 1.4319388789983414
+    ndcg_k: 50
+  early_stopping:
+    enabled: false
+    patience: 5
+    metric: ndcg_ta_mean@30

@@ -31,7 +31,7 @@ train:
   weight_decay: 0.0018260646941480677
   eta_min: 1.0e-6
   cosine_t_max: 10
-  batch_size: 512
+  batch_size: 256
   num_neighbors: [20, 10]
   lambdarank:
     impl: allrank
@@ -41,4 +41,5 @@ train:
   early_stopping:
     enabled: false   # disabled — we want full per-epoch trajectories
     patience: 5
-    metric: ndcg@50
+    metric: balanced_mae
+    mode: min

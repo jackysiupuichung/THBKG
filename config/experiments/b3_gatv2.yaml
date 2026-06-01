@@ -7,7 +7,7 @@ data:
   undirected: true
 
 # HPs from b3_gatv2_tune sweep (W&B sweep 8e4lgy4b, best trial crisp-sweep-6):
-# val ndcg@10=0.931, ndcg@50=0.809, ndcg@100=0.593, rr@10=12.53, rr@100=7.51, AUC=0.425
+# val ndcg@10=0.931, ndcg@50=0.809, ndcg@100=0.593, rs@10=12.53, rs@100=7.51, AUC=0.425
 model:
   name: gatv2
   hidden_dim: 64
@@ -34,4 +34,4 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@50
+    metric: ndcg_ta_mean@30

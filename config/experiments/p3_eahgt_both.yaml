@@ -5,6 +5,10 @@ data:
   graph_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/graph/hetero_graph_with_features_datatype.pt
   mappings_file: /gpfs/scratch/bty414/opentarget_evidences/23.06/progression/temporal_graph_datatype_mappings.pt
   undirected: true
+  # Canonical full-range temporal split: train <=2010, val 2011-2015, test >=2016
+  train_cutoff_year: 2010
+  val_min_year: 2011
+  val_max_year: 2015
 
 model:
   name: hgt
@@ -34,7 +38,7 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@50
+    metric: ndcg_ta_mean@30
 
 tune:
   study_name: p3_eahgt_both_tune

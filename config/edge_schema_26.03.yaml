@@ -37,12 +37,12 @@ cancer_biomarkers:
 #     props: [source_type=constant:target, target_type=constant:molecule, datasourceId, score=constant:1.0, year, id]
 
 clinical_precedence:
-  - input_dir: sourceId=clinical_precedence
-    sourceId: drugId
-    targetId: diseaseId
-    relation_name: clinical_trial
-    props: [source_type=constant:molecule, target_type=constant:disease, datasourceId, score, year, id]
-
+  # GATher-compatible inventory: drug->target (modulated_by) + target->disease
+  # (bucketed by clinical outcome). drug->disease intentionally omitted; that
+  # signal is reachable as a 2-hop drug -> target -> disease.
+  # trial_outcome_bucket is one of: clinical_trial_positive, _unmet_efficacy,
+  # _adverse_effects, _Unknown/Operational, _ongoing.
+  # See preprocessing/.../apply_trial_resolution.py.
   - input_dir: sourceId=clinical_precedence
     sourceId: drugId
     targetId: targetId
@@ -52,7 +52,7 @@ clinical_precedence:
   - input_dir: sourceId=clinical_precedence
     sourceId: targetId
     targetId: diseaseId
-    relation_name: clinically_associated
+    relation: trial_outcome_bucket
     props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
 
 reactome:

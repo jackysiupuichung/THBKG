@@ -7,7 +7,7 @@ data:
   undirected: true
 
 # HPs from b6_rgcn_tune sweep (W&B sweep rsoc4n91, best trial icy-sweep-16):
-# val ndcg@10=1.000, ndcg@50=0.825, ndcg@100=0.610, rr@10=13.95, rr@50=11.02, rr@100=7.51
+# val ndcg@10=1.000, ndcg@50=0.825, ndcg@100=0.610, rs@10=13.95, rs@50=11.02, rs@100=7.51
 model:
   name: rgcn
   hidden_dim: 128
@@ -34,4 +34,4 @@ train:
   early_stopping:
     enabled: true
     patience: 5
-    metric: ndcg@50
+    metric: ndcg_ta_mean@30
