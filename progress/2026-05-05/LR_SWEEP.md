@@ -28,7 +28,7 @@ saved, comparable to MODEL_COMPARISON.md numbers.)
 
 TA-grouped (apples-to-apples with [MODEL_COMPARISON.md](MODEL_COMPARISON.md)):
 
-| Slug | best_epoch | rr_ta_mean@10 | @50 | @100 | ndcg_ta_mean@50 | AUC | AP |
+| Slug | best_epoch | rs_ta_mean@10 | @50 | @100 | ndcg_ta_mean@50 | AUC | AP |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | canonical (early-stop sweep) | 3 | **6.02** | **6.19** | **4.82** | **0.36** | 0.59 | **0.19** |
 | p3_lr_half | 44 | 3.77 | 1.62 | 1.70 | 0.14 | 0.62 | 0.12 |
@@ -40,7 +40,7 @@ The quarter-LR best_epoch is 1, with a degenerate `val_ndcg@50 =
 0.548` driven by tied scores at initialisation — selection is also
 broken, but in a different way.
 
-## Per-epoch trajectory — test_rr_ta_mean@50
+## Per-epoch trajectory — test_rs_ta_mean@50
 
 | epoch | half (lr=2.17e-4) | quarter (lr=1.09e-4) | reference: canonical (lr=4.35e-4) |
 | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ broken, but in a different way.
 Three findings:
 
 1. **Lower LR delays the peak slightly, but doesn't move it much.**
-   - Canonical: peak @ epoch 2 (rr_ta_mean@50 = 7.52).
+   - Canonical: peak @ epoch 2 (rs_ta_mean@50 = 7.52).
    - Half-LR: peak @ epoch 2 (6.53).
    - Quarter-LR: peak @ epoch 4 (6.42).
 
@@ -77,14 +77,14 @@ Three findings:
 3. **Best-epoch selection is broken under low LR + 50 epochs.**
    - Half-LR: `val_ndcg@10` finally fires meaningfully at epoch ~40
      (training catches up to the val signal threshold), so
-     selection picks epoch 44 — a checkpoint that has rr_ta_mean@50
+     selection picks epoch 44 — a checkpoint that has rs_ta_mean@50
      ≈ 1.6 (4× worse than the actual best).
    - Quarter-LR: epoch 1 produces a degenerate `val_ndcg@50 =
      0.548` from tied scores at init, then val NDCG goes to 0 for
      ~40 epochs. Best-epoch = 1 by default; checkpoint is
-     essentially random initialisation, with `test_rr@K = 0.000`
+     essentially random initialisation, with `test_rs@K = 0.000`
      for flat metrics. The TA-grouped numbers look OK (4.34 / 5.13)
-     but only because TA-grouped RR is more robust to the tied-at-
+     but only because TA-grouped RS is more robust to the tied-at-
      init pathology.
 
 ## Implication
@@ -107,7 +107,7 @@ What this rules out:
 - "Training too long destroys the model." — Yes, but lower LR
   doesn't change that.
 - "Multi-seed at canonical LR will recover bigger numbers." — Most
-  likely no; the seed noise band is roughly ±1 on rr_ta_mean@50,
+  likely no; the seed noise band is roughly ±1 on rs_ta_mean@50,
   and we can already see 7.5 from canonical's epoch-2 peak. The
   question is which checkpoint to keep, not whether better
   checkpoints exist.

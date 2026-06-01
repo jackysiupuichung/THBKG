@@ -20,7 +20,7 @@ score + novelty edge attrs, undirected, `ndcg_k = 50`); only
 
 Row 1 is the control (current setup). Row 4 is the primary
 candidate — both knobs aligned with `ndcg_k = 50` and test-time
-RR@50.
+RS@50.
 
 ## Submitting
 
@@ -39,42 +39,42 @@ For each row, pull from `epoch_metrics.csv` + `results.yaml`:
 - `best_epoch` — does it stop > epoch 1 (good) or at epoch 1
   (degenerate, like the current v2 run)?
 - `val/<es_metric>` curve shape — flat / monotonic / noisy?
-- Test `RR@10 / @50 / @100`, `AUC`, `AP` at the selected
+- Test `RS@10 / @50 / @100`, `AUC`, `AP` at the selected
   checkpoint.
-- Per-TA RR distribution (does grouping concentrate gains in tail
+- Per-TA RS distribution (does grouping concentrate gains in tail
   TAs?).
 
 **TA-grouped test metrics** (mean-of-ratios across primary TAs — apples-to-apples
 with the headline numbers in [MODEL_COMPARISON.md](MODEL_COMPARISON.md)):
 
-| Slug | best_epoch | val/<es> @ best | test rr_ta_mean@10 | @50 | @100 | test ndcg_ta_mean@50 | test AUC | test AP |
+| Slug | best_epoch | val/<es> @ best | test rs_ta_mean@10 | @50 | @100 | test ndcg_ta_mean@50 | test AUC | test AP |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | p3_es_ndcg10_flat | 3 | 0.110 | **6.02** | **6.19** | **4.82** | **0.361** | 0.588 | **0.187** |
 | p3_es_ndcg50_flat | 3 | 0.068 | **6.02** | **6.19** | **4.82** | **0.361** | 0.588 | **0.187** |
 | p3_es_ndcgta10 | 7 | 0.186 | 3.07 | 1.72 | 1.94 | 0.133 | 0.550 | 0.105 |
 | p3_es_ndcgta50 | 7 | 0.140 | 3.07 | 1.72 | 1.94 | 0.133 | 0.550 | 0.105 |
 
-**Flat-RR test metrics** (single-list, included for reference — these are
+**Flat-RS test metrics** (single-list, included for reference — these are
 NOT what MODEL_COMPARISON.md reports):
 
-| Slug | flat rr@10 | flat rr@50 | flat rr@100 |
+| Slug | flat rs@10 | flat rs@50 | flat rs@100 |
 | --- | --- | --- | --- |
 | p3_es_ndcg10_flat | 11.20 | **10.62** | 6.67 |
 | p3_es_ndcg50_flat | 11.20 | **10.62** | 6.67 |
 | p3_es_ndcgta10 | 8.69 | 3.75 | 2.50 |
 | p3_es_ndcgta50 | 8.69 | 3.75 | 2.50 |
 
-(Reference: previous v2 run — `best_epoch = 1`, test RR@100 ≈ 4.82,
+(Reference: previous v2 run — `best_epoch = 1`, test RS@100 ≈ 4.82,
 AP = 0.187, on the same recipe.)
 
 ## What the per-epoch trajectories show
 
-The trainer now logs `rr_ta_mean@K` for both val and test, so we can
+The trainer now logs `rs_ta_mean@K` for both val and test, so we can
 read the alignment directly. (Trajectory shared across runs — they
 only differ in which epoch gets selected.)
 
 ```
-ep  ndcg@10  val_ndcgta@10  val_rrta@10  val_rrta@50  TST_rrta@10  TST_rrta@50
+ep  ndcg@10  val_ndcgta@10  val_rsta@10  val_rsta@50  TST_rsta@10  TST_rsta@50
 1   0.000    0.113          1.918        2.654        4.379        6.280
 2   0.000    0.030          0.446        0.417        5.457        7.518   <- test peak
 3   0.110    0.100          1.250        1.065        6.022        6.187   <- ndcg@10 wins
@@ -89,25 +89,25 @@ Three things stand out:
 
 1. **Flat `ndcg@K` is degenerate.** Zero for 7 of 8 epochs. Only epoch
    3 is non-zero — that's why it gets selected.
-2. **TA-grouped NDCG / RR are well-behaved as signals** (no degenerate
+2. **TA-grouped NDCG / RS are well-behaved as signals** (no degenerate
    zeros, smooth trajectories). They work *as signals*.
-3. **But val_rr_ta_mean and test_rr_ta_mean diverge sharply.** Val
-   peaks at epoch 7 (`val_rr_ta_mean@10 = 2.64`); test peaks at
-   epoch 2 (`test_rr_ta_mean@50 = 7.52`). Selecting on val-side TA
-   picks epoch 7 → test_rr_ta_mean@50 = 1.72, a **~4× regression**
+3. **But val_rs_ta_mean and test_rs_ta_mean diverge sharply.** Val
+   peaks at epoch 7 (`val_rs_ta_mean@10 = 2.64`); test peaks at
+   epoch 2 (`test_rs_ta_mean@50 = 7.52`). Selecting on val-side TA
+   picks epoch 7 → test_rs_ta_mean@50 = 1.72, a **~4× regression**
    vs the flat-NDCG-selected epoch 3 (test = 6.19).
 
 ## Implication
 
-**Don't promote TA-grouped NDCG/RR as the early-stop metric.** The
+**Don't promote TA-grouped NDCG/RS as the early-stop metric.** The
 val-set TA distribution and the test-set TA distribution disagree
 enough that optimising for the val-side TA-grouped metric degrades
-the test-side TA-grouped RR. The "degenerate val NDCG" pathology is
+the test-side TA-grouped RS. The "degenerate val NDCG" pathology is
 real, but its symptom (stopping at the first non-zero epoch) happens
 to land near the test peak.
 
 **Keep `ndcg@10` (or `ndcg@50` — they pick the same epoch).** Final
-test `rr_ta_mean@50 = 6.19`, matching the headline number for
+test `rs_ta_mean@50 = 6.19`, matching the headline number for
 p3_eahgt_both in [MODEL_COMPARISON.md](MODEL_COMPARISON.md).
 
 ## Why the divergence
@@ -133,7 +133,7 @@ the grouping does. So the meaningful contrast in this sweep is
 
 1. **Reduce `patience`.** TA-grouped runs wander to epoch 7 with
    `patience=5`. With `patience=1–2`, they'd stop near epoch 3
-   (`val_rr_ta_mean@10 = 1.25`), possibly giving a non-degenerate
+   (`val_rs_ta_mean@10 = 1.25`), possibly giving a non-degenerate
    signal *and* an early stop near the test peak. Worth one extra
    run.
 2. **Closer val/test temporal cutoff.** The val-test temporal
@@ -151,7 +151,7 @@ the grouping does. So the meaningful contrast in this sweep is
    experiment.
 2. **Multi-TA diseases.** A disease in N primary TAs contributes
    to N NDCG computations in `ndcg_ta_mean` (consistent with
-   eval-time RR mean-of-ratios).
+   eval-time RS mean-of-ratios).
 3. **Single seed for the sweep.** Pick the winner from this 4-row
    single-seed run, then re-run only the winner + row 1 at 3 seeds
    for the headline comparison.

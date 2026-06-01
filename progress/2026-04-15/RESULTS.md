@@ -2,7 +2,7 @@
 
 Benchmark of scoring methods on the clinical-advancement prediction task, evaluated on held-out test pairs. The evaluation follows the prospective temporal split design of Czech et al. (2024): models are trained on evidence available up to a decision year and evaluated on target–disease pairs that subsequently advanced from Phase 2 to Phase 3. The headline comparison is **EAHGT (proposed)** vs. **RDG (time-agnostic baseline)**. OTS is included as an association-score reference.
 
-> **Data version.** All results in this snapshot are based on **OpenTargets release 23.06**. The full pipeline (edge collection → graph construction → node features → training → evaluation) is anchored at this release. Re-running against a later release (e.g. 25.06) may shift absolute RR values as evidence coverage evolves.
+> **Data version.** All results in this snapshot are based on **OpenTargets release 23.06**. The full pipeline (edge collection → graph construction → node features → training → evaluation) is anchored at this release. Re-running against a later release (e.g. 25.06) may shift absolute RS values as evidence coverage evolves.
 
 ## Models compared
 
@@ -21,26 +21,26 @@ Strata used in sub-analyses:
 
 ---
 
-## Precision at top-N (relative risk vs. base rate)
+## Precision at top-N (relative success vs. base rate)
 
-**Relative risk at N (RR@N)** is the primary evaluation metric following Czech et al. It measures how much more frequently true advancements appear in the top-N ranked pairs compared to the overall base rate:
+**Relative success at N (RS@N)** is the primary evaluation metric following Czech et al. It measures how much more frequently true advancements appear in the top-N ranked pairs compared to the overall base rate:
 
-$$\text{RR@N} = \frac{\text{positive rate among top-}N}{\text{positive rate among remaining pairs}}$$
+$$\text{RS@N} = \frac{\text{positive rate among top-}N}{\text{positive rate among remaining pairs}}$$
 
-A value of 1.0 means no enrichment above chance; higher is better. RR@N is preferred over threshold-free metrics (AUC, AP) for this task because it directly quantifies the practical value of ranking — a model that concentrates true advancements at the very top of the list is what matters for drug discovery triage. RR is computed as the mean across primary therapeutic areas (mean-of-ratios), matching the protocol in Czech et al.
+A value of 1.0 means no enrichment above chance; higher is better. RS@N is preferred over threshold-free metrics (AUC, AP) for this task because it directly quantifies the practical value of ranking — a model that concentrates true advancements at the very top of the list is what matters for drug discovery triage. RS is computed as the mean across primary therapeutic areas (mean-of-ratios), matching the protocol in Czech et al.
 
-The plot below shows the mean-of-ratios RR for all three models across N = 10 to 250. For EAHGT only, a 95% Katz log-method confidence interval is overlaid as a shaded band, derived from pooled counts across the full test set. The CI band reflects statistical uncertainty in the enrichment estimate — wide at small N (few pairs exposed) and narrowing as N grows. Vertical dotted lines mark the top 1% and top 2% of all test pairs, providing a scale reference for the regime where clinical triage decisions are typically made.
+The plot below shows the mean-of-ratios RS for all three models across N = 10 to 250. For EAHGT only, a 95% Katz log-method confidence interval is overlaid as a shaded band, derived from pooled counts across the full test set. The CI band reflects statistical uncertainty in the enrichment estimate — wide at small N (few pairs exposed) and narrowing as N grows. Vertical dotted lines mark the top 1% and top 2% of all test pairs, providing a scale reference for the regime where clinical triage decisions are typically made.
 
-![Relative risk by limit — Katz 95% CI (EAHGT)](result_plots/relative_risk_by_limit_katz95.png)
+![Relative success by limit — Katz 95% CI (EAHGT)](result_plots/relative_success_by_limit_katz95.png)
 
 **Key observations:**
-- EAHGT shows the highest RR across the full range of N, with the CI band lying entirely above the RDG line from N=10 onwards, indicating the advantage is statistically robust.
-- All three models show declining RR as N grows, consistent with the enrichment being concentrated at the very top of the ranking — a property that directly reflects ranking quality.
+- EAHGT shows the highest RS across the full range of N, with the CI band lying entirely above the RDG line from N=10 onwards, indicating the advantage is statistically robust.
+- All three models show declining RS as N grows, consistent with the enrichment being concentrated at the very top of the ranking — a property that directly reflects ranking quality.
 - OTS performs comparably to RDG at small N but drops below at larger cutoffs, consistent with its lack of temporal calibration.
 
 Comparing EAHGT to RDG at the cutoffs reported by Czech et al. (OpenTargets 23.06):
 
-| N | RDG RR | **EAHGT RR** | Δ (EAHGT − RDG) |
+| N | RDG RS | **EAHGT RS** | Δ (EAHGT − RDG) |
 | --- | --- | --- | --- |
 | 10  | 4.10 | **5.23** | +1.13 |
 | 20  | 2.73 | **4.10** | +1.37 |
@@ -59,7 +59,7 @@ EAHGT beats RDG at every cutoff, with the largest absolute advantage at N=30 (+1
 
 ## Classification metrics (threshold-free)
 
-The boxplots below show ROC-AUC and average precision per primary therapeutic area, providing a complementary threshold-free view of discrimination. Unlike RR@N, these metrics summarise performance across all possible thresholds and are less sensitive to ranking at the very top.
+The boxplots below show ROC-AUC and average precision per primary therapeutic area, providing a complementary threshold-free view of discrimination. Unlike RS@N, these metrics summarise performance across all possible thresholds and are less sensitive to ranking at the very top.
 
 ![Classification metrics by TA](result_plots/classification_metrics_by_ta.png)
 
@@ -80,52 +80,52 @@ The stratified view below breaks classification metrics down by both stratum (pi
 
 ---
 
-## Relative risk by stratum
+## Relative success by stratum
 
-The line plot below shows RR@N curves broken out by each stratum, allowing direct comparison of where EAHGT gains and loses relative to RDG as a function of cutoff.
+The line plot below shows RS@N curves broken out by each stratum, allowing direct comparison of where EAHGT gains and loses relative to RDG as a function of cutoff.
 
-![RR by limit and stratum](result_plots/relative_risk_by_limit_by_stratum.png)
+![RS by limit and stratum](result_plots/relative_success_by_limit_by_stratum.png)
 
 **Key observations:**
-- **Evidence-free**: The most striking separation. EAHGT achieves RR@10 ≈ 2.6 while RDG is near 0.2 — essentially no signal. The heterogeneous graph structure, which encodes multi-hop biological relationships, provides ranking signal in the complete absence of direct target–disease links that RDG relies on.
+- **Evidence-free**: The most striking separation. EAHGT achieves RS@10 ≈ 2.6 while RDG is near 0.2 — essentially no signal. The heterogeneous graph structure, which encodes multi-hop biological relationships, provides ranking signal in the complete absence of direct target–disease links that RDG relies on.
 - **Literature only**: EAHGT is 2–3× RDG across the full N range. Text-mining evidence exists but is weak; graph topology augments it substantially.
-- **Direct evidence**: The gap narrows sharply. Both models rank well (high RR at small N) but the direct evidence features are dominant, leaving little room for graph-derived signal to add value.
-- **Pioneer targets**: High variance due to small support. EAHGT shows bursts of high RR at specific cutoffs but the curves are noisy — the small number of pioneer test pairs limits statistical reliability per stratum.
+- **Direct evidence**: The gap narrows sharply. Both models rank well (high RS at small N) but the direct evidence features are dominant, leaving little room for graph-derived signal to add value.
+- **Pioneer targets**: High variance due to small support. EAHGT shows bursts of high RS at specific cutoffs but the curves are noisy — the small number of pioneer test pairs limits statistical reliability per stratum.
 - **Known targets**: Both models perform well and the curves track more closely. EAHGT maintains a modest consistent advantage.
 
 ---
 
-## Per-therapeutic-area relative risk
+## Per-therapeutic-area relative success
 
-The heatmap below shows RR at N = 10, 20, 30, 40, 50 and 100 for OTS, RDG and EAHGT, with one row per primary therapeutic area plus an average row. Colour intensity within each model group encodes relative performance — darker cells indicate higher RR within that model's range.
+The heatmap below shows RS at N = 10, 20, 30, 40, 50 and 100 for OTS, RDG and EAHGT, with one row per primary therapeutic area plus an average row. Colour intensity within each model group encodes relative performance — darker cells indicate higher RS within that model's range.
 
-![RR heatmap by model and TA](result_plots/relative_risk_by_ta_heatmap.png)
+![RS heatmap by model and TA](result_plots/relative_success_by_ta_heatmap.png)
 
 **Key observations:**
-- EAHGT consistently shows the deepest colour (highest RR) at small N across nearly all TAs, confirming broad generalisation rather than dominance in a single area.
-- At N=10, several TAs show EAHGT RR > 6 (hematologic, immune system, endocrine), suggesting particularly strong graph signal in these areas — likely driven by dense multi-hop evidence networks.
+- EAHGT consistently shows the deepest colour (highest RS) at small N across nearly all TAs, confirming broad generalisation rather than dominance in a single area.
+- At N=10, several TAs show EAHGT RS > 6 (hematologic, immune system, endocrine), suggesting particularly strong graph signal in these areas — likely driven by dense multi-hop evidence networks.
 - RDG achieves competitive colour at larger N, reflecting that its linear features remain informative at wider cutoffs even when the graph adds less marginal value.
-- OTS shows moderate RR in oncology and cardiovascular but falls behind in disease areas with sparser direct evidence, consistent with its association-score design.
+- OTS shows moderate RS in oncology and cardiovascular but falls behind in disease areas with sparser direct evidence, consistent with its association-score design.
 
 ---
 
-## Distribution of per-TA relative risk
+## Distribution of per-TA relative success
 
-The boxplots below show the distribution of per-TA RR values at N = 10, 20, 50 and 100. Each dot is one primary therapeutic area; the box shows median and IQR. The Wilcoxon signed-rank p-value in each panel title tests whether EAHGT RR is significantly greater than RDG RR across TAs (one-sided, paired by TA).
+The boxplots below show the distribution of per-TA RS values at N = 10, 20, 50 and 100. Each dot is one primary therapeutic area; the box shows median and IQR. The Wilcoxon signed-rank p-value in each panel title tests whether EAHGT RS is significantly greater than RDG RS across TAs (one-sided, paired by TA).
 
-![RR distributions across TAs](result_plots/rr_distributions_ta.png)
+![RS distributions across TAs](result_plots/rs_distributions_ta.png)
 
 **Key observations:**
-- At N=10 and N=20 the EAHGT distribution is clearly shifted upward but variance is high — a small number of TAs with low RR for EAHGT (or high RR for RDG) prevent significance (p=0.102, p=0.074).
+- At N=10 and N=20 the EAHGT distribution is clearly shifted upward but variance is high — a small number of TAs with low RS for EAHGT (or high RS for RDG) prevent significance (p=0.102, p=0.074).
 - At N=50 and N=100 the advantage becomes consistent enough across TAs to reach statistical significance (p=0.007, p=0.040). This reflects that at wider cutoffs the ranking advantage is spread across more pairs per TA, reducing the influence of individual TA outliers.
 - OTS shows the widest spread at small N — it performs well in a few TAs but poorly in others — whereas EAHGT and RDG are more consistent.
-- The median EAHGT RR is above RDG in all four panels, with no reversal of the direction of the effect.
+- The median EAHGT RS is above RDG in all four panels, with no reversal of the direction of the effect.
 
 ---
 
 ## Summary — EAHGT vs. RDG (OpenTargets 23.06)
 
-1. **Ranking precision is substantially higher for EAHGT across all top-N cutoffs.** The advantage of +1.0 to +1.5 RR units is consistent from N=10 to N=100, statistically supported by the 95% Katz CI band, and not explained by differences in global AUC/AP.
+1. **Ranking precision is substantially higher for EAHGT across all top-N cutoffs.** The advantage of +1.0 to +1.5 RS units is consistent from N=10 to N=100, statistically supported by the 95% Katz CI band, and not explained by differences in global AUC/AP.
 
 2. **The graph provides signal where linear models cannot.** EAHGT's largest gains occur in `evidence_free` and `literature_only` pairs — cases where RDG's feature set carries little discriminative information. Multi-hop graph relationships allow the model to rank these pairs meaningfully.
 

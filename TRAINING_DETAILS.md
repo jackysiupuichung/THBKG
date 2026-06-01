@@ -43,7 +43,7 @@ All models predict drug advancement (target–disease pairs advancing to a highe
 | epochs | 50 |
 | focal_gamma | 2.0 |
 | early_stopping_patience | 10 |
-| early_stopping_metric | val rr@100 |
+| early_stopping_metric | val rs@100 |
 
 ### B2 — HGT + RTE
 
@@ -91,7 +91,7 @@ Tuned with Optuna (50 trials). Best configuration:
 | focal_gamma | 2.0 |
 | eta_min | 1e-6 |
 | early_stopping_patience | 10 |
-| early_stopping_metric | val rr@100 |
+| early_stopping_metric | val rs@100 |
 
 ### LambdaRank — HGT with LambdaRank Loss (best model)
 
@@ -233,10 +233,10 @@ Neighborhood sampling uses `LinkNeighborLoader` with `temporal_strategy="last"` 
 |----------|---------|
 | Classification | Precision, Recall, F1, MCC, ROC-AUC, Avg. Precision, Brier score, Log loss |
 | Ranking (P@K) | Precision@K, Recall@K, AP@K for K ∈ {10, 30, 50, 100} |
-| Relative Risk | RR@K for K ∈ {10, 20, 30, 50, 90, 100} |
+| Relative Success | RS@K for K ∈ {10, 20, 30, 50, 90, 100} |
 | NDCG | NDCG@K for K ∈ {10, 30, 50, 100} |
 
-Primary early-stopping metric: **val RR@100** (B1–P3) / **val NDCG@10** (LambdaRank).
+Primary early-stopping metric: **val RS@100** (B1–P3) / **val NDCG@10** (LambdaRank).
 
 ---
 

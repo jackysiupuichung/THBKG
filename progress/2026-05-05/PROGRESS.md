@@ -6,7 +6,7 @@
   baseline / ablation under the canonical undirected LambdaRank recipe
   on the 23.06 graph and rebuilt the comparison table. The proposed
   full **EAHGT (p3, score + novelty edge attributes)** holds the SOTA
-  by a wide margin: **RR@100 = 4.82** vs RDG 1.68 / OTS 1.64; AP =
+  by a wide margin: **RS@100 = 4.82** vs RDG 1.68 / OTS 1.64; AP =
   0.187 vs 0.117 / 0.090. Full numbers and per-stratum breakdown in
   [MODEL_COMPARISON.md](MODEL_COMPARISON.md).
 - **New baselines added.** Replaced the previous GATv2-only baselines
@@ -21,7 +21,7 @@
 - **Undirected variants v2–v5.** Side-by-side runs of alternative
   undirected aggregation schemes (additive variant included for
   reference). v1 remains the proposed setup; v2 is competitive on
-  RR@50–60 but weaker on RR@100. See the "External" section of
+  RS@50–60 but weaker on RS@100. See the "External" section of
   [MODEL_COMPARISON.md](MODEL_COMPARISON.md).
 - **Prospective evaluation scaffolding.** Added
   `evaluate_prospective_standalone.py` and
@@ -34,12 +34,12 @@
 
 ## Headline figure (test set, 23.06 graph)
 
-RR@N curves, all 9 models. p3_eahgt_both leads at every K from 10
+RS@N curves, all 9 models. p3_eahgt_both leads at every K from 10
 to 100. Full breakdown in [MODEL_COMPARISON.md](MODEL_COMPARISON.md).
 
-![RR by limit, all models](../../advancement_data/results/ablation_v2/plots/relative_risk_by_limit_katz95.png)
+![RS by limit, all models](../../advancement_data/results/ablation_v2/plots/relative_success_by_limit_katz95.png)
 
-![Δ RR vs RDG by limit](../../advancement_data/results/ablation_v2/plots/relative_risk_delta_vs_rdg.png)
+![Δ RS vs RDG by limit](../../advancement_data/results/ablation_v2/plots/relative_success_delta_vs_rdg.png)
 
 ## In progress
 

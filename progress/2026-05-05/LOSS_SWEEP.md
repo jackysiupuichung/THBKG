@@ -18,22 +18,22 @@ Only `train.lambdarank.impl` varies. Patience=5, early-stop metric =
 
 TA-grouped (apples-to-apples with [MODEL_COMPARISON.md](MODEL_COMPARISON.md)):
 
-| Slug | best_epoch | rr_ta_mean@10 | @50 | @100 | ndcg_ta_mean@50 | AUC | AP |
+| Slug | best_epoch | rs_ta_mean@10 | @50 | @100 | ndcg_ta_mean@50 | AUC | AP |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | p3_loss_inhouse | 3 | 6.02 | 6.19 | 4.82 | 0.361 | 0.588 | 0.187 |
 | p3_loss_allrank | 1 | 4.64 | 6.32 | 5.55 | 0.317 | 0.626 | 0.195 |
 | **p3_loss_allrank_grouped** | **3** | **6.02** | **7.71** | **6.57** | **0.393** | **0.653** | **0.253** |
 
-Flat-RR test metrics (single-list, included for reference — not the
+Flat-RS test metrics (single-list, included for reference — not the
 headline):
 
-| Slug | flat rr@10 | flat rr@50 | flat rr@100 |
+| Slug | flat rs@10 | flat rs@50 | flat rs@100 |
 | --- | --- | --- | --- |
 | p3_loss_inhouse | 11.20 | 10.62 | 6.67 |
 | p3_loss_allrank | 9.94 | 8.72 | 7.95 |
 | **p3_loss_allrank_grouped** | **11.20** | **12.29** | **11.07** |
 
-## Per-epoch test_rr_ta_mean@50
+## Per-epoch test_rs_ta_mean@50
 
 ```
 ep  inhouse  allrank  allrank_grouped
@@ -68,7 +68,7 @@ Three things:
 
 3. **Allrank flat picks epoch 1 because val NDCG is degenerate**
    (all zero), so the first-epoch tie-breaker wins. Yet epoch 1's
-   test rr_ta_mean@50 = 6.32 is comparable to inhouse's epoch-3
+   test rs_ta_mean@50 = 6.32 is comparable to inhouse's epoch-3
    selection (6.19) — the trajectory is just stable enough that
    any early epoch is fine. With a non-degenerate val signal the
    allrank flat would have picked epoch 3 (7.89) and beaten
@@ -79,9 +79,9 @@ Three things:
 Grouped LambdaRank optimises per-TA ranking instead of one global
 ranking. This:
 - aligns the **training objective** with the **eval-time metric**
-  (RR mean-of-ratios across primary TAs)
+  (RS mean-of-ratios across primary TAs)
 - gives the val signal something meaningful to track per epoch
-  (val_rr_ta_mean rising from 3.20 → 4.34 → 5.06 across epochs is
+  (val_rs_ta_mean rising from 3.20 → 4.34 → 5.06 across epochs is
   a usable curve, unlike flat NDCG@50 which spends most of its
   time at 0)
 - makes early-stop selection actually correspond to a TA-aware
@@ -99,9 +99,9 @@ recipe, same compute, same selection rule — just a better loss:
 
 | Metric | Canonical (inhouse) | allrank_grouped | Δ |
 | --- | --- | --- | --- |
-| rr_ta_mean@10 | 6.02 | 6.02 | 0 |
-| rr_ta_mean@50 | 6.19 | **7.71** | **+24.5%** |
-| rr_ta_mean@100 | 4.82 | **6.57** | **+36.3%** |
+| rs_ta_mean@10 | 6.02 | 6.02 | 0 |
+| rs_ta_mean@50 | 6.19 | **7.71** | **+24.5%** |
+| rs_ta_mean@100 | 4.82 | **6.57** | **+36.3%** |
 | ndcg_ta_mean@50 | 0.361 | **0.393** | **+8.9%** |
 | AUC | 0.588 | **0.653** | **+11.1%** |
 | AP | 0.187 | **0.253** | **+35.3%** |
@@ -128,7 +128,7 @@ Before publishing the new SOTA, do these four follow-ups:
 2. **Re-run the full ablation matrix** (b1, b3, b6, b7, p1, p2,
    p3) with `allrank_grouped` to update
    [MODEL_COMPARISON.md](MODEL_COMPARISON.md) headline numbers.
-3. **Grouped tune.** Tune sigma + lr against val_rr_ta_mean@50
+3. **Grouped tune.** Tune sigma + lr against val_rs_ta_mean@50
    under the grouped loss; the canonical (sigma, lr) values were
    selected for the flat in-house loss.
 4. **Try `weighing_scheme: ndcgLoss2_scheme`** as a quick A/B —

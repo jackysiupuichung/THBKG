@@ -16,8 +16,8 @@ The v2 `p3_eahgt_both` (full proposed model) replicates the historical
 | Metric | undirected_v1 (saved) | p3_eahgt_both_v2 |
 | --- | --- | --- |
 | best_epoch | 3 | 1 |
-| test_rr@100 | 6.667 | 6.387 |
-| test_rr@50 | 10.625 | 12.006 |
+| test_rs@100 | 6.667 | 6.387 |
+| test_rs@50 | 10.625 | 12.006 |
 | test_ndcg@100 | 0.569 | 0.606 |
 | test_roc_auc | 0.588 | 0.606 |
 | test_average_precision | 0.187 | 0.197 |
@@ -25,10 +25,10 @@ The v2 `p3_eahgt_both` (full proposed model) replicates the historical
 Within seed noise. The v2 ablation conclusions can therefore be read directly
 against the proposed-model row.
 
-> **Note on the headline 2.78 RR@100 in 2026-04-15/RESULTS.md.** That number is
+> **Note on the headline 2.78 RS@100 in 2026-04-15/RESULTS.md.** That number is
 > from the *directed* `runs/advancement_lambdarank` run — a different baseline
 > than the undirected model used for ablation. The current proposed undirected
-> model performs substantially better (RR@100 ≈ 6.4) on the same test set.
+> model performs substantially better (RS@100 ≈ 6.4) on the same test set.
 
 ## Ablation matrix
 
@@ -45,7 +45,7 @@ against the proposed-model row.
 
 ## Headline test metrics
 
-| Slug | RR@10 | RR@30 | RR@50 | RR@100 | NDCG@100 | AUC | AP |
+| Slug | RS@10 | RS@30 | RS@50 | RS@100 | NDCG@100 | AUC | AP |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RDG | 4.10 | 2.45 | 1.94 | 1.68 | — | 0.637 | 0.117 |
 | OTS | 2.53 | 1.92 | 1.78 | 1.64 | — | 0.493 | 0.090 |
@@ -58,33 +58,33 @@ against the proposed-model row.
 | p2_eahgt_novelty | 2.75 | 2.48 | 2.99 | 3.89 | 0.163 | 0.599 | 0.151 |
 | **p3_eahgt_both** | 2.50 | 3.18 | 4.43 | **3.11** | **0.606** | 0.606 | **0.197** |
 
-(RR is the mean-of-ratios over primary therapeutic areas.)
+(RS is the mean-of-ratios over primary therapeutic areas.)
 
 ## Findings
 
 ### 1. Edge attributes contribute, jointly more than individually
 - `p3_eahgt_both` (score + novelty) is the only ablation reaching **NDCG@100 = 0.606** and **AP = 0.197** — both substantially above any single-feature variant.
 - Individual edge features each beat the no-edge-feature HGT baseline on AUC/AP (`p1` AP = 0.154, `p2` AP = 0.151 vs `b1` AP = 0.144), but joint use is what produces the calibrated top-of-list ranking.
-- p3's RR@50 = 4.43 is close to b2's RR@50 = 4.68 and well above b1's 3.28, indicating edge attributes add ranking concentration on top of the HGT backbone.
+- p3's RS@50 = 4.43 is close to b2's RS@50 = 4.68 and well above b1's 3.28, indicating edge attributes add ranking concentration on top of the HGT backbone.
 
 ### 2. RTE alone helps AUC/AP but hurts top-of-list NDCG
-- `b2_hgt_rte` has the **highest AUC (0.651)** and the **highest mean-of-ratios RR@50 (4.68)** but the **lowest NDCG@100 (0.103)** among HGT variants.
+- `b2_hgt_rte` has the **highest AUC (0.651)** and the **highest mean-of-ratios RS@50 (4.68)** but the **lowest NDCG@100 (0.103)** among HGT variants.
 - This is a known LambdaRank failure mode — RTE shifts the score distribution so many positives sit just outside the top-100 globally while still beating negatives in the per-TA ranking.
 - RTE is **not used** in the proposed model (`use_rte: false` in p3) and these results justify that choice.
 
 ### 3. GATv2 underperforms HGT uniformly
-- All three GATv2 baselines (b3/b4/b5) fall well below RDG on RR@100 (1.12–1.73 vs 1.68) and well below b1_hgt on every metric.
+- All three GATv2 baselines (b3/b4/b5) fall well below RDG on RS@100 (1.12–1.73 vs 1.68) and well below b1_hgt on every metric.
 - b5 (GATv2 + both edge features) is *worse* than either b3 or b4 alone — the GATv2 + edge-attribute fusion in PyG's `HeteroConv` may not be learning a useful per-relation projection.
 - This validates the choice of HGT over GATv2 as the encoder.
 
 ### 4. Heterogeneity matters
-- HGT-based ablations (b1, b2, p1, p2, p3) all beat RDG on RR@100 (3.11–4.83 vs 1.68).
+- HGT-based ablations (b1, b2, p1, p2, p3) all beat RDG on RS@100 (3.11–4.83 vs 1.68).
 - GATv2-based ablations (b3, b4, b5) all *fail* to beat RDG.
 - The per-relation attention projection in HGT — not the edge attributes themselves — is the dominant source of lift.
 
 ## Caveats
 
-1. **Single seed.** All RR numbers are based on one training run per ablation. The val NDCG@10 hits 0.0 in many epochs for HGT variants (because val positives don't cluster at top-10 globally), making the early-stop criterion unstable across seeds. Multi-seed reruns are needed before publishing.
+1. **Single seed.** All RS numbers are based on one training run per ablation. The val NDCG@10 hits 0.0 in many epochs for HGT variants (because val positives don't cluster at top-10 globally), making the early-stop criterion unstable across seeds. Multi-seed reruns are needed before publishing.
 2. **Val metric is brittle.** The historical undirected_v1 used `ndcg_ta_mean@10` (TA-grouped variant) for early stopping; the current code uses flat `ndcg@10`. The TA-grouped metric was implemented at some point but is not in the current `train_advancement_lambdarank.py`. Recommended to restore it before any further ablation comparison so the early-stop signal is non-degenerate.
 3. **`p3_eahgt_both` stops at epoch 1.** Same caveat as historical run — val NDCG@10 = 0 throughout, so the "best" checkpoint is essentially the first non-zero or first epoch. Test metrics still match the historical run, but the ranking among ablations is sensitive to which equivalent-zero epoch is selected.
 4. **Per-TA novelty/evidence stratification not yet broken out per ablation.** Plots in `advancement_data/results/ablation_v2/plots/` show the stratified breakdowns; numerical tables not yet generated.
@@ -93,17 +93,17 @@ against the proposed-model row.
 
 All in [advancement_data/results/ablation_v2/plots/](../../advancement_data/results/ablation_v2/plots/):
 
-- [relative_risk_by_limit_katz95.png](../../advancement_data/results/ablation_v2/plots/relative_risk_by_limit_katz95.png) — RR@N curves, 8 ablations + RDG/OTS
-- [relative_risk_delta_vs_rdg.png](../../advancement_data/results/ablation_v2/plots/relative_risk_delta_vs_rdg.png) — Δ vs RDG by limit
-- [relative_risk_by_ta_heatmap.png](../../advancement_data/results/ablation_v2/plots/relative_risk_by_ta_heatmap.png) — per-TA RR
-- [relative_risk_by_limit_by_stratum.png](../../advancement_data/results/ablation_v2/plots/relative_risk_by_limit_by_stratum.png) — per-stratum RR@N
+- [relative_success_by_limit_katz95.png](../../advancement_data/results/ablation_v2/plots/relative_success_by_limit_katz95.png) — RS@N curves, 8 ablations + RDG/OTS
+- [relative_success_delta_vs_rdg.png](../../advancement_data/results/ablation_v2/plots/relative_success_delta_vs_rdg.png) — Δ vs RDG by limit
+- [relative_success_by_ta_heatmap.png](../../advancement_data/results/ablation_v2/plots/relative_success_by_ta_heatmap.png) — per-TA RS
+- [relative_success_by_limit_by_stratum.png](../../advancement_data/results/ablation_v2/plots/relative_success_by_limit_by_stratum.png) — per-stratum RS@N
 - [classification_metrics_by_ta.png](../../advancement_data/results/ablation_v2/plots/classification_metrics_by_ta.png) — AUC/AP per TA
 - [classification_metrics_by_stratum_by_ta.png](../../advancement_data/results/ablation_v2/plots/classification_metrics_by_stratum_by_ta.png) — AUC/AP per stratum × TA
-- [rr_distributions_ta.png](../../advancement_data/results/ablation_v2/plots/rr_distributions_ta.png) — per-TA RR distributions
+- [rs_distributions_ta.png](../../advancement_data/results/ablation_v2/plots/rs_distributions_ta.png) — per-TA RS distributions
 
 ## Next steps
 
 - [ ] Restore `ndcg_ta_mean@K` in `train_advancement_lambdarank.py` and rerun for a non-degenerate early-stop signal.
-- [ ] Run 3 seeds per ablation; report mean ± std on RR@100.
+- [ ] Run 3 seeds per ablation; report mean ± std on RS@100.
 - [ ] Add a per-stratum (pioneer × evidence) ablation table.
 - [ ] Investigate GATv2 + edge-feature wiring (b5 underperforming b3 and b4 individually is suspicious).

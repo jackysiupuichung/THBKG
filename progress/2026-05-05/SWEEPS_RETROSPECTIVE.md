@@ -16,7 +16,7 @@ as early-stop metrics.
 **Finding:** flat `ndcg@10` is degenerate (zero 7/8 epochs);
 `ndcg@50` is a more stable *signal* (non-zero 6/8 epochs) though it
 selected the same epoch in that run. TA-grouped NDCG variants were
-well-behaved as signals but **anti-correlated with test RR** — the
+well-behaved as signals but **anti-correlated with test RS** — the
 val/test temporal mismatch makes per-TA val metrics poor estimators
 of per-TA test metrics.
 
@@ -46,11 +46,11 @@ allRank flat (`[1, B]` slate), allRank grouped (one slate per
 primary TA).
 
 **Initial finding (single seed):** `allrank_grouped` selected epoch
-3 with `rr_ta_mean@50 = 7.71` — +24% over the in-house canonical
+3 with `rs_ta_mean@50 = 7.71` — +24% over the in-house canonical
 6.19. Looked like a clean SOTA improvement.
 
 **Follow-up (3-seed re-run):** the 7.71 did **not** replicate.
-Three fresh seeds gave `rr_ta_mean@50 ∈ {5.46, 1.72, 4.30}` — mean
+Three fresh seeds gave `rs_ta_mean@50 ∈ {5.46, 1.72, 4.30}` — mean
 ≈ 3.8, std ≈ 1.9 — and a re-run of the *same* seed 42 landed at
 1.72 (CUDA non-determinism alone moved it from 7.71 to 1.72). The
 grouped loss is **on average no better than, and possibly worse
