@@ -27,8 +27,9 @@ import plotnine as pn
 import mizani.bounds
 import fire
 from pathlib import Path
-from scipy.stats import wilcoxon
+from scipy.stats import wilcoxon, mannwhitneyu
 from scipy.stats.contingency import relative_risk
+import scipy.sparse as sp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,9 +55,9 @@ DEFAULT_RUNS: dict[str, str] = {
     "b6_rgcn":          f"{_SCRATCH}/b6_rgcn_lambdarank_v2",
     "b7_compgcn":       f"{_SCRATCH}/b7_compgcn_lambdarank_v2",
     # Study B — EAHGT ablation (HGT + edge feature variants; canonical HPs)
-    "p1_eahgt_score":   f"{_SCRATCH}/p1_eahgt_score_lambdarank_v2",
-    "p2_eahgt_novelty": f"{_SCRATCH}/p2_eahgt_novelty_lambdarank_v2",
-    "p3_eahgt_both":    f"{_SCRATCH}/p3_eahgt_both_lambdarank_v2",
+    "p1_eahgt_score":   f"{_SCRATCH}/p1_eahgt_score_lambdarank_v3",
+    "p2_eahgt_novelty": f"{_SCRATCH}/p2_eahgt_novelty_lambdarank_v3",
+    "p3_eahgt_both":    f"{_SCRATCH}/p3_eahgt_both_lambdarank_v3",
 }
 
 # ---------------------------------------------------------------------------
@@ -319,11 +320,11 @@ def _compute_classification_metrics(evaluation_dataset: xr.Dataset,
     return pd.DataFrame(rows)
 
 
-def _compute_relative_risk_by_limit(evaluation_dataset: xr.Dataset,
-                                     model_names: list[str],
-                                     limits: list[int],
-                                     confidence: float = 0.9,
-                                     disease_filter: set | None = None) -> pd.DataFrame:
+def _compute_relative_success_by_limit(evaluation_dataset: xr.Dataset,
+                                        model_names: list[str],
+                                        limits: list[int],
+                                        confidence: float = 0.9,
+                                        disease_filter: set | None = None) -> pd.DataFrame:
     outcomes = evaluation_dataset.outcome.squeeze("outcomes").to_series().reset_index()
     outcomes.columns = ["target_id", "disease_id", "outcome"]
     preds = (
@@ -352,9 +353,9 @@ def _compute_relative_risk_by_limit(evaluation_dataset: xr.Dataset,
             rows.append({
                 "model_name": model,
                 "limit": limit,
-                "relative_risk": rr.relative_risk,
-                "relative_risk_low": ci.low,
-                "relative_risk_high": ci.high,
+                "relative_success": rr.relative_risk,
+                "relative_success_low": ci.low,
+                "relative_success_high": ci.high,
                 "n_exposed": len(exposed),
                 "n_exposed_true": int(exposed["outcome"].sum()),
                 "n_control": len(control),
@@ -362,7 +363,7 @@ def _compute_relative_risk_by_limit(evaluation_dataset: xr.Dataset,
     return pd.DataFrame(rows)
 
 
-def _compute_rr_by_ta(evaluation_dataset: xr.Dataset,
+def _compute_rs_by_ta(evaluation_dataset: xr.Dataset,
                        therapeutic_areas: pd.DataFrame,
                        model_names: list[str],
                        limits: list[int],
@@ -403,9 +404,9 @@ def _compute_rr_by_ta(evaluation_dataset: xr.Dataset,
                     "model_name": model,
                     "therapeutic_area_name": ta,
                     "limit": limit,
-                    "relative_risk": rr.relative_risk if not np.isinf(rr.relative_risk) else np.nan,
-                    "relative_risk_low": ci.low,
-                    "relative_risk_high": ci.high,
+                    "relative_success": rr.relative_risk if not np.isinf(rr.relative_risk) else np.nan,
+                    "relative_success_low": ci.low,
+                    "relative_success_high": ci.high,
                     "n_exposed": len(exposed),
                     "n_exposed_true": int(exposed["outcome"].sum()),
                     "n_total": len(ta_grp),
@@ -526,6 +527,8 @@ def evaluate(
         "p1_eahgt_score":         "EAHGT-score",
         "p2_eahgt_novelty":       "EAHGT-novelty",
         "p3_eahgt_both":          "EAHGT",
+        # Bilinear-decoder variant (collapse-resistant; reported alongside MLP)
+        "p3_eahgt_both_bilinear": "EAHGT-Bilinear",
     }
     model_display = {
         **_STATIC_DISPLAY,
@@ -533,8 +536,36 @@ def evaluate(
            for n in external_model_names
            if n not in _STATIC_DISPLAY},
     }
+    # Canonical legend order: our model first, then standard GNN baselines,
+    # then tabular / heuristic baselines. Applied to slug_colors (insertion
+    # order = legend order in plotnine) and to model_order downstream.
+    _CANONICAL_SLUG_ORDER = [
+        "EAHGT", "EAHGT-Bilinear", "EAHGT-score", "EAHGT-novelty",
+        "HGT", "GATv2", "R-GCN", "CompGCN",
+        "RDG", "GBM", "OTS",
+        "Random",
+    ]
+    _slug_to_name = {model_display.get(m, m): m for m in all_model_names}
+    ordered_names = []
+    seen = set()
+    for slug in _CANONICAL_SLUG_ORDER:
+        n = _slug_to_name.get(slug)
+        if n is not None and n not in seen:
+            ordered_names.append(n)
+            seen.add(n)
+    # Fall through anything not in canonical list (preserves prior order)
+    for n in all_model_names:
+        if n not in seen:
+            ordered_names.append(n)
+            seen.add(n)
+    all_model_names = ordered_names
     color_map  = _build_color_map(all_model_names)
     slug_colors = {model_display.get(m, m): color_map[m] for m in all_model_names}
+    # Helper: make model_slug an ordered categorical so plotnine renders the
+    # legend in canonical order (EAHGT first, baselines last).
+    _slug_categories = list(slug_colors.keys())
+    def _as_ordered_slug(s):
+        return pd.Categorical(s, categories=_slug_categories, ordered=True)
 
     # ------------------------------------------------------------------
     # Test-pair stratification (target novelty × evidence sparsity)
@@ -635,49 +666,49 @@ def evaluate(
     classification_metrics.to_csv(results_dir / "classification_metrics.csv", index=False)
 
     # ------------------------------------------------------------------
-    # 3 & 4. Relative risk by TA (primary TAs), then average for by-limit plot
+    # 3 & 4. Relative success by TA (primary TAs), then average for by-limit plot
     # ------------------------------------------------------------------
     _primary_ta_set = set(primary_therapeutic_areas) - {"all"}
-    logger.info("Computing relative risk by therapeutic area across %d strata...", len(pair_strata))
-    rr_frames = []
+    logger.info("Computing relative success by therapeutic area across %d strata...", len(pair_strata))
+    rs_frames = []
     for stratum, pair_filter in pair_strata.items():
         if pair_filter is not None and len(pair_filter) == 0:
             continue
-        rr_s = _compute_rr_by_ta(
+        rs_s = _compute_rs_by_ta(
             evaluation_dataset,
             therapeutic_areas,
             all_model_names,
-            limits=np.arange(10, 101, 10).tolist(),
+            limits=sorted({*np.arange(10, 101, 10).tolist(), 75}),
             pair_filter=pair_filter,
         )
-        rr_s["stratum"] = stratum
-        rr_frames.append(rr_s)
-    rr_by_ta_full = pd.concat(rr_frames, ignore_index=True)
+        rs_s["stratum"] = stratum
+        rs_frames.append(rs_s)
+    rs_by_ta_full = pd.concat(rs_frames, ignore_index=True)
     # Existing plots use the "all" subset
-    rr_by_ta = rr_by_ta_full[rr_by_ta_full["stratum"] == "all"].drop(columns=["stratum"]).copy()
-    rr_by_ta["model_slug"] = rr_by_ta["model_name"].map(model_display)
+    rs_by_ta = rs_by_ta_full[rs_by_ta_full["stratum"] == "all"].drop(columns=["stratum"]).copy()
+    rs_by_ta["model_slug"] = rs_by_ta["model_name"].map(model_display)
 
-    # Derive rr_by_limit as mean RR across primary TAs (matching reference paper)
-    logger.info("Computing relative risk by limit (mean over primary TAs)...")
-    rr_by_ta_primary = rr_by_ta[rr_by_ta["therapeutic_area_name"].isin(_primary_ta_set)].copy()
-    rr_by_limit = (
-        rr_by_ta_primary
+    # Derive rs_by_limit as mean RS across primary TAs (matching reference paper)
+    logger.info("Computing relative success by limit (mean over primary TAs)...")
+    rs_by_ta_primary = rs_by_ta[rs_by_ta["therapeutic_area_name"].isin(_primary_ta_set)].copy()
+    rs_by_limit = (
+        rs_by_ta_primary
         .groupby(["model_name", "model_slug", "limit"], as_index=False)
-        .agg(relative_risk=("relative_risk", "mean"))
+        .agg(relative_success=("relative_success", "mean"))
     )
 
-    # Stratified rr_by_limit (mean over primary TAs per stratum)
-    rr_by_ta_full["model_slug"] = rr_by_ta_full["model_name"].map(model_display)
-    rr_by_ta_primary_full = rr_by_ta_full[
-        rr_by_ta_full["therapeutic_area_name"].isin(_primary_ta_set)
+    # Stratified rs_by_limit (mean over primary TAs per stratum)
+    rs_by_ta_full["model_slug"] = rs_by_ta_full["model_name"].map(model_display)
+    rs_by_ta_primary_full = rs_by_ta_full[
+        rs_by_ta_full["therapeutic_area_name"].isin(_primary_ta_set)
     ].copy()
-    rr_by_limit_full = (
-        rr_by_ta_primary_full
+    rs_by_limit_full = (
+        rs_by_ta_primary_full
         .groupby(["model_name", "model_slug", "limit", "stratum"], as_index=False)
-        .agg(relative_risk=("relative_risk", "mean"))
+        .agg(relative_success=("relative_success", "mean"))
     )
 
-    # Pooled RR with 95% Katz CI — fine-grained limits for the paper-style line plot
+    # Pooled RS with 95% Katz CI — fine-grained limits for the paper-style line plot
     _n_pairs_total = int(
         evaluation_dataset.outcome.squeeze("outcomes").to_series().reset_index().shape[0]
     )
@@ -686,95 +717,161 @@ def evaluate(
         + list(range(50, 200, 5))
         + list(range(200, 501, 10))
     ))
-    logger.info("Computing pooled RR with 95%% Katz CI over %d limits...", len(_fine_limits))
-    rr_pooled = _compute_relative_risk_by_limit(
+    logger.info("Computing pooled RS with 95%% Katz CI over %d limits...", len(_fine_limits))
+    rs_pooled = _compute_relative_success_by_limit(
         evaluation_dataset, all_model_names, _fine_limits, confidence=0.95
     )
-    rr_pooled["model_slug"] = rr_pooled["model_name"].map(model_display)
-    rr_pooled = rr_pooled.sort_values(["model_slug", "limit"])
-    rr_pooled["relative_risk_smooth"] = (
-        rr_pooled.groupby("model_slug")["relative_risk"]
+    rs_pooled["model_slug"] = rs_pooled["model_name"].map(model_display)
+    rs_pooled = rs_pooled.sort_values(["model_slug", "limit"])
+    rs_pooled["relative_success_smooth"] = (
+        rs_pooled.groupby("model_slug")["relative_success"]
         .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
     )
+    # CI bounds are NOT smoothed: each Katz interval is already computed
+    # per-N, and rolling-averaging them smears adjacent CIs into each other
+    # which understates per-N uncertainty. The `_smooth` columns alias the
+    # raw bounds so the ribbon plotting code is unchanged.
+    for _col in ("relative_success_low", "relative_success_high"):
+        rs_pooled[f"{_col}_smooth"] = rs_pooled[_col]
 
     # Mean-of-ratios (TA-averaged) at fine limits for overlay on katz plot
-    logger.info("Computing mean-of-ratios RR over fine limits for katz overlay...")
-    rr_by_ta_fine_frames = []
+    logger.info("Computing mean-of-ratios RS over fine limits for katz overlay...")
+    rs_by_ta_fine_frames = []
     for stratum, pair_filter in [("all", None)]:
-        rr_fine_s = _compute_rr_by_ta(
+        rs_fine_s = _compute_rs_by_ta(
             evaluation_dataset, therapeutic_areas, all_model_names,
             limits=_fine_limits, pair_filter=pair_filter,
         )
-        rr_by_ta_fine_frames.append(rr_fine_s)
-    rr_by_ta_fine = pd.concat(rr_by_ta_fine_frames, ignore_index=True)
-    rr_by_ta_fine["model_slug"] = rr_by_ta_fine["model_name"].map(model_display)
-    rr_mor = (
-        rr_by_ta_fine[rr_by_ta_fine["therapeutic_area_name"].isin(_primary_ta_set)]
+        rs_by_ta_fine_frames.append(rs_fine_s)
+    rs_by_ta_fine = pd.concat(rs_by_ta_fine_frames, ignore_index=True)
+    rs_by_ta_fine["model_slug"] = rs_by_ta_fine["model_name"].map(model_display)
+    _rs_by_ta_fine_primary = rs_by_ta_fine[
+        rs_by_ta_fine["therapeutic_area_name"].isin(_primary_ta_set)
+    ].copy()
+    rs_mor = (
+        _rs_by_ta_fine_primary
         .groupby(["model_name", "model_slug", "limit"], as_index=False)
-        .agg(relative_risk=("relative_risk", "mean"))
+        .agg(relative_success=("relative_success", "mean"))
     )
-    rr_mor = rr_mor.sort_values(["model_slug", "limit"])
-    rr_mor["relative_risk_smooth"] = (
-        rr_mor.groupby("model_slug")["relative_risk"]
+    rs_mor = rs_mor.sort_values(["model_slug", "limit"])
+    rs_mor["relative_success_smooth"] = (
+        rs_mor.groupby("model_slug")["relative_success"]
         .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
     )
 
+    # Bootstrap a 95% CI on the mean-of-ratios (resample over therapeutic
+    # areas) so the band actually brackets the TA-averaged line plotted
+    # below. This is the uncertainty of the headline metric, unlike the
+    # pooled Katz CI which is the uncertainty of a different (pooled) RS.
+    logger.info("Bootstrapping 95%% CI on mean-of-ratios over therapeutic areas...")
+    _bootstrap_n = 2000
+    _bootstrap_rng = np.random.default_rng(0)
+    _mor_ci_rows = []
+    for (m, slug, lim), grp in _rs_by_ta_fine_primary.groupby(
+        ["model_name", "model_slug", "limit"]
+    ):
+        vals = grp["relative_success"].dropna().to_numpy()
+        if vals.size < 2:
+            continue
+        idx = _bootstrap_rng.integers(0, vals.size, size=(_bootstrap_n, vals.size))
+        boot_means = vals[idx].mean(axis=1)
+        lo, hi = np.percentile(boot_means, [2.5, 97.5])
+        _mor_ci_rows.append(
+            {"model_name": m, "model_slug": slug, "limit": lim,
+             "relative_success_low": lo, "relative_success_high": hi}
+        )
+    rs_mor_ci = pd.DataFrame(_mor_ci_rows).sort_values(["model_slug", "limit"])
+    for _col in ("relative_success_low", "relative_success_high"):
+        rs_mor_ci[f"{_col}_smooth"] = (
+            rs_mor_ci.groupby("model_slug")[_col]
+            .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
+        )
+
     # Save CSVs: primary TAs + average row appended (stratified)
-    avg_ta_rows = rr_by_limit_full.assign(therapeutic_area_name="average primary therapeutic area")
-    pd.concat([rr_by_ta_primary_full, avg_ta_rows], ignore_index=True).to_csv(
-        results_dir / "relative_risk_by_ta.csv", index=False
+    avg_ta_rows = rs_by_limit_full.assign(therapeutic_area_name="average primary therapeutic area")
+    pd.concat([rs_by_ta_primary_full, avg_ta_rows], ignore_index=True).to_csv(
+        results_dir / "relative_success_by_ta.csv", index=False
     )
-    rr_by_limit_full.to_csv(results_dir / "relative_risk_by_limit.csv", index=False)
+    rs_by_limit_full.to_csv(results_dir / "relative_success_by_limit.csv", index=False)
 
     # ------------------------------------------------------------------
     # Plots
     # ------------------------------------------------------------------
     logger.info("Generating plots...")
 
-    # Plot 1: Mean-of-ratios line+points with 95% Katz CI ribbon
-    # rr_pooled provides the CI band only; rr_mor drives the line and points.
+    # Plot 1 (headline): pooled RS vs N with a Katz 95% CI band on the
+    # proposed (EA-HGT) curve. Both line and band describe the same
+    # quantity — the pooled top-N RR across the whole test set — directly
+    # analogous to Figure 3 of the reference paper (Related Sciences).
     _pct1  = max(1, round(_n_pairs_total * 0.01))
     _pct2  = max(1, round(_n_pairs_total * 0.02))
     _max_limit_plot = 250
-    _eahgt_slug = "EAHGT" if "EAHGT" in set(rr_mor["model_slug"]) else model_display.get(
+    _eahgt_slug = "EAHGT" if "EAHGT" in set(rs_pooled["model_slug"]) else model_display.get(
         "p3_lambdarank_undirected", model_display.get("p3_lambdarank_directed", "EAHGT"))
-    _rr_mor_katz = rr_mor[rr_mor["model_slug"] == _eahgt_slug].copy()
-    _rr_pooled_katz = rr_pooled[rr_pooled["model_slug"] == _eahgt_slug].copy()
-    _rr_plot_max = min(6.0, float(_rr_pooled_katz["relative_risk_high"].max()))
+    _rs_ci_eahgt = rs_pooled[rs_pooled["model_slug"] == _eahgt_slug].copy()
+    # Y-axis upper bound: 5% headroom above the highest CI upper bound across
+    # all models so the entire ribbon stays in-frame. Earlier versions capped
+    # this at 7.0 to match Czech et al.'s reference figure; that cap clips
+    # stronger models whose RR exceeds 7 at small N.
+    _rs_plot_max = float(rs_pooled["relative_success_high_smooth"].max()) * 1.05
     _nudge = 0.15
     _save_plot(
-        pn.ggplot(rr_mor, pn.aes(x="limit", y="relative_risk", color="model_slug", fill="model_slug", group="model_slug"))
+        pn.ggplot(rs_pooled, pn.aes(x="limit", y="relative_success", color="model_slug", fill="model_slug", group="model_slug"))
         + pn.geom_ribbon(
-            data=_rr_pooled_katz,
-            mapping=pn.aes(x="limit", ymin="relative_risk_low", ymax="relative_risk_high", fill="model_slug", group="model_slug"),
-            outline_type="full", alpha=0.22, color=None,
+            data=_rs_ci_eahgt,
+            mapping=pn.aes(x="limit", ymin="relative_success_low_smooth", ymax="relative_success_high_smooth", fill="model_slug", group="model_slug"),
+            outline_type="full", alpha=0.20, color=None,
         )
         + pn.geom_line(
-            data=_rr_pooled_katz,
-            mapping=pn.aes(x="limit", y="relative_risk_low", color="model_slug", group="model_slug"),
+            data=_rs_ci_eahgt,
+            mapping=pn.aes(x="limit", y="relative_success_low_smooth", color="model_slug", group="model_slug"),
             size=0.4, linetype="dotted", show_legend=False,
         )
         + pn.geom_line(
-            data=_rr_pooled_katz,
-            mapping=pn.aes(x="limit", y="relative_risk_high", color="model_slug", group="model_slug"),
+            data=_rs_ci_eahgt,
+            mapping=pn.aes(x="limit", y="relative_success_high_smooth", color="model_slug", group="model_slug"),
             size=0.4, linetype="dotted", show_legend=False,
         )
         + pn.geom_point(alpha=0.3, size=1)
-        + pn.geom_line(pn.aes(y="relative_risk_smooth"), size=1, alpha=0.8)
+        + pn.geom_line(pn.aes(y="relative_success_smooth"), size=1, alpha=0.8)
         + pn.geom_hline(yintercept=1, linetype="dashed")
-        + pn.annotate("text", x=_max_limit_plot, y=1 + _nudge, label="Random (RR=1)", size=8, ha="right")
-        + pn.annotate("segment", x=_pct1, xend=_pct1, y=0, yend=_rr_plot_max, color="grey", linetype="dotted", size=0.6)
-        + pn.annotate("text", x=_pct1, y=_rr_plot_max, label=f"Top 1%\n(n={_pct1})", size=7, ha="center", va="top", color="grey")
-        + pn.annotate("segment", x=_pct2, xend=_pct2, y=0, yend=_rr_plot_max, color="grey", linetype="dotted", size=0.6)
-        + pn.annotate("text", x=_pct2, y=_rr_plot_max, label=f"Top 2%\n(n={_pct2})", size=7, ha="center", va="top", color="grey")
-        + pn.scale_color_manual(values=slug_colors)
-        + pn.scale_fill_manual(values=slug_colors)
+        + pn.annotate("text", x=_max_limit_plot, y=1 + _nudge, label="Random (RS=1)", size=8, ha="right")
+        + pn.annotate("segment", x=_pct1, xend=_pct1, y=0, yend=_rs_plot_max, color="grey", linetype="dotted", size=0.6)
+        + pn.annotate("text", x=_pct1, y=_rs_plot_max, label=f"Top 1%\n(n={_pct1})", size=7, ha="center", va="top", color="grey")
+        + pn.annotate("segment", x=_pct2, xend=_pct2, y=0, yend=_rs_plot_max, color="grey", linetype="dotted", size=0.6)
+        + pn.annotate("text", x=_pct2, y=_rs_plot_max, label=f"Top 2%\n(n={_pct2})", size=7, ha="center", va="top", color="grey")
+        + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.scale_x_continuous(limits=(0, _max_limit_plot))
-        + pn.scale_y_continuous(limits=(0, _rr_plot_max), oob=mizani.bounds.squish)
-        + pn.labs(x="N top target-disease pairs", y="relative risk", color="model", fill="model")
+        + pn.scale_y_continuous(limits=(0, _rs_plot_max), oob=mizani.bounds.squish)
+        + pn.labs(x="N top target-disease pairs", y="relative success", color="model", fill="model")
         + pn.theme_minimal()
         + pn.theme(figure_size=(10, 4)),
-        plots_dir / "relative_risk_by_limit_katz95.png",
+        plots_dir / "relative_success_by_limit_pooled.png",
+    )
+
+    # Plot 1b (supp): TA-averaged mean-of-ratios (no CI band — the per-TA
+    # average is the headline metric and bootstrapping over TAs adds noise
+    # without informing the comparison). The pooled plot above already
+    # shows uncertainty via the Katz CI on EA-HGT.
+    # Auto-scale: 5% headroom above the highest smoothed value. Earlier
+    # versions capped at 8.0 to match the reference paper; that clips
+    # stronger models.
+    _rs_mor_plot_max = float(rs_mor["relative_success_smooth"].max()) * 1.05 if "relative_success_smooth" in rs_mor.columns else 5.0
+    _save_plot(
+        pn.ggplot(rs_mor, pn.aes(x="limit", y="relative_success", color="model_slug", fill="model_slug", group="model_slug"))
+        + pn.geom_point(alpha=0.3, size=1)
+        + pn.geom_line(pn.aes(y="relative_success_smooth"), size=1, alpha=0.8)
+        + pn.geom_hline(yintercept=1, linetype="dashed")
+        + pn.annotate("text", x=_max_limit_plot, y=1 + _nudge, label="Random (RS=1)", size=8, ha="right")
+        + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.scale_x_continuous(limits=(0, _max_limit_plot))
+        + pn.scale_y_continuous(limits=(0, _rs_mor_plot_max), oob=mizani.bounds.squish)
+        + pn.labs(x="N top target-disease pairs (per therapeutic area)", y="mean relative success across TAs", color="model", fill="model")
+        + pn.theme_minimal()
+        + pn.theme(figure_size=(10, 4)),
+        plots_dir / "relative_success_by_limit_ta_averaged.png",
     )
 
     # Plot 3: Classification metrics by primary TA (boxplot) — stratum='all' only
@@ -792,7 +889,7 @@ def evaluate(
         + pn.geom_boxplot(outlier_size=1, alpha=0.6)
         + pn.geom_jitter(width=0.15, size=1.5, alpha=0.7)
         + pn.facet_wrap("~ metric", scales="free_y", ncol=3)
-        + pn.scale_fill_manual(values=slug_colors)
+        + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.labs(x="", y="", fill="model")
         + pn.theme_minimal()
         + pn.theme(figure_size=(10, 5), legend_position="none",
@@ -807,7 +904,7 @@ def evaluate(
         pn.ggplot(cm_overall_mcc, pn.aes(x="model_slug", y="mcc", fill="model_slug"))
         + pn.geom_col(alpha=0.85)
         + pn.geom_text(pn.aes(label="mcc"), format_string="{:.3f}", va="bottom", size=8)
-        + pn.scale_fill_manual(values=slug_colors)
+        + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.labs(x="", y="MCC (best threshold)", fill="model",
                   title="Matthews correlation coefficient per model")
         + pn.theme_minimal()
@@ -816,61 +913,72 @@ def evaluate(
         plots_dir / "mcc_by_model.png",
     )
 
-    # Plot 4: Figure 12 — RR heatmap by model × TA (table style)
-    # Columns: {model_slug}@{N} for selected limits; rows: TAs; cell = RR.
+    # Plot 4: Figure 12 — RS heatmap by model × TA (table style)
+    # Columns: {model_slug}@{N} for selected limits; rows: TAs; cell = RS.
     _heatmap_limits  = [10, 20, 30, 40, 50, 100]
-    _heatmap_models  = [
-        m for m in ["ots__all", "rdg__no_time__positive",
-                    "p3_lambdarank_directed",
-                    "undirected_v1", "undirected_v2",
-                    "undirected_v3", "undirected_v4"]
+    # Models shown in the per-TA heatmap. Includes all current GNN
+    # architectures plus the tabular baselines. Legacy directed/undirected
+    # EAHGT variants kept for backwards compatibility with older runs.
+    _heatmap_models = [
+        m for m in [
+            # Current architectures (canonical legend order)
+            "p3_eahgt_both",
+            "p1_eahgt_score", "p2_eahgt_novelty",
+            "b1_hgt", "b3_gatv2", "b6_rgcn", "b7_compgcn",
+            # Tabular baselines
+            "rdg__no_time__positive", "ots__all",
+            # Legacy EAHGT variants
+            "p3_lambdarank_directed",
+            "undirected_v1", "undirected_v2",
+            "undirected_v3", "undirected_v4",
+        ]
         if m in all_model_names
     ]
 
     # Build pivot: rows=TA, cols=(model_slug, limit)
-    hm_data = rr_by_ta_primary[
-        rr_by_ta_primary["model_name"].isin(_heatmap_models) &
-        rr_by_ta_primary["limit"].isin(_heatmap_limits)
+    hm_data = rs_by_ta_primary[
+        rs_by_ta_primary["model_name"].isin(_heatmap_models) &
+        rs_by_ta_primary["limit"].isin(_heatmap_limits)
     ].copy()
 
     # Add "average primary therapeutic area" row (mean across primary TAs)
     avg_rows = (
         hm_data
         .groupby(["model_name", "model_slug", "limit"], as_index=False)
-        .agg(relative_risk=("relative_risk", "mean"))
+        .agg(relative_success=("relative_success", "mean"))
         .assign(therapeutic_area_name="average primary therapeutic area")
     )
     hm_data = pd.concat([hm_data, avg_rows], ignore_index=True)
 
-    rr_pivot = hm_data.pivot_table(
+    rs_pivot = hm_data.pivot_table(
         index="therapeutic_area_name", columns=["model_name", "limit"],
-        values="relative_risk", aggfunc="first",
+        values="relative_success", aggfunc="first",
     )
 
     # Order columns: group by model, then limit
     col_order = [(m, lim) for m in _heatmap_models for lim in _heatmap_limits
-                 if (m, lim) in rr_pivot.columns]
-    rr_pivot = rr_pivot[col_order]
+                 if (m, lim) in rs_pivot.columns]
+    rs_pivot = rs_pivot[col_order]
 
     # Row order: primary TAs alphabetically, then "average primary therapeutic area"
     ta_order = (
-        sorted(t for t in rr_pivot.index
+        sorted(t for t in rs_pivot.index
                if t != "average primary therapeutic area")
-        + ["average primary therapeutic area"] * ("average primary therapeutic area" in rr_pivot.index)
+        + ["average primary therapeutic area"] * ("average primary therapeutic area" in rs_pivot.index)
     )
-    rr_pivot = rr_pivot.loc[ta_order]
+    rs_pivot = rs_pivot.loc[ta_order]
 
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
 
-    n_rows, n_cols = rr_pivot.shape
+    n_rows, n_cols = rs_pivot.shape
     fig_h = max(5, n_rows * 0.45 + 1.5)
     fig_w = max(6, n_cols * 1.2 + 2.5)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     fig.patch.set_facecolor("white")
     ax.set_aspect("auto")
 
-    # Per-model colormap (white -> line-plot color) with per-model RR normalization.
+    # Per-model colormap (white -> line-plot color) with per-model RS normalization.
     # No legend — intensity is visual only.
     per_model_cmaps = {
         m: mcolors.LinearSegmentedColormap.from_list(
@@ -880,8 +988,8 @@ def evaluate(
     }
     per_model_norms = {}
     for m in _heatmap_models:
-        m_cols = [(mm, lim) for (mm, lim) in rr_pivot.columns if mm == m]
-        m_vals = rr_pivot[m_cols].values if m_cols else np.array([])
+        m_cols = [(mm, lim) for (mm, lim) in rs_pivot.columns if mm == m]
+        m_vals = rs_pivot[m_cols].values if m_cols else np.array([])
         m_vals = m_vals[~np.isnan(m_vals)] if m_vals.size else m_vals
         if m_vals.size:
             vmin_m = float(np.nanmin(m_vals))
@@ -894,14 +1002,14 @@ def evaluate(
 
     for row_i, ta in enumerate(ta_order):
         for col_i, (model_name, limit) in enumerate(col_order):
-            rr_val = rr_pivot.loc[ta, (model_name, limit)] if (model_name, limit) in rr_pivot.columns else np.nan
+            rs_val = rs_pivot.loc[ta, (model_name, limit)] if (model_name, limit) in rs_pivot.columns else np.nan
             cmap_m = per_model_cmaps[model_name]
             norm_m = per_model_norms[model_name]
-            color  = cmap_m(norm_m(rr_val)) if pd.notna(rr_val) else (0.85, 0.85, 0.85, 1)
+            color  = cmap_m(norm_m(rs_val)) if pd.notna(rs_val) else (0.85, 0.85, 0.85, 1)
             rect   = plt.Rectangle([col_i, row_i], 1, 1, color=color)
             ax.add_patch(rect)
-            if pd.notna(rr_val):
-                ax.text(col_i + 0.5, row_i + 0.5, f"{rr_val:.2f}",
+            if pd.notna(rs_val):
+                ax.text(col_i + 0.5, row_i + 0.5, f"{rs_val:.2f}",
                         ha="center", va="center", fontsize=8, fontweight="bold")
 
     # Axis labels
@@ -933,24 +1041,24 @@ def evaluate(
     ax.set_title("", pad=0)
     fig.tight_layout()
 
-    out_path = plots_dir / "relative_risk_by_ta_heatmap.png"
+    out_path = plots_dir / "relative_success_by_ta_heatmap.png"
     logger.info(f"Saving plot to {out_path}")
     fig.savefig(str(out_path), dpi=300, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
-    # Plot 6: RR delta vs RDG heatmap (green = better than RDG, red = worse)
+    # Plot 6: RS delta vs RDG heatmap (green = better than RDG, red = worse)
     _delta_models = [m for m in _heatmap_models if m != "rdg__no_time__positive"]
     if "rdg__no_time__positive" in all_model_names and _delta_models:
-        rdg_rr = rr_pivot["rdg__no_time__positive"] if "rdg__no_time__positive" in rr_pivot.columns.get_level_values(0) else None
+        rdg_rs = rs_pivot["rdg__no_time__positive"] if "rdg__no_time__positive" in rs_pivot.columns.get_level_values(0) else None
 
-        if rdg_rr is not None:
-            # Build delta pivot: RR(model) - RR(RDG) for each non-RDG model
+        if rdg_rs is not None:
+            # Build delta pivot: RS(model) - RS(RDG) for each non-RDG model
             delta_cols = [(m, lim) for m in _delta_models for lim in _heatmap_limits
-                          if (m, lim) in rr_pivot.columns]
-            delta_pivot = rr_pivot[delta_cols].copy()
+                          if (m, lim) in rs_pivot.columns]
+            delta_pivot = rs_pivot[delta_cols].copy()
             for m, lim in delta_cols:
-                if lim in rdg_rr.columns:
-                    delta_pivot[(m, lim)] = rr_pivot[(m, lim)] - rdg_rr[lim]
+                if lim in rdg_rs.columns:
+                    delta_pivot[(m, lim)] = rs_pivot[(m, lim)] - rdg_rs[lim]
 
             n_rows_d, n_cols_d = delta_pivot.shape
             fig_h_d = max(5, n_rows_d * 0.45 + 1.5)
@@ -966,15 +1074,15 @@ def evaluate(
 
             for row_i, ta in enumerate(ta_order):
                 for col_i, (model_name, limit) in enumerate(delta_cols):
-                    rr_val    = rr_pivot.loc[ta, (model_name, limit)] if (model_name, limit) in rr_pivot.columns else np.nan
+                    rs_val    = rs_pivot.loc[ta, (model_name, limit)] if (model_name, limit) in rs_pivot.columns else np.nan
                     delta_val = delta_pivot.loc[ta, (model_name, limit)] if (model_name, limit) in delta_pivot.columns else np.nan
                     color = cmap_d(norm_d(delta_val)) if pd.notna(delta_val) else (0.85, 0.85, 0.85, 1)
                     rect  = plt.Rectangle([col_i, row_i], 1, 1, color=color)
                     ax_d.add_patch(rect)
-                    if pd.notna(rr_val):
+                    if pd.notna(rs_val):
                         sign = "+" if pd.notna(delta_val) and delta_val >= 0 else ""
                         delta_str = f"{sign}{delta_val:.2f}" if pd.notna(delta_val) else ""
-                        ax_d.text(col_i + 0.5, row_i + 0.65, f"{rr_val:.2f}",
+                        ax_d.text(col_i + 0.5, row_i + 0.65, f"{rs_val:.2f}",
                                   ha="center", va="center", fontsize=8, fontweight="bold")
                         ax_d.text(col_i + 0.5, row_i + 0.30, delta_str,
                                   ha="center", va="center", fontsize=7, color="#111111")
@@ -1004,30 +1112,32 @@ def evaluate(
 
             sm_d = plt.cm.ScalarMappable(cmap=cmap_d, norm=norm_d)
             sm_d.set_array([])
-            plt.colorbar(sm_d, ax=ax_d, shrink=0.6, label="RR delta vs RDG")
+            plt.colorbar(sm_d, ax=ax_d, shrink=0.6, label="RS delta vs RDG")
             ax_d.set_title("", pad=0)
             fig_d.tight_layout()
 
-            out_path_d = plots_dir / "relative_risk_delta_vs_rdg.png"
+            out_path_d = plots_dir / "relative_success_delta_vs_rdg.png"
             logger.info(f"Saving plot to {out_path_d}")
             fig_d.savefig(str(out_path_d), dpi=300, bbox_inches="tight", facecolor="white")
             plt.close(fig_d)
 
-    # Plot 5: RR distributions across primary TAs — boxplot + jitter per model, faceted by limit
-    _dist_limits = [10, 20, 50, 100]
+    # Plot 5: RS distributions across primary TAs — violin + mean marker
+    # per model, faceted by limit. The mean diamond is what reviewers should
+    # read (the headline number); the violin shape shows per-TA spread.
+    _dist_limits = [10, 20, 30, 40, 50, 75, 100]
     p3_slug  = model_display.get("p3_lambdarank_undirected", model_display.get("p3_lambdarank_directed", "EAHGT"))
     rdg_slug = model_display.get("rdg__no_time__positive", "RDG")
     model_order = [model_display.get(m, m) for m in all_model_names]
 
-    rr_dist_df = rr_by_ta_primary[rr_by_ta_primary["limit"].isin(_dist_limits)].copy()
-    rr_dist_df["model_slug"] = pd.Categorical(rr_dist_df["model_slug"], categories=model_order, ordered=True)
+    rs_dist_df = rs_by_ta_primary[rs_by_ta_primary["limit"].isin(_dist_limits)].copy()
+    rs_dist_df["model_slug"] = pd.Categorical(rs_dist_df["model_slug"], categories=model_order, ordered=True)
 
     # Compute Wilcoxon p-values per limit — embed in facet label
     limit_label_order = []
     for limit in _dist_limits:
-        grp = rr_by_ta_primary[rr_by_ta_primary["limit"] == limit]
-        p3_v  = grp[grp["model_slug"] == p3_slug].set_index("therapeutic_area_name")["relative_risk"]
-        rdg_v = grp[grp["model_slug"] == rdg_slug].set_index("therapeutic_area_name")["relative_risk"]
+        grp = rs_by_ta_primary[rs_by_ta_primary["limit"] == limit]
+        p3_v  = grp[grp["model_slug"] == p3_slug].set_index("therapeutic_area_name")["relative_success"]
+        rdg_v = grp[grp["model_slug"] == rdg_slug].set_index("therapeutic_area_name")["relative_success"]
         paired = pd.concat([p3_v, rdg_v], axis=1, keys=["p3", "rdg"]).dropna()
         if len(paired) >= 3 and (paired["p3"] - paired["rdg"]).abs().sum() > 0:
             _, pval = wilcoxon(paired["p3"], paired["rdg"], alternative="greater")
@@ -1037,25 +1147,47 @@ def evaluate(
             label = f"N={limit}"
         limit_label_order.append(label)
 
-    rr_dist_df["limit_label"] = rr_dist_df["limit"].map(dict(zip(_dist_limits, limit_label_order)))
-    rr_dist_df["limit_label"] = pd.Categorical(rr_dist_df["limit_label"], categories=limit_label_order, ordered=True)
+    rs_dist_df["limit_label"] = rs_dist_df["limit"].map(dict(zip(_dist_limits, limit_label_order)))
+    rs_dist_df["limit_label"] = pd.Categorical(rs_dist_df["limit_label"], categories=limit_label_order, ordered=True)
 
     _save_plot(
-        pn.ggplot(rr_dist_df, pn.aes(x="model_slug", y="relative_risk", fill="model_slug"))
-        + pn.geom_boxplot(outlier_size=0, alpha=0.5, width=0.5)
-        + pn.geom_jitter(pn.aes(color="model_slug"), width=0.15, size=1.5, alpha=0.85)
+        pn.ggplot(rs_dist_df, pn.aes(x="model_slug", y="relative_success", fill="model_slug"))
+        + pn.geom_violin(alpha=0.55, scale="width", width=0.8, color="none")
+        + pn.geom_jitter(width=0.12, size=1.0, alpha=0.45, color="black", show_legend=False)
+        + pn.stat_summary(fun_data="mean_cl_boot", geom="point",
+                          shape="D", size=3.0, color="black", fill="white")
         + pn.geom_hline(yintercept=1, linetype="dashed", color="grey")
         + pn.facet_wrap("~ limit_label", nrow=1, scales="free_y")
-        + pn.scale_fill_manual(values=slug_colors)
-        + pn.scale_color_manual(values=slug_colors)
-        + pn.labs(x="", y="relative risk")
+        + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.labs(x="", y="relative success (mean ◇)")
         + pn.theme_minimal()
         + pn.theme(
-            figure_size=(4 * len(_dist_limits), 5),
+            figure_size=(3.5 * len(_dist_limits), 5),
             legend_position="none",
             axis_text_x=pn.element_text(rotation=35, ha="right"),
         ),
-        plots_dir / "rr_distributions_ta.png",
+        plots_dir / "rs_distributions_ta.png",
+    )
+
+    # Plot 5b: same data as a box plot (median + IQR, no outlier points).
+    # Robust to the right-skew that drags the mean diamond up in Plot 5;
+    # outliers suppressed so the per-TA spread reads as median/IQR/whiskers.
+    _save_plot(
+        pn.ggplot(rs_dist_df, pn.aes(x="model_slug", y="relative_success", fill="model_slug"))
+        + pn.geom_boxplot(alpha=0.55, width=0.7, color="black", outlier_alpha=0.0)
+        + pn.geom_hline(yintercept=1, linetype="dashed", color="grey")
+        + pn.facet_wrap("~ limit_label", nrow=1, scales="free_y")
+        + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.labs(x="", y="relative success (median, IQR)")
+        + pn.theme_minimal()
+        + pn.theme(
+            figure_size=(3.5 * len(_dist_limits), 5),
+            legend_position="none",
+            axis_text_x=pn.element_text(rotation=35, ha="right"),
+        ),
+        plots_dir / "rs_distributions_ta_box.png",
     )
 
     # ------------------------------------------------------------------
@@ -1103,7 +1235,7 @@ def evaluate(
         + pn.geom_boxplot(outlier_size=1, alpha=0.6)
         + pn.geom_jitter(width=0.15, size=1.2, alpha=0.7)
         + pn.facet_grid("metric ~ stratum_label", scales="free_y")
-        + pn.scale_fill_manual(values=slug_colors)
+        + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.labs(x="", y="", fill="model")
         + pn.theme_minimal()
         + pn.theme(figure_size=(14, 7),
@@ -1112,25 +1244,25 @@ def evaluate(
         plots_dir / "classification_metrics_by_stratum_by_ta.png",
     )
 
-    # Stratified RR-by-limit line chart
-    rr_strat = rr_by_limit_full[rr_by_limit_full["stratum"].isin(_stratum_order)].copy()
-    rr_strat["stratum_label"] = rr_strat["stratum"].map(_stratum_label)
-    rr_strat["stratum_label"] = pd.Categorical(
-        rr_strat["stratum_label"], categories=_stratum_label_order, ordered=True
+    # Stratified RS-by-limit line chart
+    rs_strat = rs_by_limit_full[rs_by_limit_full["stratum"].isin(_stratum_order)].copy()
+    rs_strat["stratum_label"] = rs_strat["stratum"].map(_stratum_label)
+    rs_strat["stratum_label"] = pd.Categorical(
+        rs_strat["stratum_label"], categories=_stratum_label_order, ordered=True
     )
     _save_plot(
-        pn.ggplot(rr_strat, pn.aes(x="limit", y="relative_risk", color="model_slug", group="model_slug"))
+        pn.ggplot(rs_strat, pn.aes(x="limit", y="relative_success", color="model_slug", group="model_slug"))
         + pn.geom_line(size=0.9, alpha=0.85)
         + pn.geom_point(size=1.5, alpha=0.85)
         + pn.geom_hline(yintercept=1, linetype="dashed")
         + pn.facet_wrap("~ stratum_label", ncol=3, scales="free_y")
-        + pn.scale_color_manual(values=slug_colors)
+        + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
         + pn.scale_x_continuous(breaks=np.arange(10, 101, 20).tolist())
         + pn.scale_y_continuous(limits=(0, None))
-        + pn.labs(x="N top target-disease pairs", y="relative risk", color="model")
+        + pn.labs(x="N top target-disease pairs", y="relative success", color="model")
         + pn.theme_minimal()
         + pn.theme(figure_size=(13, 7)),
-        plots_dir / "relative_risk_by_limit_by_stratum.png",
+        plots_dir / "relative_success_by_limit_by_stratum.png",
     )
 
     focal_model = next(
@@ -1145,9 +1277,9 @@ def evaluate(
     overall = cm_all[cm_all["therapeutic_area_name"] == "all"].set_index("models")[["roc_auc", "average_precision", "mcc"]].sort_values("roc_auc", ascending=False)
     print("\n=== Classification Metrics (overall) ===")
     print(overall.round(4).to_string())
-    rr50 = rr_by_limit[rr_by_limit["limit"] == 50][["model_name", "relative_risk"]].sort_values("relative_risk", ascending=False)
-    print("\n=== Relative Risk @ limit=50 ===")
-    print(rr50.round(3).to_string(index=False))
+    rs50 = rs_by_limit[rs_by_limit["limit"] == 50][["model_name", "relative_success"]].sort_values("relative_success", ascending=False)
+    print("\n=== Relative Success @ limit=50 ===")
+    print(rs50.round(3).to_string(index=False))
 
     if focal_model is not None:
         strat_auc = (
@@ -1163,5 +1295,571 @@ def evaluate(
         print(strat_auc.round(4).to_string())
 
 
+# ---------------------------------------------------------------------------
+# Temporal-inflation analysis (edge-count deltas around advancement)
+# ---------------------------------------------------------------------------
+#
+# Companion to the relative-success view in Figure 7. Splits each TD pair's
+# evidence timeline at its first advancement-edge year and counts edges of
+# each evidence type before vs after that split. Uses the event graph's own
+# advancement edges as the split source -- no external phase table needed.
+#
+# Reused helpers: _load_graph_and_mappings, _save_plot, the bootstrap pattern
+# at lines ~729-746 (over therapeutic areas), and the per-relation groupby
+# pattern from _compute_evidence_sparsity.
+
+_INFLATION_EVIDENCE_RELATIONS = (
+    "literature",
+    "genetic_association",
+    "somatic_mutation",
+    "affected_pathway",
+    "animal_model",
+    "rna_expression",
+)
+
+
+def _compute_advancement_split_points(data, mappings) -> pd.DataFrame:
+    """Per-pair split points derived from advancement edges of the event graph.
+
+    Columns: target_id, disease_id, t_adv_first, t_adv_last, advanced.
+    advanced=1 iff any advancement edge for the pair has edge_weight==1.
+    """
+    node_mapping = mappings["node_mapping"]
+    idx_to_target  = {v: k for k, v in node_mapping["target"].items()}
+    idx_to_disease = {v: k for k, v in node_mapping["disease"].items()}
+
+    adv = data[_ADV_ETYPE]
+    src = adv.edge_index[0].cpu().numpy()
+    dst = adv.edge_index[1].cpu().numpy()
+    t   = adv.edge_time.cpu().numpy()
+    # Outcome is stored in edge_attr[:, 0] (0 = not advanced, 1 = advanced) — not in edge_weight.
+    if not (hasattr(adv, "edge_attr") and adv.edge_attr is not None):
+        raise ValueError("Advancement edges have no edge_attr; cannot recover outcome label.")
+    w = adv.edge_attr[:, 0].cpu().numpy()
+
+    df = pd.DataFrame({
+        "target_id":  [idx_to_target[i]  for i in src],
+        "disease_id": [idx_to_disease[i] for i in dst],
+        "t":          t,
+        "w":          w,
+    })
+    grouped = df.groupby(["target_id", "disease_id"], as_index=False).agg(
+        t_adv_first=("t", "min"),
+        t_adv_last=("t", "max"),
+        advanced=("w", lambda s: int((s >= 0.5).any())),
+    )
+    return grouped
+
+
+def _compute_evidence_edge_counts(
+    data,
+    mappings,
+    split_points: pd.DataFrame,
+    evidence_types: tuple = _INFLATION_EVIDENCE_RELATIONS,
+    split_kind: str = "first",
+) -> pd.DataFrame:
+    """Per-pair before/after edge counts and rates, long-form.
+
+    One row per (pair, evidence_type). Joined against split_points so each pair
+    has its own split T.
+
+    Columns: target_id, disease_id, advanced, evidence_type, split_kind,
+             T, n_before, n_after, delta, rate_before, rate_after, rate_delta,
+             rate_clamped.
+    """
+    if split_kind not in ("first", "last"):
+        raise ValueError(f"split_kind must be 'first' or 'last', got {split_kind}")
+    t_col = "t_adv_first" if split_kind == "first" else "t_adv_last"
+
+    node_mapping = mappings["node_mapping"]
+    target_to_idx  = node_mapping["target"]
+    disease_to_idx = node_mapping["disease"]
+
+    # Map pair string IDs to (t_idx, d_idx) integer keys once.
+    sp_df = split_points.copy()
+    sp_df["t_idx"] = sp_df["target_id"].map(target_to_idx)
+    sp_df["d_idx"] = sp_df["disease_id"].map(disease_to_idx)
+    sp_df = sp_df.dropna(subset=["t_idx", "d_idx"]).copy()
+    sp_df["t_idx"] = sp_df["t_idx"].astype(np.int64)
+    sp_df["d_idx"] = sp_df["d_idx"].astype(np.int64)
+    sp_df["T"] = sp_df[t_col].astype(np.int64)
+
+    rows = []
+    for relation in evidence_types:
+        etype = ("target", relation, "disease")
+        if etype not in data.edge_types:
+            logger.warning(f"Evidence relation '{relation}' not present in graph; skipping.")
+            continue
+        store = data[etype]
+        n_e = store.edge_index.size(1)
+        if n_e == 0:
+            continue
+        src = store.edge_index[0].cpu().numpy()
+        dst = store.edge_index[1].cpu().numpy()
+        if hasattr(store, "edge_time") and store.edge_time is not None:
+            times = store.edge_time.cpu().numpy()
+        else:
+            # Treat static edges as always-present (before any T).
+            times = np.full(n_e, -10**9, dtype=np.int64)
+
+        edges = pd.DataFrame({"t_idx": src, "d_idx": dst, "year": times})
+        t_min_e = int(edges["year"].min())
+        t_max_e = int(edges["year"].max())
+
+        # Join edges to this pair-universe and count before/after via groupby.
+        joined = edges.merge(sp_df[["t_idx", "d_idx", "T"]], on=["t_idx", "d_idx"], how="inner")
+        if joined.empty:
+            # No edges of this type touch any advancement pair.
+            for _, r in sp_df.iterrows():
+                rows.append({
+                    "target_id": r["target_id"], "disease_id": r["disease_id"],
+                    "advanced": int(r["advanced"]), "evidence_type": relation,
+                    "split_kind": split_kind, "T": int(r["T"]),
+                    "n_before": 0, "n_after": 0, "delta": 0,
+                    "rate_before": 0.0, "rate_after": 0.0, "rate_delta": 0.0,
+                    "rate_clamped": False,
+                })
+            continue
+        joined["before"] = (joined["year"] < joined["T"]).astype(np.int64)
+        joined["after"] = (joined["year"] >= joined["T"]).astype(np.int64)
+        counts = joined.groupby(["t_idx", "d_idx"], as_index=False).agg(
+            n_before=("before", "sum"),
+            n_after=("after", "sum"),
+        )
+        merged = sp_df.merge(counts, on=["t_idx", "d_idx"], how="left").fillna(
+            {"n_before": 0, "n_after": 0}
+        )
+        merged["n_before"] = merged["n_before"].astype(np.int64)
+        merged["n_after"]  = merged["n_after"].astype(np.int64)
+        merged["delta"] = merged["n_after"] - merged["n_before"]
+
+        before_window = (merged["T"] - t_min_e).clip(lower=1)
+        after_window  = (t_max_e - merged["T"] + 1).clip(lower=1)
+        merged["rate_before"] = merged["n_before"] / before_window
+        merged["rate_after"]  = merged["n_after"]  / after_window
+        merged["rate_delta"]  = merged["rate_after"] - merged["rate_before"]
+        merged["rate_clamped"] = (merged["T"] - t_min_e) <= 0
+
+        for _, r in merged.iterrows():
+            rows.append({
+                "target_id": r["target_id"], "disease_id": r["disease_id"],
+                "advanced": int(r["advanced"]), "evidence_type": relation,
+                "split_kind": split_kind, "T": int(r["T"]),
+                "n_before": int(r["n_before"]), "n_after": int(r["n_after"]),
+                "delta": int(r["delta"]),
+                "rate_before": float(r["rate_before"]),
+                "rate_after":  float(r["rate_after"]),
+                "rate_delta":  float(r["rate_delta"]),
+                "rate_clamped": bool(r["rate_clamped"]),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def _bootstrap_ci(values: np.ndarray, stat=np.mean, n_boot: int = 2000,
+                  seed: int = 0, alpha: float = 0.05) -> tuple[float, float]:
+    """Percentile bootstrap CI of `stat(values)` resampled with replacement."""
+    if values.size < 2:
+        return (float("nan"), float("nan"))
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, values.size, size=(n_boot, values.size))
+    boot = stat(values[idx], axis=1)
+    lo, hi = np.percentile(boot, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return (float(lo), float(hi))
+
+
+def _summarise_edge_count_groups(counts_df: pd.DataFrame) -> pd.DataFrame:
+    """Group-wise summary: mean/median/IQR with bootstrap CIs + paired/unpaired tests.
+
+    Aggregates per (evidence_type, split_kind, advanced). Also emits an
+    "advanced=both" row carrying the within-pair Wilcoxon and the MWU between
+    advanced groups.
+    """
+    rows = []
+    for (ev, sk), grp_ev in counts_df.groupby(["evidence_type", "split_kind"]):
+        for adv_val, grp in grp_ev.groupby("advanced"):
+            n_after  = grp["n_after"].to_numpy()
+            n_before = grp["n_before"].to_numpy()
+            delta    = grp["delta"].to_numpy()
+            rd       = grp["rate_delta"].to_numpy()
+
+            mean_lo, mean_hi = _bootstrap_ci(rd, np.mean)
+            med_lo,  med_hi  = _bootstrap_ci(rd, lambda a, axis=None: np.median(a, axis=axis))
+
+            # Within-group paired test on (n_after - n_before).
+            if delta.size >= 5 and np.any(delta != 0):
+                try:
+                    wstat, wpval = wilcoxon(n_after, n_before, zero_method="wilcox", alternative="greater")
+                except ValueError:
+                    wstat, wpval = float("nan"), float("nan")
+            else:
+                wstat, wpval = float("nan"), float("nan")
+
+            rows.append({
+                "evidence_type": ev, "split_kind": sk, "advanced": int(adv_val),
+                "n_pairs": int(grp.shape[0]),
+                "mean_n_before": float(np.mean(n_before)),
+                "mean_n_after":  float(np.mean(n_after)),
+                "median_n_before": float(np.median(n_before)),
+                "median_n_after":  float(np.median(n_after)),
+                "iqr_delta_lo": float(np.percentile(delta, 25)),
+                "iqr_delta_hi": float(np.percentile(delta, 75)),
+                "mean_rate_delta": float(np.mean(rd)),
+                "mean_rate_delta_ci_lo": mean_lo,
+                "mean_rate_delta_ci_hi": mean_hi,
+                "median_rate_delta": float(np.median(rd)),
+                "median_rate_delta_ci_lo": med_lo,
+                "median_rate_delta_ci_hi": med_hi,
+                "wilcoxon_stat": float(wstat),
+                "wilcoxon_p_greater": float(wpval),
+            })
+
+        # Between-group MWU on rate_delta (advanced=1 vs advanced=0).
+        adv1 = grp_ev.loc[grp_ev["advanced"] == 1, "rate_delta"].to_numpy()
+        adv0 = grp_ev.loc[grp_ev["advanced"] == 0, "rate_delta"].to_numpy()
+        if adv1.size >= 5 and adv0.size >= 5:
+            try:
+                ustat, upval = mannwhitneyu(adv1, adv0, alternative="greater")
+            except ValueError:
+                ustat, upval = float("nan"), float("nan")
+        else:
+            ustat, upval = float("nan"), float("nan")
+        rows.append({
+            "evidence_type": ev, "split_kind": sk, "advanced": -1,  # marker for "between groups"
+            "n_pairs": int(adv0.size + adv1.size),
+            "mean_n_before": float("nan"), "mean_n_after": float("nan"),
+            "median_n_before": float("nan"), "median_n_after": float("nan"),
+            "iqr_delta_lo": float("nan"), "iqr_delta_hi": float("nan"),
+            "mean_rate_delta": float("nan"),
+            "mean_rate_delta_ci_lo": float("nan"), "mean_rate_delta_ci_hi": float("nan"),
+            "median_rate_delta": float("nan"),
+            "median_rate_delta_ci_lo": float("nan"), "median_rate_delta_ci_hi": float("nan"),
+            "wilcoxon_stat": float("nan"), "wilcoxon_p_greater": float("nan"),
+            "mwu_stat": float(ustat), "mwu_p_greater": float(upval),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _build_homogeneous_adjacency(data, year: int):
+    """Undirected adjacency over all nodes (target ∪ disease ∪ others) at snapshot `year`.
+
+    Returns (csr_matrix, node_offsets, total_nodes).
+    node_offsets[ntype] = starting row index for that node type's local indices.
+    Edge contributions from every edge type with edge_time <= year are included
+    (static edges always included).
+    """
+    node_types = list(data.node_types)
+    sizes = {nt: int(data[nt].num_nodes) for nt in node_types}
+    offsets, running = {}, 0
+    for nt in node_types:
+        offsets[nt] = running
+        running += sizes[nt]
+    total = running
+
+    rows_idx, cols_idx = [], []
+    for et in data.edge_types:
+        src_nt, _, dst_nt = et
+        store = data[et]
+        n_e = store.edge_index.size(1)
+        if n_e == 0:
+            continue
+        if hasattr(store, "edge_time") and store.edge_time is not None:
+            t = store.edge_time.cpu().numpy()
+            mask = t <= year
+            if not mask.any():
+                continue
+            ei = store.edge_index.cpu().numpy()[:, mask]
+        else:
+            ei = store.edge_index.cpu().numpy()
+        s = ei[0] + offsets[src_nt]
+        d = ei[1] + offsets[dst_nt]
+        rows_idx.append(s); cols_idx.append(d)
+        # Undirected projection: add the reverse too.
+        rows_idx.append(d); cols_idx.append(s)
+
+    if not rows_idx:
+        return sp.csr_matrix((total, total)), offsets, total
+    rr = np.concatenate(rows_idx); cc = np.concatenate(cols_idx)
+    vv = np.ones(rr.size, dtype=np.float32)
+    A = sp.coo_matrix((vv, (rr, cc)), shape=(total, total)).tocsr()
+    # Collapse multi-edges to 1 to avoid weighting by literature density.
+    A.data[:] = 1.0
+    A.sum_duplicates()
+    A.data = np.minimum(A.data, 1.0)
+    return A, offsets, total
+
+
+def _pagerank_sparse(A: sp.csr_matrix, damping: float = 0.85,
+                     tol: float = 1e-6, max_iter: int = 100) -> np.ndarray:
+    """Power-iteration PageRank on an undirected adjacency (binary weights)."""
+    n = A.shape[0]
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+    deg = np.asarray(A.sum(axis=1)).ravel()
+    deg_safe = np.where(deg > 0, deg, 1.0)
+    # P[j,i] = A[i,j] / deg[i]  -> matrix-vector form: r_new = damping * (A^T diag(1/deg)) r + (1-damping)/n
+    inv_deg = 1.0 / deg_safe
+    # Normalised transition: scale rows of A by inv_deg, then transpose for left-mul on r.
+    D_inv = sp.diags(inv_deg)
+    M = (D_inv @ A).T.tocsr()  # column-stochastic transition
+
+    r = np.full(n, 1.0 / n, dtype=np.float64)
+    teleport = (1.0 - damping) / n
+    dangling_mask = deg == 0
+    for _ in range(max_iter):
+        # Dangling mass: redistribute uniformly.
+        dangling = damping * r[dangling_mask].sum() / n
+        r_new = damping * (M @ r) + teleport + dangling
+        if np.abs(r_new - r).sum() < tol:
+            r = r_new
+            break
+        r = r_new
+    return r
+
+
+def _compute_snapshot_centrality(data, years: list[int]) -> dict:
+    """{year: {"target": pr_target_vec, "disease": pr_disease_vec,
+                "deg_target": deg_t_vec, "deg_disease": deg_d_vec}}.
+
+    Computes once per distinct year. PageRank/degree are over the full
+    homogenised projection, then sliced back per node type via offsets.
+    """
+    out = {}
+    for y in sorted(set(int(v) for v in years)):
+        logger.info(f"  centrality snapshot year={y}")
+        A, offsets, total = _build_homogeneous_adjacency(data, y)
+        deg = np.asarray(A.sum(axis=1)).ravel()
+        pr  = _pagerank_sparse(A)
+        sl_t = slice(offsets["target"], offsets["target"] + int(data["target"].num_nodes))
+        sl_d = slice(offsets["disease"], offsets["disease"] + int(data["disease"].num_nodes))
+        out[y] = {
+            "deg_target":  deg[sl_t],
+            "deg_disease": deg[sl_d],
+            "pr_target":   pr[sl_t],
+            "pr_disease":  pr[sl_d],
+        }
+    return out
+
+
+def _summarise_centrality_groups(split_points: pd.DataFrame,
+                                 mappings,
+                                 centrality_by_year: dict,
+                                 split_kind: str = "first") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Returns (per_pair_df, group_summary_df).
+
+    per_pair_df: target_id, disease_id, advanced, T, deg_target, deg_disease,
+                 pr_target, pr_disease.
+    group_summary_df: per metric × advanced — median, bootstrap CI, MWU vs other group.
+    """
+    target_to_idx  = mappings["node_mapping"]["target"]
+    disease_to_idx = mappings["node_mapping"]["disease"]
+    t_col = "t_adv_first" if split_kind == "first" else "t_adv_last"
+
+    rows = []
+    for r in split_points.itertuples(index=False):
+        ti = target_to_idx.get(r.target_id)
+        di = disease_to_idx.get(r.disease_id)
+        if ti is None or di is None:
+            continue
+        y = int(getattr(r, t_col))
+        c = centrality_by_year.get(y)
+        if c is None:
+            continue
+        rows.append({
+            "target_id": r.target_id, "disease_id": r.disease_id,
+            "advanced": int(r.advanced), "T": y,
+            "deg_target":  float(c["deg_target"][ti]),
+            "deg_disease": float(c["deg_disease"][di]),
+            "pr_target":   float(c["pr_target"][ti]),
+            "pr_disease":  float(c["pr_disease"][di]),
+        })
+    per_pair = pd.DataFrame(rows)
+    if per_pair.empty:
+        return per_pair, pd.DataFrame()
+
+    metrics = ["deg_target", "deg_disease", "pr_target", "pr_disease"]
+    sum_rows = []
+    for m in metrics:
+        adv1 = per_pair.loc[per_pair["advanced"] == 1, m].to_numpy()
+        adv0 = per_pair.loc[per_pair["advanced"] == 0, m].to_numpy()
+        for label, vec in (("advanced=1", adv1), ("advanced=0", adv0)):
+            if vec.size == 0:
+                continue
+            med_lo, med_hi = _bootstrap_ci(vec, lambda a, axis=None: np.median(a, axis=axis))
+            sum_rows.append({
+                "metric": m, "group": label, "n": int(vec.size),
+                "median": float(np.median(vec)),
+                "median_ci_lo": med_lo, "median_ci_hi": med_hi,
+            })
+        if adv1.size >= 5 and adv0.size >= 5:
+            try:
+                ustat, upval = mannwhitneyu(adv1, adv0, alternative="greater")
+            except ValueError:
+                ustat, upval = float("nan"), float("nan")
+        else:
+            ustat, upval = float("nan"), float("nan")
+        sum_rows.append({
+            "metric": m, "group": "advanced=1_vs_0", "n": int(adv1.size + adv0.size),
+            "median": float("nan"), "median_ci_lo": float("nan"), "median_ci_hi": float("nan"),
+            "mwu_stat": float(ustat), "mwu_p_greater": float(upval),
+        })
+    return per_pair, pd.DataFrame(sum_rows)
+
+
+def inflation_analysis(
+    graph_file: str = f"{Path(__file__).parent}/output/graph/hetero_graph_with_advancement.pt",
+    mappings_file: str = f"{Path(__file__).parent}/output/graph/temporal_graph_mappings.pt",
+    out_dir: str = f"{Path(__file__).parent}/advancement_data/results/inflation",
+    split: str = "first",
+    compute_centrality: bool = True,
+):
+    """Edge-count temporal-inflation analysis around advancement edges.
+
+    For each (target, disease) pair with at least one advancement edge, splits
+    the pair's evidence timeline at its first (default) or last advancement
+    year and counts edges of each evidence type before/after. Outputs
+    per-pair counts, group summary, and (optional) node-centrality
+    distributional comparison.
+
+    Args:
+        graph_file: hetero graph .pt with advancement edges
+        mappings_file: node-mapping .pt
+        out_dir: output directory (created if missing)
+        split: 'first' (default) or 'last' — which advancement year to split at
+        compute_centrality: whether to compute the PageRank/degree comparison
+    """
+    out_dir = Path(out_dir)
+    plots_dir = out_dir / "plots"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Loading graph from {graph_file}")
+    data, mappings = _load_graph_and_mappings(Path(graph_file), Path(mappings_file))
+
+    logger.info("Computing advancement split points...")
+    split_points = _compute_advancement_split_points(data, mappings)
+    n_total = len(split_points)
+    n_adv1  = int((split_points["advanced"] == 1).sum())
+    n_adv0  = int((split_points["advanced"] == 0).sum())
+    logger.info(f"  pairs with advancement edges: {n_total} (advanced=1: {n_adv1}, advanced=0: {n_adv0})")
+    if n_adv0 < 50:
+        logger.warning(
+            f"advanced=0 group has only {n_adv0} pairs (advancement edges with edge_weight<0.5). "
+            "Between-group comparisons will be underpowered."
+        )
+
+    logger.info(f"Computing edge counts before/after split (kind='{split}')...")
+    counts_df = _compute_evidence_edge_counts(
+        data, mappings, split_points, split_kind=split,
+    )
+    counts_path = out_dir / "inflation_pair_counts.parquet"
+    counts_df.to_parquet(counts_path, index=False)
+    logger.info(f"  wrote {counts_path} ({len(counts_df)} rows)")
+
+    logger.info("Summarising group statistics...")
+    summary_df = _summarise_edge_count_groups(counts_df)
+    summary_path = out_dir / "inflation_group_summary.csv"
+    summary_df.to_csv(summary_path, index=False)
+    logger.info(f"  wrote {summary_path}")
+
+    # Print headline numbers so the verification expectations are visible.
+    print("\n=== Edge-count inflation summary (per evidence type, advanced=1 group) ===")
+    head_cols = [
+        "evidence_type", "n_pairs", "mean_n_before", "mean_n_after",
+        "mean_rate_delta", "mean_rate_delta_ci_lo", "mean_rate_delta_ci_hi",
+        "wilcoxon_p_greater",
+    ]
+    headline = summary_df[(summary_df["advanced"] == 1) & (summary_df["split_kind"] == split)][head_cols]
+    print(headline.round(4).to_string(index=False))
+
+    # ---- Plots --------------------------------------------------------
+    logger.info("Generating plots...")
+    plot_df = counts_df[counts_df["split_kind"] == split].copy()
+    plot_df["advanced_lbl"] = plot_df["advanced"].map({0: "not advanced", 1: "advanced"})
+    long_counts = plot_df.melt(
+        id_vars=["target_id", "disease_id", "evidence_type", "advanced_lbl"],
+        value_vars=["n_before", "n_after"],
+        var_name="window", value_name="n_edges",
+    )
+    long_counts["window"] = long_counts["window"].map({"n_before": "before", "n_after": "after"})
+
+    _save_plot(
+        pn.ggplot(long_counts, pn.aes(x="window", y="n_edges + 1", fill="advanced_lbl"))
+        + pn.geom_boxplot(outlier_alpha=0.2)
+        + pn.facet_wrap("~evidence_type", scales="free_y")
+        + pn.scale_y_log10()
+        + pn.labs(
+            x="window relative to first advancement edge",
+            y="edge count + 1 (log scale)",
+            fill="pair group",
+            title="Per-pair evidence edge counts before vs after advancement",
+        )
+        + pn.theme_minimal()
+        + pn.theme(figure_size=(11, 6)),
+        plots_dir / "inflation_counts_by_evidence.png",
+    )
+
+    _save_plot(
+        pn.ggplot(plot_df, pn.aes(x="advanced_lbl", y="rate_delta", fill="advanced_lbl"))
+        + pn.geom_violin(alpha=0.5)
+        + pn.geom_boxplot(width=0.15, outlier_alpha=0.2)
+        + pn.geom_hline(yintercept=0, linetype="dashed")
+        + pn.facet_wrap("~evidence_type", scales="free_y")
+        + pn.labs(
+            x="pair group",
+            y="rate(after) − rate(before)  (edges/year)",
+            fill="pair group",
+            title="Post-advancement edge-rate uptick by evidence type",
+        )
+        + pn.theme_minimal()
+        + pn.theme(figure_size=(11, 6)),
+        plots_dir / "inflation_rate_delta_by_evidence.png",
+    )
+
+    # ---- Centrality (optional, slower) --------------------------------
+    if compute_centrality:
+        logger.info("Computing snapshot centrality (degree + PageRank)...")
+        years_needed = split_points["t_adv_first" if split == "first" else "t_adv_last"].astype(int).unique().tolist()
+        logger.info(f"  {len(years_needed)} distinct snapshot years")
+        centrality = _compute_snapshot_centrality(data, years_needed)
+        per_pair_c, group_c = _summarise_centrality_groups(
+            split_points, mappings, centrality, split_kind=split,
+        )
+        per_pair_c.to_parquet(out_dir / "inflation_centrality_pairs.parquet", index=False)
+        group_c.to_csv(out_dir / "inflation_centrality.csv", index=False)
+        logger.info(f"  wrote inflation_centrality.csv ({len(group_c)} rows)")
+
+        if not per_pair_c.empty:
+            cent_long = per_pair_c.melt(
+                id_vars=["target_id", "disease_id", "advanced"],
+                value_vars=["deg_target", "deg_disease", "pr_target", "pr_disease"],
+                var_name="metric", value_name="value",
+            )
+            cent_long["advanced_lbl"] = cent_long["advanced"].map({0: "not advanced", 1: "advanced"})
+            cent_long = cent_long[cent_long["value"] > 0]
+            _save_plot(
+                pn.ggplot(cent_long, pn.aes(x="advanced_lbl", y="value", fill="advanced_lbl"))
+                + pn.geom_violin(alpha=0.5)
+                + pn.geom_boxplot(width=0.15, outlier_alpha=0.2)
+                + pn.facet_wrap("~metric", scales="free_y")
+                + pn.scale_y_log10()
+                + pn.labs(
+                    x="pair group",
+                    y="value (log scale)",
+                    fill="pair group",
+                    title="Node centrality at advancement year",
+                )
+                + pn.theme_minimal()
+                + pn.theme(figure_size=(10, 6)),
+                plots_dir / "inflation_centrality.png",
+            )
+
+    logger.info(f"Done. Outputs in {out_dir}")
+
+
 if __name__ == "__main__":
-    fire.Fire(evaluate)
+    fire.Fire({
+        "evaluate": evaluate,
+        "inflation_analysis": inflation_analysis,
+    })
