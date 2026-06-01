@@ -11,6 +11,7 @@ Train HGT for clinical trial advancement link prediction.
 
 import os
 import sys
+import random
 import argparse
 from pathlib import Path
 
@@ -52,102 +53,17 @@ class TeeLogger:
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.data.temporal_loader import load_event_graph, to_time_agnostic
+from src.data.temporal_loader import (
+    ADV_ETYPE,
+    TRAIN_YEAR_MAX,
+    TEST_YEAR_MIN,
+    build_context_graph,
+    build_edge_time_dict as _build_edge_time_dict,
+    load_event_graph,
+    split_advancement_edges,
+    to_time_agnostic,
+)
 from src.models.utils import build_model
-
-
-ADV_ETYPE = ("target", "advancement", "disease")
-TRAIN_YEAR_MAX = 2015   # transition years from train_dataset.csv
-TEST_YEAR_MIN  = 2016   # transition years from test_dataset.csv
-
-
-def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_year=None):
-    """
-    Chronological split of advancement edges.
-
-    Default (val_min_year=None, val_max_year=None) preserves the historical
-    split: train = edge_time ≤ cutoff_year, val = (cutoff_year, TRAIN_YEAR_MAX].
-    cutoff_year=2010 was chosen so the val class balance (~7.3% positive)
-    matches the test set (~8.1%); see the per-year/cutoff sweep for derivation.
-
-    Passing explicit ``val_min_year`` / ``val_max_year`` restricts val to the
-    inclusive year range ``[val_min_year, val_max_year]``. Used by the
-    val-window experiment to test whether a narrower, more test-adjacent val
-    set makes the model-selection signal predictive of test performance.
-    Train remains edge_time ≤ cutoff_year regardless.
-
-    Returns
-    -------
-    train_mask, val_mask, test_mask : BoolTensor[num_adv_edges]
-    cutoff_year : int
-    """
-    edge_time = data[ADV_ETYPE].edge_time  # [E]
-
-    train_year_mask = edge_time <= TRAIN_YEAR_MAX
-    test_year_mask  = edge_time >= TEST_YEAR_MIN
-
-    train_mask = train_year_mask & (edge_time <= cutoff_year)
-    if val_min_year is not None or val_max_year is not None:
-        lo = int(val_min_year) if val_min_year is not None else (cutoff_year + 1)
-        hi = int(val_max_year) if val_max_year is not None else TRAIN_YEAR_MAX
-        val_mask = (edge_time >= lo) & (edge_time <= hi)
-    else:
-        val_mask = train_year_mask & (edge_time > cutoff_year)
-    test_mask = test_year_mask
-
-    return train_mask, val_mask, test_mask, cutoff_year
-
-
-def build_context_graph(data, collapse: bool = False):
-    """Remove advancement edges from the graph.
-
-    Parameters
-    ----------
-    collapse : bool, default False
-        If True, collapse parallel temporal edges into a single static edge
-        via to_time_agnostic().  Leave False to retain full temporal structure
-        so that LinkNeighborLoader can apply per-query time filtering.
-    """
-    from torch_geometric.data import HeteroData
-
-    # Manually copy only non-advancement edge types to avoid PyG tracking the
-    # empty storage that results from deleting attributes on a clone.
-    context = HeteroData()
-
-    for node_type in data.node_types:
-        for key, val in data[node_type].items():
-            context[node_type][key] = val
-
-    for edge_type in data.edge_types:
-        if edge_type == ADV_ETYPE:
-            continue
-        for key, val in data[edge_type].items():
-            context[edge_type][key] = val
-
-    if collapse:
-        context = to_time_agnostic(context)
-
-    return context
-
-
-def _build_edge_time_dict(batch, exclude_etype):
-    """Build edge_time_dict for RTE, covering all context edge types.
-
-    Edge types with no edge_time get zeros so the RTE validator
-    (which requires every edge type in edge_index_dict to be present)
-    doesn't raise.
-    """
-    result = {}
-    for et in batch.edge_types:
-        if et == exclude_etype:
-            continue
-        store = batch[et]
-        n = store.edge_index.size(1)
-        if hasattr(store, 'edge_time') and store.edge_time is not None:
-            result[et] = store.edge_time
-        else:
-            result[et] = torch.zeros(n, dtype=torch.long, device=store.edge_index.device)
-    return result if result else None
 
 
 def focal_loss(logits, labels, pos_weight=None, gamma=2.0):
@@ -224,7 +140,7 @@ def compute_metrics(labels: np.ndarray, scores: np.ndarray) -> dict:
             "precision@10", "precision@30", "precision@50",
             "average_precision@10", "average_precision@30", "average_precision@50", "average_precision@100",
             "recall@10", "recall@30", "recall@50",
-            "rr@10", "rr@20", "rr@30", "rr@50", "rr@90", "rr@100",
+            "rs@10", "rs@20", "rs@30", "rs@50", "rs@90", "rs@100",
         ]} | {"n_samples": n_samples, "n_positives": n_positives, "balance": balance}
 
     preds = (scores >= 0.5).astype(int)
@@ -264,15 +180,21 @@ def compute_metrics(labels: np.ndarray, scores: np.ndarray) -> dict:
             return 0.0
         return average_precision_score(top_labels, top_scores)
 
-    def _rr_at_k(k):
+    def _rs_at_k(k):
+        # Rank-based top-k, matching metrics.rs_ta_mean_at_k: exposed is
+        # exactly k items via a stable descending sort, ties broken by
+        # original index. A threshold-mask (scores >= s[k-1]) would silently
+        # expand exposed past k whenever the k-th score ties with anything
+        # below it, distorting the metric (and the ES signal that uses rs@100).
         k = min(k, n_samples)
-        threshold = scores[order][k - 1]            # k-th largest score
-        exposed   = labels[scores >= threshold]
-        control   = labels[scores < threshold]
-        if len(exposed) == 0 or len(control) == 0:
+        rank_order   = np.argsort(-scores, kind="stable")
+        exposed_mask = np.zeros(n_samples, dtype=bool)
+        exposed_mask[rank_order[:k]] = True
+        control_mask = ~exposed_mask
+        if control_mask.sum() == 0:
             return float("nan")
-        p_exposed = exposed.sum() / len(exposed)
-        p_control = control.sum() / len(control)
+        p_exposed = labels[exposed_mask].sum() / k
+        p_control = labels[control_mask].sum() / control_mask.sum()
         if p_control == 0:                          # undefined when no positives in control
             return float("nan")
         return float(p_exposed / p_control)
@@ -300,12 +222,12 @@ def compute_metrics(labels: np.ndarray, scores: np.ndarray) -> dict:
         "recall@10":           _recall_at_k(10),
         "recall@30":           _recall_at_k(30),
         "recall@50":           _recall_at_k(50),
-        "rr@10":               _rr_at_k(10),
-        "rr@20":               _rr_at_k(20),
-        "rr@30":               _rr_at_k(30),
-        "rr@50":               _rr_at_k(50),
-        "rr@90":               _rr_at_k(90),
-        "rr@100":              _rr_at_k(100),
+        "rs@10":               _rs_at_k(10),
+        "rs@20":               _rs_at_k(20),
+        "rs@30":               _rs_at_k(30),
+        "rs@50":               _rs_at_k(50),
+        "rs@90":               _rs_at_k(90),
+        "rs@100":              _rs_at_k(100),
     }
     return metrics
 
@@ -403,8 +325,13 @@ def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighb
 
 def main(cfg):
     seed = cfg.get("seed", 42)
-    torch.manual_seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     output_dir = Path(cfg.train.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -518,7 +445,7 @@ def main(cfg):
     es_enabled = bool(es_cfg.get("enabled", True))
     patience = int(es_cfg.get("patience", 10)) if es_enabled else int(1e9)
 
-    best_val_rr  = -1.0
+    best_val_rs  = -1.0
     best_epoch   = 0
     patience_ctr = 0
 
@@ -527,9 +454,9 @@ def main(cfg):
         scheduler.step()
 
         val_metrics = evaluate(model, val_loader, device, edge_feat_cols=_edge_feat_cols, pos_weight=pos_weight, focal_gamma=cfg.train.get("focal_gamma", None))
-        val_rr = val_metrics["rr@100"]
-        if np.isnan(val_rr):
-            val_rr = -1.0
+        val_rs = val_metrics["rs@100"]
+        if np.isnan(val_rs):
+            val_rs = -1.0
 
         row = {"epoch": epoch, "train_loss": train_loss}
         row.update({f"val_{k}": float(v) for k, v in val_metrics.items()})
@@ -544,11 +471,11 @@ def main(cfg):
             f"Epoch {epoch:3d} | train_loss: {train_loss:.4f} "
             f"| val roc_auc: {val_metrics['roc_auc']:.4f} "
             f"| ap: {val_metrics['average_precision']:.4f} "
-            f"| rr@100: {val_rr:.4f}"
+            f"| rs@100: {val_rs:.4f}"
         )
 
-        if val_rr > best_val_rr:
-            best_val_rr  = val_rr
+        if val_rs > best_val_rs:
+            best_val_rs  = val_rs
             best_epoch   = epoch
             patience_ctr = 0
             torch.save(model.state_dict(), ckpt_path)
@@ -558,7 +485,7 @@ def main(cfg):
                 print(f"Early stopping at epoch {epoch} (best epoch {best_epoch})")
                 break
 
-    print(f"Best epoch: {best_epoch} | best val rr@100: {best_val_rr:.4f}")
+    print(f"Best epoch: {best_epoch} | best val rs@100: {best_val_rs:.4f}")
     print(f"Loading best checkpoint from {ckpt_path}")
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
@@ -597,7 +524,7 @@ def main(cfg):
         "val_edges":   int(val_mask.sum().item()),
         "test_edges":  int(test_mask.sum().item()),
         "best_epoch":  int(best_epoch),
-        "best_val_rr@100": float(best_val_rr),
+        "best_val_rs@100": float(best_val_rs),
         "test": {f"test_{k}": float(v) for k, v in test_metrics.items()},
     }
     OmegaConf.save(OmegaConf.create(results), output_dir / "results.yaml")
