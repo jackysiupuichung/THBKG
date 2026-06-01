@@ -21,6 +21,16 @@ dependencies = [
     "scipy>=1.17.0",
     "optuna>=4.8.0",
     "plotly>=6.6.0",
+    "captum>=0.7.0",
+    "networkx>=3.2",
+    "matplotlib>=3.8",
+    "pyg-lib>=0.5.0",
+    "wandb>=0.18",
+    "scikit-learn>=1.5",
+    "xarray>=2026.4.0",
+    "zarr>=3.1.6",
+    "plotnine>=0.15.4",
+    "fire>=0.7.1",
 ]
 
 
@@ -31,8 +41,15 @@ torch = [
 torchvision = [
   { index = "pytorch-cu118", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
+pyg-lib = [{ index = "pyg-cu118" }]
 
 [[tool.uv.index]]
 name = "pytorch-cu118"
 url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[[tool.uv.index]]
+name = "pyg-cu118"
+url = "https://data.pyg.org/whl/torch-2.7.0+cu118.html"
+format = "flat"
 explicit = true
