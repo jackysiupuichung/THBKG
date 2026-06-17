@@ -156,36 +156,22 @@ def ndcg_ta_mean_at_k(
     return float(sum(vals) / len(vals))
 
 
-def rs_ta_mean_at_k(
+def _rs_ta_values_at_k(
     scores: torch.Tensor,
     labels: torch.Tensor,
     ta_per_item: List[List[str]],
     k: int,
     primary_tas: Optional[List[str]] = None,
-) -> float:
-    """
-    TA-grouped relative-success-at-K, mean across therapeutic areas.
+) -> List[float]:
+    """Per-TA relative-success-at-K values (the list aggregated by mean/median).
 
-    Mirrors `_compute_rs_by_ta` in `evaluate_advancement.py`: within each TA,
-    take the top-k items by score, then RS = P(pos | exposed) / P(pos | control).
-    Skips TAs where the TA has fewer than k items, or where the control group
-    has zero positives (RS undefined). Average across the remaining TAs.
-
-    Items can belong to multiple TAs (one disease → many TAs); each TA gets
-    counted once.
-
-    Args:
-        scores: [N] predicted scores
-        labels: [N] binary labels
-        ta_per_item: list of length N; each entry a list of TA names
-        k: top-k cutoff (per TA)
-        primary_tas: optional whitelist of TAs to average over
-
-    Returns:
-        Mean RS@k across qualifying TAs, or 0.0 if none qualify.
+    Within each TA, take the top-k items by score, then
+    RS = P(pos | exposed) / P(pos | control). Skips TAs with fewer than k items
+    or zero control positives (RS undefined). Items can belong to multiple TAs.
+    Returns the list of qualifying per-TA RS values (possibly empty).
     """
     if labels.sum() == 0:
-        return 0.0
+        return []
 
     by_ta_idx: Dict[str, List[int]] = {}
     for i, tas in enumerate(ta_per_item):
@@ -195,7 +181,7 @@ def rs_ta_mean_at_k(
             by_ta_idx.setdefault(ta, []).append(i)
 
     if not by_ta_idx:
-        return 0.0
+        return []
 
     scores_np = scores.detach().cpu().numpy() if isinstance(scores, torch.Tensor) else np.asarray(scores)
     labels_np = labels.detach().cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
@@ -223,9 +209,47 @@ def rs_ta_mean_at_k(
             continue
         vals.append(float(p_exposed / p_control))
 
+    return vals
+
+
+def rs_ta_mean_at_k(
+    scores: torch.Tensor,
+    labels: torch.Tensor,
+    ta_per_item: List[List[str]],
+    k: int,
+    primary_tas: Optional[List[str]] = None,
+) -> float:
+    """TA-grouped relative-success-at-K, mean across therapeutic areas.
+
+    See `_rs_ta_values_at_k` for the per-TA RS definition. Returns the mean
+    across qualifying TAs, or 0.0 if none qualify. NOTE: the mean is inflated
+    by a single high-RS TA (concentration); compare against
+    `rs_ta_median_at_k` to gauge how broad performance is across TAs.
+    """
+    vals = _rs_ta_values_at_k(scores, labels, ta_per_item, k, primary_tas)
     if not vals:
         return 0.0
     return float(sum(vals) / len(vals))
+
+
+def rs_ta_median_at_k(
+    scores: torch.Tensor,
+    labels: torch.Tensor,
+    ta_per_item: List[List[str]],
+    k: int,
+    primary_tas: Optional[List[str]] = None,
+) -> float:
+    """TA-grouped relative-success-at-K, MEDIAN across therapeutic areas.
+
+    Robust to per-TA concentration: unlike the mean, a single spiked TA cannot
+    inflate it, so a high median indicates broad competence across TAs. A large
+    mean - median gap signals collapse into a few TAs.
+    Returns the median across qualifying TAs, or 0.0 if none qualify.
+    """
+    vals = _rs_ta_values_at_k(scores, labels, ta_per_item, k, primary_tas)
+    if not vals:
+        return 0.0
+    return float(np.median(vals))
 
 
 def mean_reciprocal_rank(

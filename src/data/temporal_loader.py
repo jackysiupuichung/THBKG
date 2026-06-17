@@ -74,6 +74,101 @@ def is_clinical_trial_edge(edge_type: Tuple[str, str, str]) -> bool:
     return any(kw in edge_type[1] for kw in CLINICAL_TRIAL_KEYWORDS)
 
 
+def build_num_neighbors(
+    data: HeteroData,
+    base: List[int],
+    strategy: str = "off",
+    overrides: Optional[Dict[str, List[int]]] = None,
+    cap_relations: Optional[List[str]] = None,
+    boost_relations: Optional[List[str]] = None,
+    cap_value: int = 2,
+    boost_value: int = 40,
+) -> Union[List[int], Dict[Tuple[str, str, str], List[int]]]:
+    """Build a per-edge-type ``num_neighbors`` budget for LinkNeighborLoader.
+
+    The default sampler draws ``base`` (e.g. [20, 10]) neighbors per hop blind to
+    edge type, so frequency-dominant relations (literature ~73% of target-disease
+    edges) crowd out rare-but-predictive ones (clinical_trial_*, genetic). PyG
+    2.6.x accepts ``num_neighbors`` as a ``Dict[EdgeType, List[int]]`` to give each
+    edge type its own budget — this builds that dict (no custom sampler needed).
+
+    PyG requires EVERY edge type present in the dict, so we start every edge type
+    at ``base`` and then adjust per strategy.
+
+    Args:
+        data: the context HeteroData (its ``.edge_types`` define the keys).
+        base: per-hop budget applied to every edge type by default, e.g. [20, 10].
+        strategy:
+            ``"off"``      -> return ``base`` unchanged (flat list; no behaviour
+                              change — the A/B control).
+            ``"manual"``   -> apply ``overrides`` on top of ``base``.
+            ``"boosted"``  -> cap ``cap_relations`` to ``cap_value`` per hop and
+                              give ``boost_relations`` ``boost_value`` per hop
+                              (a generous FINITE budget, not -1: an unbounded -1
+                              on a high-cardinality type like genetic_association
+                              (~1.7M edges) blows up the subgraph and OOMs).
+            ``"equalized"``-> per hop, split that hop's budget evenly across the
+                              edge types incident to each destination node type.
+        overrides: relation-name (middle tuple element) -> per-hop list. Matched by
+            substring so ``"clinical_trial"`` covers all clinical_trial_* relations
+            and their ``rev_`` reverses.
+        cap_relations / boost_relations: relation-name substrings for "boosted".
+        cap_value: per-hop budget assigned to capped relations.
+
+    Returns:
+        ``base`` (list) when strategy is "off", else a ``Dict[EdgeType, List[int]]``
+        covering all edge types.
+    """
+    if strategy == "off":
+        return list(base)
+
+    edge_types = list(data.edge_types)
+    n_hops = len(base)
+
+    def _matches(rel: str, patterns: List[str]) -> bool:
+        return any(p in rel for p in (patterns or []))
+
+    budget: Dict[Tuple[str, str, str], List[int]] = {
+        et: list(base) for et in edge_types
+    }
+
+    if strategy == "manual":
+        for et in edge_types:
+            for rel_pat, hops in (overrides or {}).items():
+                if rel_pat in et[1]:
+                    budget[et] = list(hops)
+
+    elif strategy == "boosted":
+        for et in edge_types:
+            rel = et[1]
+            if _matches(rel, cap_relations):
+                budget[et] = [cap_value] * n_hops
+            elif _matches(rel, boost_relations):
+                budget[et] = [boost_value] * n_hops
+            # explicit per-relation overrides win over cap/boost
+            for rel_pat, hops in (overrides or {}).items():
+                if rel_pat in rel:
+                    budget[et] = list(hops)
+
+    elif strategy == "equalized":
+        # group edge types by destination node type; each hop's budget is split
+        # evenly across the relations feeding that destination type.
+        from collections import defaultdict
+        by_dst = defaultdict(list)
+        for et in edge_types:
+            by_dst[et[2]].append(et)
+        for dst, ets in by_dst.items():
+            for hop in range(n_hops):
+                share = max(base[hop] // max(len(ets), 1), 1)
+                for et in ets:
+                    budget[et][hop] = share
+
+    else:
+        raise ValueError(f"unknown num_neighbors strategy: {strategy!r}")
+
+    return budget
+
+
 def remove_clinical_trial_edges(data: HeteroData) -> HeteroData:
     """
     Remove all clinical trial edges from graph.
@@ -483,13 +578,22 @@ TRAIN_YEAR_MAX = 2015   # transition years from train_dataset.csv
 TEST_YEAR_MIN = 2016    # transition years from test_dataset.csv
 
 
-def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_year=None):
+def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_year=None,
+                            random_val_frac=None, random_seed=42):
     """Chronological split of advancement edges. Default (cutoff_year=2010)
     matches the canonical setup: train = edge_time ≤ 2010, val = 2011..2015,
     test = ≥ 2016.
 
     Passing explicit ``val_min_year`` / ``val_max_year`` restricts val to the
     inclusive year range — used by the val-window experiments.
+
+    ``random_val_frac`` (e.g. 0.2): instead of a temporal train/val split, pool
+    ALL pre-test edges (edge_time ≤ TRAIN_YEAR_MAX = 2015) and randomly assign
+    ``random_val_frac`` of them to val, the rest to train (seeded by
+    ``random_seed``). TEST stays strictly temporal (edge_time ≥ 2016) so the
+    forecasting evaluation is unchanged — only model SELECTION uses the random
+    val. NOTE: random val measures interpolation, not forecasting, so it is an
+    optimistic selection proxy and may correlate less with the temporal test.
 
     Returns: train_mask, val_mask, test_mask, cutoff_year
     """
@@ -498,6 +602,21 @@ def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_y
 
     train_year_mask = edge_time <= TRAIN_YEAR_MAX
     test_year_mask = edge_time >= TEST_YEAR_MIN
+
+    if random_val_frac is not None:
+        # Random 1-frac / frac split over ALL pre-test edges; test untouched.
+        g = torch.Generator().manual_seed(int(random_seed))
+        pool_idx = torch.nonzero(train_year_mask, as_tuple=False).flatten()
+        perm = pool_idx[torch.randperm(pool_idx.numel(), generator=g)]
+        n_val = int(round(float(random_val_frac) * perm.numel()))
+        val_idx = perm[:n_val]
+        train_idx = perm[n_val:]
+        train_mask = torch.zeros_like(train_year_mask)
+        val_mask = torch.zeros_like(train_year_mask)
+        train_mask[train_idx] = True
+        val_mask[val_idx] = True
+        test_mask = test_year_mask
+        return train_mask, val_mask, test_mask, cutoff_year
 
     train_mask = train_year_mask & (edge_time <= cutoff_year)
     if val_min_year is not None or val_max_year is not None:

@@ -360,8 +360,19 @@ def main(cfg):
     data = load_event_graph(cfg.data.graph_file)
 
     # ── Split advancement edges ──────────────────────────────────────────────
-    train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(data)
+    # Honour the same config split keys as train_advancement_lambdarank so a
+    # single config drives both trainers identically (defaults reproduce the
+    # canonical split: train <=2010, val 2011-2015, test >=2016).
+    _data_cfg = cfg.get("data", {})
+    train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(
+        data,
+        cutoff_year=int(_data_cfg.get("train_cutoff_year", 2010)),
+        val_min_year=_data_cfg.get("val_min_year", None),
+        val_max_year=_data_cfg.get("val_max_year", None),
+    )
     print(f"  Cutoff year: {cutoff_year}")
+    if _data_cfg.get("val_min_year") is not None or _data_cfg.get("val_max_year") is not None:
+        print(f"  Val window:  [{_data_cfg.get('val_min_year','-')}, {_data_cfg.get('val_max_year','-')}]")
     print(f"  Train edges: {train_mask.sum().item()}")
     print(f"  Val   edges: {val_mask.sum().item()}")
     print(f"  Test  edges: {test_mask.sum().item()}")
@@ -397,6 +408,7 @@ def main(cfg):
         use_rte=cfg.model.get("use_rte", False),
         use_edge_features=cfg.model.get("use_edge_features", False),
         edge_feat_dim=cfg.model.get("edge_feat_dim", 2),
+        latest_edge_only=cfg.model.get("latest_edge_only", False),
     ).to(device)
     print(f"Model: {cfg.model.name}")
 
@@ -444,8 +456,14 @@ def main(cfg):
     es_cfg = cfg.train.get("early_stopping", {})
     es_enabled = bool(es_cfg.get("enabled", True))
     patience = int(es_cfg.get("patience", 10)) if es_enabled else int(1e9)
+    # Configurable early-stop metric/mode, matching train_advancement_lambdarank.
+    # Default rs@100 (max) preserves the historical BCE-baseline behaviour.
+    es_metric = str(es_cfg.get("metric", "rs@100"))
+    es_mode = str(es_cfg.get("mode", "max")).lower()
+    assert es_mode in ("max", "min"), f"early_stopping.mode must be 'max' or 'min', got {es_mode}"
+    print(f"Early stopping on val/{es_metric} ({es_mode}), patience={patience}")
 
-    best_val_rs  = -1.0
+    best_val = float("-inf") if es_mode == "max" else float("inf")
     best_epoch   = 0
     patience_ctr = 0
 
@@ -454,9 +472,9 @@ def main(cfg):
         scheduler.step()
 
         val_metrics = evaluate(model, val_loader, device, edge_feat_cols=_edge_feat_cols, pos_weight=pos_weight, focal_gamma=cfg.train.get("focal_gamma", None))
-        val_rs = val_metrics["rs@100"]
-        if np.isnan(val_rs):
-            val_rs = -1.0
+        val_score = val_metrics.get(es_metric, float("nan"))
+        if np.isnan(val_score):
+            val_score = float("-inf") if es_mode == "max" else float("inf")
 
         row = {"epoch": epoch, "train_loss": train_loss}
         row.update({f"val_{k}": float(v) for k, v in val_metrics.items()})
@@ -471,11 +489,13 @@ def main(cfg):
             f"Epoch {epoch:3d} | train_loss: {train_loss:.4f} "
             f"| val roc_auc: {val_metrics['roc_auc']:.4f} "
             f"| ap: {val_metrics['average_precision']:.4f} "
-            f"| rs@100: {val_rs:.4f}"
+            f"| rs@100: {val_metrics['rs@100']:.4f} "
+            f"| {es_metric}: {val_score:.4f}"
         )
 
-        if val_rs > best_val_rs:
-            best_val_rs  = val_rs
+        improved = (val_score > best_val) if es_mode == "max" else (val_score < best_val)
+        if improved:
+            best_val     = val_score
             best_epoch   = epoch
             patience_ctr = 0
             torch.save(model.state_dict(), ckpt_path)
@@ -485,7 +505,7 @@ def main(cfg):
                 print(f"Early stopping at epoch {epoch} (best epoch {best_epoch})")
                 break
 
-    print(f"Best epoch: {best_epoch} | best val rs@100: {best_val_rs:.4f}")
+    print(f"Best epoch: {best_epoch} | best val {es_metric}: {best_val:.4f}")
     print(f"Loading best checkpoint from {ckpt_path}")
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
@@ -524,7 +544,7 @@ def main(cfg):
         "val_edges":   int(val_mask.sum().item()),
         "test_edges":  int(test_mask.sum().item()),
         "best_epoch":  int(best_epoch),
-        "best_val_rs@100": float(best_val_rs),
+        f"best_val_{es_metric}": float(best_val),
         "test": {f"test_{k}": float(v) for k, v in test_metrics.items()},
     }
     OmegaConf.save(OmegaConf.create(results), output_dir / "results.yaml")

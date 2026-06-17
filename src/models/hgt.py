@@ -16,10 +16,83 @@ from .decoder import Decoder, build_decoder
 from .time_encoder import TimeEncoder
 
 
+def _keep_latest_edge_per_pair(
+    edge_index_dict,
+    edge_time_dict=None,
+    edge_feat_dict=None,
+):
+    """For each edge type, keep only the LATEST edge per (src, dst) pair.
+
+    The temporal graph stores one parallel edge per evidence-year between a
+    (src, dst) pair (accumulating ``score``, decaying ``novelty``). With
+    ``temporal_strategy="last"`` the sampler keeps the last ``num_neighbors``
+    temporally-valid edges but does NOT deduplicate per (src, dst): up to
+    ~10-12 parallel snapshots of the same edge reach the model, so a single
+    well-studied neighbour sends many messages and is over-weighted
+    (recurrence-in-data → weight-in-model). This filter selects, per
+    (src, dst), the single edge with the maximum ``edge_time`` (the latest
+    snapshot the model is causally allowed to see) and drops the rest.
+
+    It is a SELECTION, not an aggregation: no mean/sum over snapshots — just
+    the most-recent edge, exactly as if the graph had been collapsed, but done
+    in-model so the underlying graph/dataset is untouched and the run stays a
+    clean A/B against the parallel-edge baseline.
+
+    ``edge_index_dict``, ``edge_time_dict``, ``edge_feat_dict`` are filtered in
+    lockstep (same surviving columns). Edge types absent from ``edge_time_dict``
+    (no timestamps) are passed through unchanged.
+    """
+    if edge_time_dict is None:
+        return edge_index_dict, edge_time_dict, edge_feat_dict
+
+    new_index, new_time = {}, {}
+    new_feat = {} if edge_feat_dict is not None else None
+
+    for et, ei in edge_index_dict.items():
+        t = edge_time_dict.get(et) if isinstance(edge_time_dict, dict) else None
+        if t is None or ei.size(1) == 0:
+            new_index[et] = ei
+            if t is not None:
+                new_time[et] = t
+            if new_feat is not None and edge_feat_dict.get(et) is not None:
+                new_feat[et] = edge_feat_dict[et]
+            continue
+
+        device = ei.device
+        src, dst = ei[0], ei[1]
+        # Unique key per (src, dst). Node ids are bounded by the batch, so a
+        # simple Cantor-style flatten on int64 is collision-free here.
+        ndst = int(dst.max().item()) + 1 if dst.numel() else 1
+        pair_key = src.to(torch.int64) * ndst + dst.to(torch.int64)
+
+        # For each pair, pick the column with the maximum edge_time. Sorting by
+        # (pair_key, time) then taking the last row per pair_key gives the
+        # latest edge deterministically.
+        order = torch.argsort(t.to(torch.int64), stable=True)
+        pk_sorted = pair_key[order]
+        # Within the time-sorted order, a stable sort by pair_key groups pairs
+        # while preserving ascending time inside each group.
+        order2 = torch.argsort(pk_sorted, stable=True)
+        final_order = order[order2]
+        pk_final = pair_key[final_order]
+        # Keep the LAST occurrence of each pair_key (highest time in its group).
+        keep_mask = torch.ones_like(pk_final, dtype=torch.bool)
+        keep_mask[:-1] = pk_final[1:] != pk_final[:-1]
+        keep_cols = final_order[keep_mask]
+
+        new_index[et] = ei[:, keep_cols]
+        new_time[et] = t[keep_cols]
+        if new_feat is not None:
+            f = edge_feat_dict.get(et)
+            new_feat[et] = f[keep_cols] if f is not None else None
+
+    return new_index, new_time, new_feat
+
+
 class HGT(nn.Module):
     """
     Heterogeneous Graph Transformer encoder.
-    
+
     Stacks multiple HGTConv layers to learn node embeddings.
     """
     
@@ -36,6 +109,7 @@ class HGT(nn.Module):
         use_rte: bool = False,
         use_edge_features: bool = False,
         edge_feat_dim: int = 2,
+        latest_edge_only: bool = False,
     ):
         """
         Initialize HGT encoder.
@@ -61,7 +135,8 @@ class HGT(nn.Module):
         self.node_types = node_types
         self.use_rte = use_rte
         self.use_edge_features = use_edge_features
-        
+        self.latest_edge_only = latest_edge_only
+
         # Input projection layer
         self.lin_dict = nn.ModuleDict()
         for node_type, in_dim in in_channels.items():
@@ -111,6 +186,16 @@ class HGT(nn.Module):
         Returns:
             Node embeddings {node_type: embeddings}
         """
+        # Optionally keep only the latest edge per (src, dst) per edge type,
+        # in-model, before any message passing. Fixes parallel-snapshot
+        # double-counting without touching the graph (see
+        # _keep_latest_edge_per_pair).
+        if self.latest_edge_only:
+            edge_index_dict, edge_time_dict, edge_feat_dict = (
+                _keep_latest_edge_per_pair(
+                    edge_index_dict, edge_time_dict, edge_feat_dict)
+            )
+
         # Project inputs to hidden_dim
         x_dict_proj = {}
         for node_type, x in x_dict.items():
@@ -167,6 +252,7 @@ class HGTLinkPredictor(nn.Module):
         t_max: float = 1.0,
         decoder_kind: str = "mlp",
         decoder_dropout: float = 0.1,
+        latest_edge_only: bool = False,
     ):
         """
         Initialize link predictor.
@@ -196,6 +282,7 @@ class HGTLinkPredictor(nn.Module):
             use_rte=use_rte,
             use_edge_features=use_edge_features,
             edge_feat_dim=edge_feat_dim,
+            latest_edge_only=latest_edge_only,
         )
 
         self.use_recency = use_recency

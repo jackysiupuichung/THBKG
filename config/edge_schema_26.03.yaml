@@ -70,6 +70,16 @@ reactome:
     relation_name: involved_in
     props: [source_type=constant:target, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
 
+  # Restored 2026-06-02: pathways.id is present and populated in the 26.03
+  # reactome parquet (list<struct<id,name>>); the "removed in 25.03" note below
+  # is inaccurate. Mirrors involved_in but keyed on diseaseId.
+  - input_dir: sourceId=reactome
+    name: reactome
+    sourceId: diseaseId
+    targetId: pathways.id
+    relation_name: associated_with
+    props: [source_type=constant:disease, target_type=constant:reactome, datasourceId, score=constant:1.0, year, id]
+
 clingen:
   input_dir: sourceId=clingen
   name: clingen

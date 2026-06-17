@@ -121,6 +121,8 @@ class _RawEdgeIndex:
             "id" if "id" in cols_meta else None
         )
         load_cols = ["sourceId", "targetId", "datasourceId", "year"]
+        if "score" in cols_meta:
+            load_cols.append("score")     # OT per-evidence score, for presentation
         if evidence_col:
             load_cols.append(evidence_col)
         df = pd.read_parquet(path, columns=load_cols)
@@ -171,6 +173,8 @@ class _RawEdgeIndex:
                 if hit.empty:
                     continue
             cols = ["sourceId", "targetId", "datasourceId", "year"]
+            if "score" in hit.columns:
+                cols.append("score")
             if cache["evidence_col"]:
                 cols.append(cache["evidence_col"])
             chunks.append(hit[cols].reset_index(drop=True).copy())
@@ -224,18 +228,20 @@ def _lookup_subgraph_evidence(
     if not rows:
         return pd.DataFrame(columns=[
             "target_id", "disease_id", "edge_type", "src", "dst",
-            "sourceId", "targetId", "datasourceId", "year", "literature", "id",
+            "sourceId", "targetId", "datasourceId", "year", "score",
+            "literature", "id",
         ])
     return pd.concat(rows, ignore_index=True)
 
 
-# Mapping from heterogeneous node type → (parquet filename in kg_output/nodes,
-# name column). For diseases the kg_output parquet only carries a long
-# `description`; the human-readable name lives in evidenceDated/diseases.
+# Mapping from heterogeneous node type → (parquet filename in the nodes dir,
+# name column). target/reactome carry a `name`. GO names live in a separate
+# go_ontology_terms parquet (go.parquet itself is id-only in the 26.03 build).
+# disease and molecule are resolved separately below (their name sources differ).
 _NAME_PARQUET = {
-    "target":   ("targets.parquet",  "name"),
-    "go":       ("go.parquet",       "name"),
-    "reactome": ("reactome.parquet", "name"),
+    "target":   ("targets.parquet",           "name"),
+    "reactome": ("reactome.parquet",          "name"),
+    "go":       ("go_ontology_terms.parquet", "name"),
 }
 
 
@@ -248,15 +254,21 @@ def _clean_name(text):
 
 
 def _load_name_maps(graph_file: str, id_maps):
-    """Return ``{node_type: {accession: display_name}}``. Sources:
-      - target / go / reactome: ``kg_output/nodes/<file>.parquet`` 'name'
-      - disease: ``evidenceDated/diseases/*.parquet`` 'name' (with
-        'description' from kg_output/nodes/diseases.parquet as a fallback)
+    """Return ``{node_type: {accession: display_name}}``. Sources (26.03 layout,
+    with 23.06 ``kg_output/nodes`` as a fallback):
+      - target / reactome: ``evidences/nodes/<file>.parquet`` 'name'
+      - go: ``evidences/nodes/go_ontology_terms.parquet`` 'name'
+      - molecule: ``evidenceDated/molecule/*.parquet`` 'name' (drug pref name)
+      - disease: ``evidenceDated/diseases/*.parquet`` 'name'
     Missing files / unmatched accessions just don't add entries.
     """
-    graph_dir = Path(graph_file).parent              # .../23.06/graph
-    base_dir = graph_dir.parent                       # .../23.06
-    nodes_dir = base_dir / "kg_output" / "nodes"
+    graph_dir = Path(graph_file).parent              # .../26.03/graph
+    base_dir = graph_dir.parent                       # .../26.03
+    # Prefer the 26.03 evidences/nodes layout; fall back to the legacy 23.06
+    # kg_output/nodes path so older graphs still resolve.
+    nodes_dir = base_dir / "evidences" / "nodes"
+    if not nodes_dir.exists():
+        nodes_dir = base_dir / "kg_output" / "nodes"
     name_maps: dict = {}
 
     for nt, (fname, col) in _NAME_PARQUET.items():
@@ -268,8 +280,22 @@ def _load_name_maps(graph_file: str, id_maps):
         df[col] = df[col].apply(_clean_name)
         name_maps[nt] = {k: v for k, v in zip(df["id"].astype(str), df[col]) if v}
 
-    # Disease names: prefer evidenceDated/diseases.name, fall back to
-    # kg_output/nodes/diseases.parquet.description.
+    # Molecule (drug) names: evidenceDated/molecule '*.parquet' 'name'. Self-named
+    # CHEMBL ids (name == id) are dropped so they don't masquerade as resolved.
+    mol_dir = base_dir / "evidenceDated" / "molecule"
+    if mol_dir.exists():
+        try:
+            df_mol = pd.read_parquet(mol_dir, columns=["id", "name"])
+            df_mol["name"] = df_mol["name"].apply(_clean_name)
+            name_maps["molecule"] = {
+                k: v for k, v in zip(df_mol["id"].astype(str), df_mol["name"])
+                if v and v != k
+            }
+        except Exception as e:
+            print(f"[explain] warn: could not read {mol_dir}: {e}")
+
+    # Disease names: prefer evidenceDated/diseases.name, fall back to the
+    # nodes-dir diseases.parquet description.
     disease_map: dict = {}
     ev_dir = base_dir / "evidenceDated" / "diseases"
     if ev_dir.exists():
@@ -283,11 +309,15 @@ def _load_name_maps(graph_file: str, id_maps):
             print(f"[explain] warn: could not read {ev_dir}: {e}")
     fb_path = nodes_dir / "diseases.parquet"
     if fb_path.exists():
-        df_fb = pd.read_parquet(fb_path, columns=["id", "description"])
-        df_fb["description"] = df_fb["description"].apply(_clean_name)
-        for k, v in zip(df_fb["id"].astype(str), df_fb["description"]):
-            if v and k not in disease_map:
-                disease_map[k] = v
+        _fb_cols = pd.read_parquet(fb_path).columns
+        _fb_col = "description" if "description" in _fb_cols else (
+            "name" if "name" in _fb_cols else None)
+        if _fb_col:
+            df_fb = pd.read_parquet(fb_path, columns=["id", _fb_col])
+            df_fb[_fb_col] = df_fb[_fb_col].apply(_clean_name)
+            for k, v in zip(df_fb["id"].astype(str), df_fb[_fb_col]):
+                if v and k not in disease_map:
+                    disease_map[k] = v
     if disease_map:
         name_maps["disease"] = disease_map
 
@@ -430,6 +460,7 @@ def main(args):
         edge_feat_dim=cfg.model.get("edge_feat_dim", 2),
         use_recency=cfg.model.get("use_recency", False),
         time_dim=cfg.model.get("time_dim", 0),
+        latest_edge_only=cfg.model.get("latest_edge_only", False),
     ).to(device)
     state = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(state)

@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 # Run registry
 # ---------------------------------------------------------------------------
 _SCRATCH = "/gpfs/scratch/bty414/opentarget_evidences/23.06/runs"
+# EAHGT ablation (Study B) was migrated to the 26.03 graph generation, which
+# reproduces the evaluation_dataset.zarr test pairs 9094/9094 and carries both
+# advancement edge features (score + novelty). Other models stay on 23.06.
+_SCRATCH_2603 = "/gpfs/scratch/bty414/opentarget_evidences/26.03/runs"
 
 
 DEFAULT_RUNS: dict[str, str] = {
@@ -55,9 +59,19 @@ DEFAULT_RUNS: dict[str, str] = {
     "b6_rgcn":          f"{_SCRATCH}/b6_rgcn_lambdarank_v2",
     "b7_compgcn":       f"{_SCRATCH}/b7_compgcn_lambdarank_v2",
     # Study B — EAHGT ablation (HGT + edge feature variants; canonical HPs)
-    "p1_eahgt_score":   f"{_SCRATCH}/p1_eahgt_score_lambdarank_v3",
-    "p2_eahgt_novelty": f"{_SCRATCH}/p2_eahgt_novelty_lambdarank_v3",
-    "p3_eahgt_both":    f"{_SCRATCH}/p3_eahgt_both_lambdarank_v3",
+    "p1_eahgt_score":   f"{_SCRATCH_2603}/p1_eahgt_score_grouped_ap_v3",
+    "p2_eahgt_novelty": f"{_SCRATCH_2603}/p2_eahgt_novelty_grouped_ap_v3",
+    # Official EAHGT = grouped-allTA (group_all_tas) 5-seed percentile-rank
+    # ensemble (lrgrpk100 s1/s7/s42/s123/s2024). Beats RDG at every k, sig at
+    # @50/@100. Built by scripts/advancement_prediction/build_grouped_ensemble.py.
+    "p3_eahgt_both":    f"{_SCRATCH_2603}/grouped_ensemble_s5",
+    # Matched-recipe edge-feature ablation: 5-seed rank-fused ensembles trained
+    # under the SAME recipe as p3_eahgt_both but with score-only / novelty-only
+    # edge features. Built by build_matched_ablation_ensembles.py.
+    "abl_score_ens":    f"{_SCRATCH_2603}/ablation_matched/score/ensemble",
+    "abl_novelty_ens":  f"{_SCRATCH_2603}/ablation_matched/novelty/ensemble",
+    # ndcgk_corr study — random-val LambdaRank, ndcg_k cutoff sweep
+    "ndcgk100":         f"{_SCRATCH_2603}/ndcgk_corr/ndcgk100",
 }
 
 # ---------------------------------------------------------------------------
@@ -324,7 +338,8 @@ def _compute_relative_success_by_limit(evaluation_dataset: xr.Dataset,
                                         model_names: list[str],
                                         limits: list[int],
                                         confidence: float = 0.9,
-                                        disease_filter: set | None = None) -> pd.DataFrame:
+                                        disease_filter: set | None = None,
+                                        pair_filter: set | None = None) -> pd.DataFrame:
     outcomes = evaluation_dataset.outcome.squeeze("outcomes").to_series().reset_index()
     outcomes.columns = ["target_id", "disease_id", "outcome"]
     preds = (
@@ -339,7 +354,22 @@ def _compute_relative_success_by_limit(evaluation_dataset: xr.Dataset,
         merged = grp.merge(outcomes, on=["target_id", "disease_id"])
         if disease_filter is not None:
             merged = merged[merged["disease_id"].isin(disease_filter)]
+        if pair_filter is not None:
+            pf_idx = (pd.MultiIndex.from_tuples(list(pair_filter))
+                      if pair_filter else
+                      pd.MultiIndex.from_tuples([], names=["target_id", "disease_id"]))
+            merged = merged[merged.set_index(["target_id", "disease_id"]).index.isin(pf_idx)]
         for limit in limits:
+            # Threshold-mask top-N, matching Related Sciences' analysis.py
+            # (Czech et al.) `_binarize_feature` for faithful Figure 3
+            # reproduction: exposed = {score >= kth-largest score}, so ties at
+            # the threshold are INCLUDED and exposed may exceed `limit`. This is
+            # their published definition; the pooled RS curve is meant to be
+            # directly analogous to their Fig 3. (Note: our per-TA RS in
+            # _compute_rs_by_ta uses exact-N rank selection instead — the
+            # recommender-systems convention — so the two curves are not
+            # identical by construction.)
+            # Ref: github.com/related-sciences/clinical_advancement_paper analysis.py
             threshold = merged["score"].nlargest(limit).min()
             exposed = merged[merged["score"] >= threshold]
             control = merged[merged["score"] < threshold]
@@ -456,8 +486,8 @@ def evaluate(
     only: str | None = None,
     results_dir: str = f"{Path(__file__).parent}/advancement_data/results/external",
     inject: list[dict] | None = None,
-    graph_file: str = f"{Path(__file__).parent}/output/graph/hetero_graph_with_advancement.pt",
-    mappings_file: str = f"{Path(__file__).parent}/output/graph/temporal_graph_mappings.pt",
+    graph_file: str = "/gpfs/scratch/bty414/opentarget_evidences/26.03/graph/hetero_graph_with_features_datatype.pt",
+    mappings_file: str = "/gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_mappings.pt",
 ):
     """
     Evaluate model predictions against the saved evaluation dataset.
@@ -527,8 +557,24 @@ def evaluate(
         "p1_eahgt_score":         "EAHGT-score",
         "p2_eahgt_novelty":       "EAHGT-novelty",
         "p3_eahgt_both":          "EAHGT",
+        # Matched-recipe ablation ensembles (same recipe as p3_eahgt_both)
+        "abl_score_ens":          "EAHGT-score",
+        "abl_novelty_ens":        "EAHGT-novelty",
         # Bilinear-decoder variant (collapse-resistant; reported alongside MLP)
         "p3_eahgt_both_bilinear": "EAHGT-Bilinear",
+        # 23.06 EAHGT variations (decoder / loss / centering / training)
+        "eahgt_mlp":              "EAHGT-MLP",
+        "eahgt_bilinear":         "EAHGT-Bilinear",
+        "eahgt_grouped":          "EAHGT-Grouped",
+        "eahgt_leakfix":          "EAHGT-leakfix",
+        "eahgt_lambdarank_v2":    "EAHGT-LR-v2",
+        # 26.03 random 80/20 train/val split (test stays temporal >=2016)
+        "eahgt_randomsplit":          "EAHGT",
+        "eahgt_randomsplit_score":    "EAHGT-score",
+        "eahgt_randomsplit_novelty":  "EAHGT-novelty",
+        "eahgt_center_raw":       "EAHGT-raw",
+        "eahgt_center_mean":      "EAHGT-mean-ctr",
+        "eahgt_center_meanstd":   "EAHGT-mean-std",
     }
     model_display = {
         **_STATIC_DISPLAY,
@@ -541,6 +587,9 @@ def evaluate(
     # order = legend order in plotnine) and to model_order downstream.
     _CANONICAL_SLUG_ORDER = [
         "EAHGT", "EAHGT-Bilinear", "EAHGT-score", "EAHGT-novelty",
+        # 23.06 EAHGT variations
+        "EAHGT-MLP", "EAHGT-Grouped", "EAHGT-leakfix", "EAHGT-LR-v2",
+        "EAHGT-raw", "EAHGT-mean-ctr", "EAHGT-mean-std",
         "HGT", "GATv2", "R-GCN", "CompGCN",
         "RDG", "GBM", "OTS",
         "Random",
@@ -697,7 +746,8 @@ def evaluate(
         .agg(relative_success=("relative_success", "mean"))
     )
 
-    # Stratified rs_by_limit (mean over primary TAs per stratum)
+    # Stratified rs_by_limit (mean over primary TAs per stratum) — kept for the
+    # CSV / TA-mean consumers.
     rs_by_ta_full["model_slug"] = rs_by_ta_full["model_name"].map(model_display)
     rs_by_ta_primary_full = rs_by_ta_full[
         rs_by_ta_full["therapeutic_area_name"].isin(_primary_ta_set)
@@ -706,6 +756,30 @@ def evaluate(
         rs_by_ta_primary_full
         .groupby(["model_name", "model_slug", "limit", "stratum"], as_index=False)
         .agg(relative_success=("relative_success", "mean"))
+    )
+
+    # Stratified POOLED rs_by_limit — pooled top-N RR within each stratum
+    # (Czech-style), consistent with the headline pooled plot. The by-stratum
+    # line chart uses this instead of the TA-mean so both figures report the
+    # same quantity.
+    logger.info("Computing pooled relative success by limit per stratum...")
+    _strat_limits = sorted({*np.arange(10, 101, 10).tolist(), 75})
+    rs_pooled_strat_frames = []
+    for stratum, pair_filter in pair_strata.items():
+        if pair_filter is not None and len(pair_filter) == 0:
+            continue
+        rs_ps = _compute_relative_success_by_limit(
+            evaluation_dataset, all_model_names, _strat_limits,
+            confidence=0.95, pair_filter=pair_filter,
+        )
+        rs_ps["stratum"] = stratum
+        rs_pooled_strat_frames.append(rs_ps)
+    rs_pooled_by_limit_full = pd.concat(rs_pooled_strat_frames, ignore_index=True)
+    rs_pooled_by_limit_full["model_slug"] = rs_pooled_by_limit_full["model_name"].map(model_display)
+    # Saved for reference (Czech-style pooled). The by-stratum line chart now uses
+    # the TA-mean (grouped) metric `rs_by_limit_full` instead — see below.
+    rs_pooled_by_limit_full.to_csv(
+        results_dir / "relative_success_by_limit_by_stratum_pooled.csv", index=False
     )
 
     # Pooled RS with 95% Katz CI — fine-grained limits for the paper-style line plot
@@ -916,24 +990,11 @@ def evaluate(
     # Plot 4: Figure 12 — RS heatmap by model × TA (table style)
     # Columns: {model_slug}@{N} for selected limits; rows: TAs; cell = RS.
     _heatmap_limits  = [10, 20, 30, 40, 50, 100]
-    # Models shown in the per-TA heatmap. Includes all current GNN
-    # architectures plus the tabular baselines. Legacy directed/undirected
-    # EAHGT variants kept for backwards compatibility with older runs.
-    _heatmap_models = [
-        m for m in [
-            # Current architectures (canonical legend order)
-            "p3_eahgt_both",
-            "p1_eahgt_score", "p2_eahgt_novelty",
-            "b1_hgt", "b3_gatv2", "b6_rgcn", "b7_compgcn",
-            # Tabular baselines
-            "rdg__no_time__positive", "ots__all",
-            # Legacy EAHGT variants
-            "p3_lambdarank_directed",
-            "undirected_v1", "undirected_v2",
-            "undirected_v3", "undirected_v4",
-        ]
-        if m in all_model_names
-    ]
+    # Show every evaluated model in the per-TA heatmap (and the delta-vs-RDG
+    # heatmap below). all_model_names is already in canonical legend order
+    # (EAHGT variants first, baselines last), so the heatmap columns inherit
+    # that ordering and no comparison is silently dropped.
+    _heatmap_models = list(all_model_names)
 
     # Build pivot: rows=TA, cols=(model_slug, limit)
     hm_data = rs_by_ta_primary[
@@ -1125,9 +1186,14 @@ def evaluate(
     # per model, faceted by limit. The mean diamond is what reviewers should
     # read (the headline number); the violin shape shows per-TA spread.
     _dist_limits = [10, 20, 30, 40, 50, 75, 100]
-    p3_slug  = model_display.get("p3_lambdarank_undirected", model_display.get("p3_lambdarank_directed", "EAHGT"))
-    rdg_slug = model_display.get("rdg__no_time__positive", "RDG")
     model_order = [model_display.get(m, m) for m in all_model_names]
+    # EAHGT slug = the proposed model. Prefer whatever model in this run maps to
+    # the "EAHGT" slug (e.g. the injected ensemble under p3_eahgt_both); fall
+    # back to the legacy lambdarank keys.
+    p3_slug = ("EAHGT" if "EAHGT" in model_order else
+               model_display.get("p3_lambdarank_undirected",
+                                  model_display.get("p3_lambdarank_directed", "EAHGT")))
+    rdg_slug = model_display.get("rdg__no_time__positive", "RDG")
 
     rs_dist_df = rs_by_ta_primary[rs_by_ta_primary["limit"].isin(_dist_limits)].copy()
     rs_dist_df["model_slug"] = pd.Categorical(rs_dist_df["model_slug"], categories=model_order, ordered=True)
@@ -1150,17 +1216,51 @@ def evaluate(
     rs_dist_df["limit_label"] = rs_dist_df["limit"].map(dict(zip(_dist_limits, limit_label_order)))
     rs_dist_df["limit_label"] = pd.Categorical(rs_dist_df["limit_label"], categories=limit_label_order, ordered=True)
 
+    # Per-model paired Wilcoxon p-value: is EAHGT > this model across primary
+    # TAs? (one-sided, alternative="greater"). One annotation per (limit, model),
+    # placed above that model's box/violin. EAHGT itself gets no label.
+    _pval_rows = []
+    for limit in _dist_limits:
+        grp = rs_by_ta_primary[rs_by_ta_primary["limit"] == limit]
+        p3_v = grp[grp["model_slug"] == p3_slug].set_index("therapeutic_area_name")["relative_success"]
+        # y position: just above the tallest point in this facet so the label
+        # clears the violin/whisker.
+        y_top = grp["relative_success"].replace([np.inf, -np.inf], np.nan).dropna().max()
+        y_lab = (y_top * 1.04) if pd.notna(y_top) and y_top > 0 else 1.0
+        for slug in model_order:
+            if slug == p3_slug:
+                continue
+            other_v = grp[grp["model_slug"] == slug].set_index("therapeutic_area_name")["relative_success"]
+            paired = pd.concat([p3_v, other_v], axis=1, keys=["p3", "other"]).dropna()
+            if len(paired) >= 3 and (paired["p3"] - paired["other"]).abs().sum() > 0:
+                _, pval = wilcoxon(paired["p3"], paired["other"], alternative="greater")
+                lab = f"p={pval:.3f}" if pval >= 0.001 else f"p={pval:.1e}"
+            else:
+                lab = "n/a"
+            _pval_rows.append({
+                "model_slug": slug,
+                "limit": limit,
+                "limit_label": dict(zip(_dist_limits, limit_label_order))[limit],
+                "relative_success": y_lab,
+                "plabel": lab,
+            })
+    rs_pval_df = pd.DataFrame(_pval_rows)
+    rs_pval_df["model_slug"] = pd.Categorical(rs_pval_df["model_slug"], categories=model_order, ordered=True)
+    rs_pval_df["limit_label"] = pd.Categorical(rs_pval_df["limit_label"], categories=limit_label_order, ordered=True)
+
     _save_plot(
         pn.ggplot(rs_dist_df, pn.aes(x="model_slug", y="relative_success", fill="model_slug"))
         + pn.geom_violin(alpha=0.55, scale="width", width=0.8, color="none")
         + pn.geom_jitter(width=0.12, size=1.0, alpha=0.45, color="black", show_legend=False)
         + pn.stat_summary(fun_data="mean_cl_boot", geom="point",
                           shape="D", size=3.0, color="black", fill="white")
+        + pn.geom_text(data=rs_pval_df, mapping=pn.aes(x="model_slug", y="relative_success", label="plabel"),
+                       inherit_aes=False, size=7, color="black", va="bottom")
         + pn.geom_hline(yintercept=1, linetype="dashed", color="grey")
         + pn.facet_wrap("~ limit_label", nrow=1, scales="free_y")
         + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
-        + pn.labs(x="", y="relative success (mean ◇)")
+        + pn.labs(x="", y="relative success (mean ◇; p = Wilcoxon EAHGT>model)")
         + pn.theme_minimal()
         + pn.theme(
             figure_size=(3.5 * len(_dist_limits), 5),
@@ -1170,17 +1270,20 @@ def evaluate(
         plots_dir / "rs_distributions_ta.png",
     )
 
-    # Plot 5b: same data as a box plot (median + IQR, no outlier points).
-    # Robust to the right-skew that drags the mean diamond up in Plot 5;
-    # outliers suppressed so the per-TA spread reads as median/IQR/whiskers.
+    # Plot 5b: same data as a box plot (median + IQR). Box outliers are
+    # suppressed (outlier_alpha=0) and the per-TA points are drawn as a
+    # jitter layer instead, matching Plot 5, so each TA is one visible dot.
     _save_plot(
         pn.ggplot(rs_dist_df, pn.aes(x="model_slug", y="relative_success", fill="model_slug"))
         + pn.geom_boxplot(alpha=0.55, width=0.7, color="black", outlier_alpha=0.0)
+        + pn.geom_jitter(width=0.12, size=1.0, alpha=0.45, color="black", show_legend=False)
+        + pn.geom_text(data=rs_pval_df, mapping=pn.aes(x="model_slug", y="relative_success", label="plabel"),
+                       inherit_aes=False, size=7, color="black", va="bottom")
         + pn.geom_hline(yintercept=1, linetype="dashed", color="grey")
         + pn.facet_wrap("~ limit_label", nrow=1, scales="free_y")
         + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
-        + pn.labs(x="", y="relative success (median, IQR)")
+        + pn.labs(x="", y="relative success (median, IQR; p = Wilcoxon EAHGT>model)")
         + pn.theme_minimal()
         + pn.theme(
             figure_size=(3.5 * len(_dist_limits), 5),
@@ -1193,9 +1296,13 @@ def evaluate(
     # ------------------------------------------------------------------
     # Stratified plots (novelty × evidence sparsity)
     # ------------------------------------------------------------------
+    # literature_only ("Prior text-mining evidence only") and direct_evidence
+    # ("Prior experimental evidence") are intentionally excluded from the
+    # stratified plots; dropping them here removes them from every downstream
+    # stratum plot/label.
     _stratum_order = [
         "all", "pioneer", "known",
-        "evidence_free", "literature_only", "direct_evidence",
+        "evidence_free",
     ]
     _stratum_n = {
         s: (len(strata_test) if pair_strata[s] is None else len(pair_strata[s]))
@@ -1244,7 +1351,10 @@ def evaluate(
         plots_dir / "classification_metrics_by_stratum_by_ta.png",
     )
 
-    # Stratified RS-by-limit line chart
+    # Stratified RS-by-limit line chart — TA-mean (grouped) RS per stratum, i.e.
+    # mean over primary TAs within each stratum (NOT the pooled top-N). Uses the
+    # grouped/TA-mean metric the EAHGT model is trained and reported on, matching
+    # the headline ..._ta_averaged figure rather than the pooled curve.
     rs_strat = rs_by_limit_full[rs_by_limit_full["stratum"].isin(_stratum_order)].copy()
     rs_strat["stratum_label"] = rs_strat["stratum"].map(_stratum_label)
     rs_strat["stratum_label"] = pd.Categorical(
@@ -1255,13 +1365,14 @@ def evaluate(
         + pn.geom_line(size=0.9, alpha=0.85)
         + pn.geom_point(size=1.5, alpha=0.85)
         + pn.geom_hline(yintercept=1, linetype="dashed")
-        + pn.facet_wrap("~ stratum_label", ncol=3, scales="free_y")
+        + pn.facet_wrap("~ stratum_label", ncol=2, scales="free_y")
         + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
         + pn.scale_x_continuous(breaks=np.arange(10, 101, 20).tolist())
         + pn.scale_y_continuous(limits=(0, None))
-        + pn.labs(x="N top target-disease pairs", y="relative success", color="model")
+        + pn.labs(x="N top target-disease pairs (per TA)",
+                  y="relative success (TA-mean)", color="model")
         + pn.theme_minimal()
-        + pn.theme(figure_size=(13, 7)),
+        + pn.theme(figure_size=(10, 8)),
         plots_dir / "relative_success_by_limit_by_stratum.png",
     )
 
@@ -1708,8 +1819,8 @@ def _summarise_centrality_groups(split_points: pd.DataFrame,
 
 
 def inflation_analysis(
-    graph_file: str = f"{Path(__file__).parent}/output/graph/hetero_graph_with_advancement.pt",
-    mappings_file: str = f"{Path(__file__).parent}/output/graph/temporal_graph_mappings.pt",
+    graph_file: str = "/gpfs/scratch/bty414/opentarget_evidences/26.03/graph/hetero_graph_with_features_datatype.pt",
+    mappings_file: str = "/gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_mappings.pt",
     out_dir: str = f"{Path(__file__).parent}/advancement_data/results/inflation",
     split: str = "first",
     compute_centrality: bool = True,

@@ -124,6 +124,8 @@ def run_trial(cfg: DictConfig, device: torch.device,
     _log_keys = {"average_precision", "roc_auc",
                  "rs@10", "rs@50", "rs@100",
                  "ndcg@10", "ndcg@30", "ndcg@50", "ndcg@100",
+                 "rs_ta_mean@10", "rs_ta_mean@30", "rs_ta_mean@50", "rs_ta_mean@100",
+                 "rs_ta_median@10", "rs_ta_median@30", "rs_ta_median@50", "rs_ta_median@100",
                  "val_loss"}
 
     run_dir = output_dir / wandb.run.id
@@ -291,7 +293,7 @@ def _trial_worker(config_path: str, sweep_overrides: dict, run_id: str,
         if Path(ta_parquet_path).exists() and Path(primary_tas_json_path).exists():
             mappings_for_ta = torch.load(_data_cfg.mappings_file, weights_only=False)
             disease_mapping = mappings_for_ta["node_mapping"]["disease"]
-            ta_by_disease_idx, primary_tas = _load_disease_ta_map(
+            ta_by_disease_idx, _group_tas, primary_tas = _load_disease_ta_map(
                 ta_parquet_path, primary_tas_json_path, disease_mapping,
             )
             queue.put(("print",
@@ -331,6 +333,8 @@ def _trial_worker(config_path: str, sweep_overrides: dict, run_id: str,
                      "ndcg_ta_mean@50", "ndcg_ta_mean@100",
                      "rs_ta_mean@10", "rs_ta_mean@30",
                      "rs_ta_mean@50", "rs_ta_mean@100",
+                     "rs_ta_median@10", "rs_ta_median@30",
+                     "rs_ta_median@50", "rs_ta_median@100",
                      "val_loss"}
 
         # Build model (with optional composition for CompGCN).

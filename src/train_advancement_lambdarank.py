@@ -35,7 +35,7 @@ from src.train_advancement_hgt import (
     predict_test,
 )
 from src.losses.lambdaLoss_allrank import lambdaLoss
-from src.benchmark.metrics import ndcg_at_k, ndcg_ta_mean_at_k, rs_ta_mean_at_k
+from src.benchmark.metrics import ndcg_at_k, ndcg_ta_mean_at_k, rs_ta_mean_at_k, rs_ta_median_at_k, _rs_ta_values_at_k
 from src.models.utils import build_model
 
 
@@ -189,26 +189,44 @@ def _load_disease_ta_map(
     ta_parquet_path: str,
     primary_tas_json_path: str,
     disease_mapping: dict,
+    group_all_tas: bool = False,
 ):
-    """Build a per-disease-index list of primary TA names plus the primary set.
+    """Build a per-disease-index list of TA names plus the TA whitelist.
+
+    By default restricts to the primary TAs (the 13 in primary_therapeutic_areas
+    .json). With ``group_all_tas=True`` the map and whitelist instead cover EVERY
+    therapeutic area present in the parquet, except the synthetic "all" catch-all
+    (which spans ~all diseases and would collapse grouping into one giant slate).
 
     Returns
     -------
     ta_by_disease_idx : dict[int, list[str]]
-        Maps internal disease node index → list of primary TA names.
-    primary_tas : list[str]
-        Primary TA whitelist (with the synthetic "all" entry dropped).
+        Maps internal disease node index → list of TA names (primary-only, or all
+        real TAs when group_all_tas).
+    ta_whitelist : list[str]
+        The TA names used for grouping (with the synthetic "all" entry dropped).
     """
     import json
     import pandas as pd
 
     ta_df = pd.read_parquet(ta_parquet_path)
+    # The EVAL whitelist is ALWAYS the 13 primary TAs (so reported RS_ta metrics
+    # stay comparable across runs regardless of the grouping scope).
     with open(primary_tas_json_path) as f:
         primary_tas_raw = json.load(f)
-    primary_tas = [t for t in primary_tas_raw if t != "all"]
-    primary_set = set(primary_tas)
+    eval_primary_tas = [t for t in primary_tas_raw if t != "all"]
 
-    ta_df = ta_df[ta_df["therapeutic_area_name"].isin(primary_set)]
+    if group_all_tas:
+        # GROUPING covers every real TA in the parquet except the synthetic "all"
+        # catch-all (which spans ~all diseases and would collapse into one slate).
+        group_tas = sorted(
+            t for t in ta_df["therapeutic_area_name"].unique() if t != "all"
+        )
+    else:
+        group_tas = list(eval_primary_tas)
+    group_set = set(group_tas)
+
+    ta_df = ta_df[ta_df["therapeutic_area_name"].isin(group_set)]
     grouped = (
         ta_df.groupby("disease_id")["therapeutic_area_name"]
         .apply(lambda s: sorted(set(s)))
@@ -220,7 +238,7 @@ def _load_disease_ta_map(
         tas = grouped.get(disease_id)
         if tas:
             ta_by_disease_idx[int(idx)] = tas
-    return ta_by_disease_idx, primary_tas
+    return ta_by_disease_idx, group_tas, eval_primary_tas
 
 
 def run_epoch_lambdarank(model, loader, optimizer, device, edge_feat_cols, loss_fn, train=True):
@@ -338,6 +356,10 @@ def evaluate_lambdarank(
                 scores_t, labels_bin_t, ta_per_item, kk,
                 primary_tas=primary_tas,
             )
+            metrics[f"rs_ta_median@{kk}"] = rs_ta_median_at_k(
+                scores_t, labels_bin_t, ta_per_item, kk,
+                primary_tas=primary_tas,
+            )
 
     return metrics
 
@@ -374,7 +396,7 @@ def main(cfg):
         device = torch.device("cpu")
     print(f"Device: {device}")
 
-    from src.data.temporal_loader import load_event_graph
+    from src.data.temporal_loader import load_event_graph, build_num_neighbors
     to_undirected = bool(cfg.data.get("undirected", False))
     print(f"Loading graph from {cfg.data.graph_file} (undirected={to_undirected})")
     data = load_event_graph(cfg.data.graph_file, to_undirected=to_undirected)
@@ -385,9 +407,14 @@ def main(cfg):
         cutoff_year=int(_data_cfg.get("train_cutoff_year", 2010)),
         val_min_year=_data_cfg.get("val_min_year", None),
         val_max_year=_data_cfg.get("val_max_year", None),
+        random_val_frac=_data_cfg.get("random_val_frac", None),
+        random_seed=int(_data_cfg.get("random_seed", cfg.get("seed", 42))),
     )
     print(f"  Cutoff year: {cutoff_year}")
-    if _data_cfg.get("val_min_year") is not None or _data_cfg.get("val_max_year") is not None:
+    if _data_cfg.get("random_val_frac") is not None:
+        print(f"  RANDOM train/val split: val_frac={_data_cfg.get('random_val_frac')} "
+              f"(test stays temporal >=2016)")
+    elif _data_cfg.get("val_min_year") is not None or _data_cfg.get("val_max_year") is not None:
         print(f"  Val window:  [{_data_cfg.get('val_min_year','-')}, {_data_cfg.get('val_max_year','-')}]")
     print(f"  Train edges: {train_mask.sum().item()}")
     print(f"  Val   edges: {val_mask.sum().item()}")
@@ -439,6 +466,7 @@ def main(cfg):
         t_max=t_max_val,
         decoder_kind=str(cfg.model.get("decoder_kind", "mlp")),
         decoder_dropout=float(cfg.model.get("decoder_dropout", cfg.model.get("dropout", 0.1))),
+        latest_edge_only=cfg.model.get("latest_edge_only", False),
     ).to(device)
     print(f"Model: {cfg.model.name}")
 
@@ -454,15 +482,18 @@ def main(cfg):
         repo_root / "advancement_data/results/primary_therapeutic_areas.json",
     ))
     ta_by_disease_idx, primary_tas = None, None
+    _group_all_tas = bool(cfg.train.get("lambdarank", {}).get("group_all_tas", False))
     if Path(ta_parquet_path).exists() and Path(primary_tas_json_path).exists():
         mappings_for_ta = torch.load(cfg.data.mappings_file, weights_only=False)
         disease_mapping = mappings_for_ta["node_mapping"]["disease"]
-        ta_by_disease_idx, primary_tas = _load_disease_ta_map(
-            ta_parquet_path, primary_tas_json_path, disease_mapping
+        ta_by_disease_idx, group_tas, primary_tas = _load_disease_ta_map(
+            ta_parquet_path, primary_tas_json_path, disease_mapping,
+            group_all_tas=_group_all_tas,
         )
         print(
             f"TA-grouped NDCG enabled: {len(ta_by_disease_idx)} diseases mapped, "
-            f"{len(primary_tas)} primary TAs."
+            f"grouping over {len(group_tas)} TAs (group_all_tas={_group_all_tas}), "
+            f"eval on {len(primary_tas)} primary TAs."
         )
     else:
         print(
@@ -473,7 +504,7 @@ def main(cfg):
     loss_fn, loss_desc = _make_loss_fn(
         cfg,
         ta_by_disease_idx=ta_by_disease_idx,
-        primary_tas=primary_tas,
+        primary_tas=group_tas,  # grouped loss slates over the grouping whitelist
     )
     print(f"LambdaRank loss: {loss_desc}")
 
@@ -486,7 +517,35 @@ def main(cfg):
         eta_min=cfg.train.get("eta_min", 1e-6),
     )
 
-    num_neighbors = list(cfg.train.num_neighbors)
+    # Type-aware neighbor budget (see note/neighbor_sampler_type_aware_vs_temporal_loader.md).
+    # strategy="off" (default) reproduces the flat type-blind list exactly; other
+    # strategies cap dominant edge types (literature) and boost rare predictive
+    # ones (clinical_trial_*, genetic_association). PyG samples the dict natively.
+    _nn_base = list(cfg.train.num_neighbors)
+    _nn_strategy = str(cfg.train.get("num_neighbors_strategy", "off"))
+    num_neighbors = build_num_neighbors(
+        context,
+        base=_nn_base,
+        strategy=_nn_strategy,
+        overrides=dict(cfg.train.get("num_neighbors_by_type", {}) or {}),
+        cap_relations=list(cfg.train.get("num_neighbors_cap", []) or []),
+        boost_relations=list(cfg.train.get("num_neighbors_boost", []) or []),
+        cap_value=int(cfg.train.get("num_neighbors_cap_value", 2)),
+        boost_value=int(cfg.train.get("num_neighbors_boost_value", 40)),
+    )
+    if _nn_strategy != "off":
+        _n_types = len(num_neighbors) if isinstance(num_neighbors, dict) else 0
+        print(f"  Type-aware sampling: strategy={_nn_strategy} over {_n_types} edge types")
+
+    # PyG neighbor sampling is CPU-bound; without workers it runs single-process
+    # on the main core and starves the GPU. Parallelise with num_workers (set to
+    # the SLURM core allocation by default) so extra --cpus-per-gpu actually help.
+    _slurm_cpus = int(os.environ.get("SLURM_CPUS_PER_GPU", 0)) or 0
+    # leave one core for the main/training process; cap to avoid oversubscription
+    _n_workers = int(cfg.train.get("num_workers", max(_slurm_cpus - 1, 0)))
+    _loader_kw = {}
+    if _n_workers > 0:
+        _loader_kw = {"num_workers": _n_workers, "persistent_workers": True}
 
     train_loader = LinkNeighborLoader(
         data=context,
@@ -498,6 +557,7 @@ def main(cfg):
         temporal_strategy="last",
         batch_size=cfg.train.batch_size,
         shuffle=True,
+        **_loader_kw,
     )
     val_loader = LinkNeighborLoader(
         data=context,
@@ -509,6 +569,7 @@ def main(cfg):
         temporal_strategy="last",
         batch_size=cfg.train.batch_size,
         shuffle=False,
+        **_loader_kw,
     )
 
     epoch_rows = []
@@ -553,60 +614,94 @@ def main(cfg):
             val_score = float("-inf") if es_mode == "max" else float("inf")
 
         # Per-epoch test rs@K tracking (diagnostic only; does not affect ES).
-        test_scores_ep, test_labels_ep = predict_test(
-            model, context,
-            edge_index=test_edge_index,
-            edge_labels=test_edge_labels,
-            edge_times=test_edge_times,
-            num_neighbors=num_neighbors,
-            batch_size=cfg.train.batch_size,
-            device=device,
-            edge_feat_cols=_edge_feat_cols,
-        )
-        test_metrics_ep = compute_metrics(test_labels_ep, test_scores_ep)
-        test_rs = {
-            "rs@10":  float(test_metrics_ep["rs@10"]),
-            "rs@50":  float(test_metrics_ep["rs@50"]),
-            "rs@100": float(test_metrics_ep["rs@100"]),
-        }
+        # Gated by train.eval_every (default 1 = every epoch). Setting it higher
+        # skips the expensive predict_test + TA-grouped metrics on most epochs
+        # for a faster wall-clock (always evaluated on the final epoch).
+        _eval_every = int(cfg.train.get("eval_every", 1))
+        _do_test_eval = (epoch % _eval_every == 0) or (epoch == cfg.train.num_epochs)
+        test_rs = {}
+        if _do_test_eval:
+            test_scores_ep, test_labels_ep = predict_test(
+                model, context,
+                edge_index=test_edge_index,
+                edge_labels=test_edge_labels,
+                edge_times=test_edge_times,
+                num_neighbors=num_neighbors,
+                batch_size=cfg.train.batch_size,
+                device=device,
+                edge_feat_cols=_edge_feat_cols,
+                num_workers=_n_workers,
+            )
+            test_metrics_ep = compute_metrics(test_labels_ep, test_scores_ep)
+            test_rs = {
+                "rs@10":  float(test_metrics_ep["rs@10"]),
+                "rs@50":  float(test_metrics_ep["rs@50"]),
+                "rs@100": float(test_metrics_ep["rs@100"]),
+            }
 
-        # Optional diagnostic: dump per-epoch top-K test pairs so we can see
-        # whether the model's top-ranked predictions are stable across epochs
-        # or whether each epoch's rs@K is hitting a different 9/10 positives.
-        # Enable with: SAVE_PER_EPOCH_TOPK=1 (or set to a number = K).
-        _topk_env = os.environ.get("SAVE_PER_EPOCH_TOPK")
-        if _topk_env:
-            _k = int(_topk_env) if _topk_env.isdigit() else 100
-            # argsort returns ascending; reverse with [::-1] gives a
-            # negative-stride view that torch indexing rejects. Materialise
-            # the slice with .copy() so it's a contiguous int64 array.
-            _topk_order = np.argsort(test_scores_ep)[::-1][:_k].copy()
-            _topk_t = torch.as_tensor(_topk_order, dtype=torch.long)
-            _topk_df = pd.DataFrame({
-                "epoch": epoch,
-                "rank": np.arange(_k),
-                "src_idx": test_edge_index[0, _topk_t].cpu().numpy(),
-                "dst_idx": test_edge_index[1, _topk_t].cpu().numpy(),
-                "score":   test_scores_ep[_topk_order],
-                "label":   test_labels_ep[_topk_order].astype(int),
-            })
-            _topk_path = output_dir / "per_epoch_topk.parquet"
-            if _topk_path.exists():
-                _existing = pd.read_parquet(_topk_path)
-                _topk_df = pd.concat([_existing, _topk_df], ignore_index=True)
-            _topk_df.to_parquet(_topk_path, index=False)
-        if test_ta_per_item is not None:
-            test_scores_t = torch.from_numpy(test_scores_ep)
-            test_labels_t = torch.from_numpy(test_labels_ep).float()
-            for kk in (10, 30, 50, 100):
-                test_rs[f"ndcg_ta_mean@{kk}"] = ndcg_ta_mean_at_k(
-                    test_scores_t, test_labels_t, test_ta_per_item, kk,
-                    primary_tas=primary_tas,
-                )
-                test_rs[f"rs_ta_mean@{kk}"] = rs_ta_mean_at_k(
-                    test_scores_t, test_labels_t, test_ta_per_item, kk,
-                    primary_tas=primary_tas,
-                )
+            # Optional diagnostic: dump per-epoch top-K test pairs so we can see
+            # whether the model's top-ranked predictions are stable across epochs
+            # or whether each epoch's rs@K is hitting a different 9/10 positives.
+            # Enable with: SAVE_PER_EPOCH_TOPK=1 (or set to a number = K).
+            _topk_env = os.environ.get("SAVE_PER_EPOCH_TOPK")
+            if _topk_env:
+                _k = int(_topk_env) if _topk_env.isdigit() else 100
+                # argsort returns ascending; reverse with [::-1] gives a
+                # negative-stride view that torch indexing rejects. Materialise
+                # the slice with .copy() so it's a contiguous int64 array.
+                _topk_order = np.argsort(test_scores_ep)[::-1][:_k].copy()
+                _topk_t = torch.as_tensor(_topk_order, dtype=torch.long)
+                _topk_df = pd.DataFrame({
+                    "epoch": epoch,
+                    "rank": np.arange(_k),
+                    "src_idx": test_edge_index[0, _topk_t].cpu().numpy(),
+                    "dst_idx": test_edge_index[1, _topk_t].cpu().numpy(),
+                    "score":   test_scores_ep[_topk_order],
+                    "label":   test_labels_ep[_topk_order].astype(int),
+                })
+                _topk_path = output_dir / "per_epoch_topk.parquet"
+                if _topk_path.exists():
+                    _existing = pd.read_parquet(_topk_path)
+                    _topk_df = pd.concat([_existing, _topk_df], ignore_index=True)
+                _topk_df.to_parquet(_topk_path, index=False)
+
+            # Optional diagnostic: dump the FULL per-epoch test scores (one row
+            # per test pair, in the fixed test-pair order) so the per-TA RS
+            # leaderboard can be tracked across epochs post-hoc. Row order is
+            # identical every epoch and matches the final test_predictions.parquet,
+            # so target/disease/TA are joined by position afterwards — no inverse
+            # node map needed here. Enable with: SAVE_PER_EPOCH_PREDS=1.
+            if os.environ.get("SAVE_PER_EPOCH_PREDS"):
+                _ep_dir = output_dir / "per_epoch_preds"
+                _ep_dir.mkdir(exist_ok=True)
+                pd.DataFrame({
+                    "score": test_scores_ep,
+                    "label": test_labels_ep.astype(int),
+                }).to_parquet(_ep_dir / f"epoch_{epoch:03d}.parquet", index=False)
+            if test_ta_per_item is not None:
+                test_scores_t = torch.from_numpy(test_scores_ep)
+                test_labels_t = torch.from_numpy(test_labels_ep).float()
+                for kk in (10, 30, 50, 100):
+                    test_rs[f"ndcg_ta_mean@{kk}"] = ndcg_ta_mean_at_k(
+                        test_scores_t, test_labels_t, test_ta_per_item, kk,
+                        primary_tas=primary_tas,
+                    )
+                    test_rs[f"rs_ta_mean@{kk}"] = rs_ta_mean_at_k(
+                        test_scores_t, test_labels_t, test_ta_per_item, kk,
+                        primary_tas=primary_tas,
+                    )
+                    test_rs[f"rs_ta_median@{kk}"] = rs_ta_median_at_k(
+                        test_scores_t, test_labels_t, test_ta_per_item, kk,
+                        primary_tas=primary_tas,
+                    )
+                    # Breadth: how many TAs qualify (have a defined RS) and how
+                    # many have an "actual" (>0) value, per epoch.
+                    _ta_vals = _rs_ta_values_at_k(
+                        test_scores_t, test_labels_t, test_ta_per_item, kk,
+                        primary_tas=primary_tas,
+                    )
+                    test_rs[f"n_ta_qualify@{kk}"] = len(_ta_vals)
+                    test_rs[f"n_ta_nonzero@{kk}"] = int(sum(1 for v in _ta_vals if v > 0))
 
         row = {"epoch": epoch, "train_loss": train_loss}
         row.update({f"val_{k}": float(v) for k, v in val_metrics.items()})
@@ -626,15 +721,29 @@ def main(cfg):
                 f"{val_metrics['ndcg_ta_mean@10']:.3f}/{val_metrics['ndcg_ta_mean@50']:.3f} "
                 f"| val rs_ta_mean@10/50: "
                 f"{val_metrics['rs_ta_mean@10']:.3f}/{val_metrics['rs_ta_mean@50']:.3f} "
-                f"| test rs_ta_mean@10/50: "
-                f"{test_rs['rs_ta_mean@10']:.3f}/{test_rs['rs_ta_mean@50']:.3f} "
+                f"| val rs_ta_median@10/50: "
+                f"{val_metrics['rs_ta_median@10']:.3f}/{val_metrics['rs_ta_median@50']:.3f} "
+            )
+            # test metrics only present on eval epochs (gated by eval_every)
+            if "rs_ta_mean@10" in test_rs:
+                ta_str += (
+                    f"| test rs_ta_mean@10/50: "
+                    f"{test_rs['rs_ta_mean@10']:.3f}/{test_rs['rs_ta_mean@50']:.3f} "
+                    f"| test rs_ta_median@10/50: "
+                    f"{test_rs['rs_ta_median@10']:.3f}/{test_rs['rs_ta_median@50']:.3f} "
+                )
+        test_str = ""
+        if "rs@10" in test_rs:
+            test_str = (
+                f"| test rs@10/50/100: "
+                f"{test_rs['rs@10']:.3f}/{test_rs['rs@50']:.3f}/{test_rs['rs@100']:.3f}"
             )
         print(
             f"Epoch {epoch:3d} | train_loss: {train_loss:.4f} "
             f"| val ndcg@10/50/100: {val_metrics['ndcg@10']:.3f}/{val_metrics['ndcg@50']:.3f}/{val_metrics['ndcg@100']:.3f} "
             f"{ta_str}"
             f"| val rs@10/50/100: {val_metrics['rs@10']:.3f}/{val_metrics['rs@50']:.3f}/{val_metrics['rs@100']:.3f} "
-            f"| test rs@10/50/100: {test_rs['rs@10']:.3f}/{test_rs['rs@50']:.3f}/{test_rs['rs@100']:.3f}"
+            f"{test_str}"
         )
 
         improved = (val_score > best_val) if es_mode == "max" else (val_score < best_val)
@@ -666,6 +775,7 @@ def main(cfg):
         batch_size=cfg.train.batch_size,
         device=device,
         edge_feat_cols=_edge_feat_cols,
+        num_workers=_n_workers,
     )
     test_metrics = compute_metrics(test_labels, test_scores)
 
@@ -681,6 +791,10 @@ def main(cfg):
                 primary_tas=primary_tas,
             )
             test_metrics[f"rs_ta_mean@{kk}"] = rs_ta_mean_at_k(
+                scores_t, labels_t, test_ta_per_item, kk,
+                primary_tas=primary_tas,
+            )
+            test_metrics[f"rs_ta_median@{kk}"] = rs_ta_median_at_k(
                 scores_t, labels_t, test_ta_per_item, kk,
                 primary_tas=primary_tas,
             )

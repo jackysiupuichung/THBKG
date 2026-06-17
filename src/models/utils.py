@@ -49,6 +49,7 @@ def build_model(
     composition: str = "sub",
     decoder_kind: str = "mlp",
     decoder_dropout: float = 0.1,
+    latest_edge_only: bool = False,
 ) -> torch.nn.Module:
     """
     Build model from HeteroData.
@@ -103,6 +104,7 @@ def build_model(
             t_max=t_max,
             decoder_kind=decoder_kind,
             decoder_dropout=decoder_dropout,
+            latest_edge_only=latest_edge_only,
         )
     elif use_recency:
         raise ValueError(

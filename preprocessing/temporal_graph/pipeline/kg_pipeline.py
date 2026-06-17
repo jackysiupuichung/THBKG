@@ -22,9 +22,9 @@ def run_pipeline(input, node_input, node_schema, edge_schema, static_edge_schema
     edge_parser = EdgeParser(input, edge_schema, edge_output, node_store=node_store, debug=debug)
     edge_parser.parse()
 
-    # print("🔹 Parsing intact edges...")
-    # intact_parser = IntActParser(input, edge_schema, edge_output, node_store=node_store)
-    # intact_parser.parse()
+    print("🔹 Parsing intact edges...")
+    intact_parser = IntActParser(input, edge_schema, edge_output, node_store=node_store)
+    intact_parser.parse()
 
     print("🔹 Parsing go ontology edges...")
     go_ontology_parser = GOOntologyParser(node_input, static_edge_schema, static_edge_output, node_store=node_store, static=True)
