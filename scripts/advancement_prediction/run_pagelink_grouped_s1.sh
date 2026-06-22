@@ -1,0 +1,38 @@
+#!/bin/bash
+#SBATCH -J pagelink_grp_s1
+#SBATCH -o %x.o%j
+#SBATCH -p gpushort
+#SBATCH -A pilot
+#SBATCH -n 1
+#SBATCH --cpus-per-gpu=8
+#SBATCH -t 1:0:0
+#SBATCH --mem-per-cpu=11G
+#SBATCH --gres=gpu:nvidia_a100_80gb_pcie:1
+
+# PaGE-Link path explanations (#4) on the grouped seed-1 26.03 checkpoint.
+# Learns a soft edge mask per pair, then enforces target->disease paths.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(dirname "$(dirname "$SCRIPT_DIR")")}"
+cd "$REPO_ROOT"
+
+source .venv/bin/activate
+export WANDB_MODE="disabled"
+
+RUN_DIR=/gpfs/scratch/bty414/opentarget_evidences/26.03/runs/lr_grouped_k100/lrgrpk100_s1
+PAIRS="${1:-explain_pairs_evfree_diverse.csv}"
+OUT_DIR=$REPO_ROOT/headline_results/evaluate_advancement/pagelink_grouped_s1
+
+python pagelink_explain.py \
+    --config       "$RUN_DIR/config.yaml" \
+    --checkpoint   "$RUN_DIR/best_model.pt" \
+    --pairs-csv    "$PAIRS" \
+    --mask-epochs  200 \
+    --lr           0.01 \
+    --size-coeff   5e-3 \
+    --entropy-coeff 1e-1 \
+    --num-paths    5 \
+    --min-mask     0.1 \
+    --verbose \
+    --out-dir      "$OUT_DIR"

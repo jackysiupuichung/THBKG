@@ -1,117 +1,274 @@
-"""PaGE-Link path explanations for the EAHGT advancement predictor (SCAFFOLD).
+"""PaGE-Link path explanations for the EAHGT advancement predictor.
 
 Reimplements PaGE-Link (Zhang et al., WWW 2023, arXiv:2302.12465) against our
-PyG EAHGT model: learn a soft edge mask over the query pair's subgraph, then
-enforce connected target -> ... -> disease PATHS from that mask. Produces
-path-structured, connection-interpretable explanations through the 20 relation
-types — the publication-grade structural answer the IG/attention signals can't
-give.
+PyG EAHGT model. Two stages per (target, disease) pair:
 
-See note/explain_pagelink.md for the algorithm and adaptation plan.
+  STAGE 1 (mask learning): learn a soft edge mask m_e in [0,1] over the pair's
+    subgraph that, when scaled into HGTConv message passing, preserves the
+    model's advancement logit (BCE to the unmasked prediction), with size +
+    entropy regularisers driving the mask sparse and decisive. Model frozen.
 
-STATUS: scaffold. The two stages and output writers are stubbed with intended
-signatures; model/subgraph plumbing reuses explain_advancement.py (shared
-runtime helper, same one branch #1 needs). No graph/model load is triggered.
-Implementation is a GPU sbatch job (mask learning = per-pair gradient descent).
+  STAGE 2 (path enforcement): turn the soft mask into connected target->disease
+    PATHS. Edge cost = -log(m_e); the k lowest-cost simple paths (Yen, via
+    networkx) are the explanation — connection-interpretable chains through the
+    relation types, the ChronoMedKG-style decomposition.
 
-Intended invocation (GPU, via sbatch):
+Outputs reuse the per_pair_edges.parquet schema (mask weight in the ig_total
+slot) so export_pair_evidence_json.py / present_pair_evidence.py render
+PaGE-Link explanations with OT evidence unchanged, plus per_pair_paths.parquet.
+
+GPU job via sbatch (mask learning is per-pair gradient descent). See
+note/explain_pagelink.md.
+
+Invocation:
     uv run python pagelink_explain.py \
-        --config runs/<exp>/config.yaml \
-        --checkpoint runs/<exp>/best_model.pt \
+        --config <run>/config.yaml --checkpoint <run>/best_model.pt \
         --pairs-csv explain_pairs_evfree_diverse.csv \
-        --mask-epochs 200 --size-coeff 5e-3 --entropy-coeff 1e-1 \
-        --num-paths 5 --out-dir runs/<exp>/explanations/pagelink
+        --mask-epochs 200 --lr 0.01 --size-coeff 5e-3 --entropy-coeff 1e-1 \
+        --num-paths 5 --out-dir <run>/explanations/pagelink
 """
 
 from __future__ import annotations
 
 import argparse
-from typing import Dict, List, Tuple
+import math
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
+import torch
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
+from src.data.temporal_loader import ADV_ETYPE, build_edge_time_dict
+from src.explain.runtime import ExplainRuntime, build_edge_feat_dict
+from src.explain.edge_mask import EdgeMask, apply_edge_mask
 
 EdgeType = Tuple[str, str, str]
 
 
-def learn_edge_mask(model, batch, args) -> "object":
-    """STAGE 1 — learn m_e in [0,1] over the subgraph edges.
+# ----------------------------------------------------------------------------
+# Stage 1 — learn the soft edge mask.
+# ----------------------------------------------------------------------------
+def learn_edge_mask(rt: ExplainRuntime, batch, edge_time_dict, args) -> EdgeMask:
+    """Optimise an EdgeMask so the masked subgraph reproduces the model's logit.
 
-    Freeze ``model``; optimise an EdgeMask (src/explain/edge_mask.py) to maximise
-    the masked query-edge logit's agreement with the unmasked prediction, plus
-    size + entropy regularisers. Returns the trained EdgeMask.
-
-    TODO(impl): Adam over mask.logits for args.mask_epochs; loss =
-    pred_match(masked_logit, base_logit) + size_coeff*size + entropy_coeff*entropy.
+    Loss = BCE(masked_logit, sigmoid(base_logit)) + size/entropy reg. The model
+    is frozen; only mask logits are optimised (Adam). The mask is built over the
+    SAME edge_index_dict the conv iterates, so flat() aligns with message order.
     """
-    raise NotImplementedError("scaffold: mask-learning loop (see note)")
+    for p in rt.model.parameters():
+        p.requires_grad_(False)
+
+    edge_order = list(batch.edge_index_dict.keys())
+    edge_counts = {et: batch[et].edge_index.size(1) for et in edge_order}
+    mask = EdgeMask(edge_counts, edge_order, init=1.0, device=rt.device)
+
+    with torch.no_grad():
+        base_logit = rt.predict_logit(batch, edge_time_dict=edge_time_dict).detach()
+    base_p = torch.sigmoid(base_logit)
+
+    opt = torch.optim.Adam(mask.parameters(), lr=args.lr)
+    for ep in range(args.mask_epochs):
+        opt.zero_grad()
+        with apply_edge_mask(rt.model, mask):
+            logit = rt.predict_logit(batch, edge_time_dict=edge_time_dict)
+        # Keep the masked prediction matched to the original (PaGE-Link fidelity
+        # objective): BCE against the model's own probability, plus mask reg.
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(
+            logit, base_p)
+        loss = bce + mask.regularisation(args.size_coeff, args.entropy_coeff)
+        loss.backward()
+        opt.step()
+        if args.verbose and (ep % max(1, args.mask_epochs // 5) == 0 or ep == args.mask_epochs - 1):
+            with torch.no_grad():
+                m = mask.flat()
+                print(f"[pagelink]     ep{ep:>3} loss={loss.item():.4f} "
+                      f"bce={bce.item():.4f} mask[mean={m.mean():.3f} "
+                      f">0.5={float((m > 0.5).float().mean()):.3f}]", flush=True)
+    return mask
 
 
-def enforce_paths(batch, mask, src_idx: int, dst_idx: int,
-                  num_paths: int) -> List[dict]:
-    """STAGE 2 — convert the soft mask into connected target->disease paths.
+# ----------------------------------------------------------------------------
+# Stage 2 — enforce target->disease paths from the soft mask.
+# ----------------------------------------------------------------------------
+def _global_node(batch, ntype: str, local_idx: int) -> Tuple[str, int]:
+    return (ntype, int(batch[ntype].n_id[local_idx].item()))
 
-    Build a weighted digraph over the subgraph edges with cost w_e = -log(m_e);
-    find the ``num_paths`` lowest-cost (target -> disease) paths; keep those with
-    an admissible relation sequence. Canonicalise rev_ edges to forward
-    orientation (reuse join_pair_evidence._canonicalise) so paths read forward.
 
-    Returns one dict per path: ordered [(edge_type, src_acc, dst_acc, m_e)],
-    total_cost, rank.
+def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
+                  min_mask: float) -> Tuple[List[dict], Dict[Tuple, float]]:
+    """k lowest-cost simple target->disease paths under cost -log(m_e).
 
-    TODO(impl): k-shortest-paths over the mask-weighted subgraph.
+    Builds a directed multigraph over (node_type, global_idx) nodes from the
+    subgraph edges (canonicalised to forward orientation), weighting each edge by
+    -log(m_e). Returns (paths, edge_mask_by_key) where each path is an ordered
+    list of typed edges and edge_mask_by_key maps a global edge key to its m_e
+    (for the per_pair_edges output).
     """
-    raise NotImplementedError("scaffold: path enforcement (see note)")
+    import networkx as nx
+
+    mvals = {et: v.detach().cpu().numpy() for et, v in mask.values().items()}
+    G = nx.DiGraph()
+    edge_mask_by_key: Dict[Tuple, float] = {}
+
+    for et in batch.edge_index_dict:
+        st, rel, dt = et
+        ei = batch[et].edge_index.cpu().numpy()
+        m = mvals.get(et)
+        if m is None:
+            continue
+        for j in range(ei.shape[1]):
+            su, dv = int(ei[0, j]), int(ei[1, j])
+            me = float(m[j])
+            if me < min_mask:
+                continue
+            gn_s = _global_node(batch, st, su)
+            gn_d = _global_node(batch, dt, dv)
+            cost = -math.log(max(me, 1e-6))
+            key = (et, gn_s[1], gn_d[1])
+            edge_mask_by_key[key] = me
+            # Keep the lowest-cost parallel edge between the same node pair.
+            if G.has_edge(gn_s, gn_d):
+                if cost < G[gn_s][gn_d]["cost"]:
+                    G[gn_s][gn_d].update(cost=cost, et=et, me=me)
+            else:
+                G.add_edge(gn_s, gn_d, cost=cost, et=et, me=me)
+
+    # Endpoints: the query edge in global node space.
+    ls = int(batch[ADV_ETYPE].edge_label_index[0, 0].item())
+    ld = int(batch[ADV_ETYPE].edge_label_index[1, 0].item())
+    src = ("target", int(batch["target"].n_id[ls].item()))
+    dst = ("disease", int(batch["disease"].n_id[ld].item()))
+
+    paths: List[dict] = []
+    if src in G and dst in G:
+        try:
+            gen = nx.shortest_simple_paths(G, src, dst, weight="cost")
+            for rank, nodes in enumerate(gen):
+                if rank >= num_paths:
+                    break
+                edges = []
+                total = 0.0
+                for a, b in zip(nodes[:-1], nodes[1:]):
+                    d = G[a][b]
+                    edges.append({"edge_type": "::".join(d["et"]),
+                                  "src_type": a[0], "src_global": a[1],
+                                  "dst_type": b[0], "dst_global": b[1],
+                                  "m_e": d["me"]})
+                    total += d["cost"]
+                paths.append({"rank": rank, "n_hops": len(edges),
+                              "total_cost": total, "edges": edges})
+        except nx.NetworkXNoPath:
+            pass
+    return paths, edge_mask_by_key
 
 
-def write_outputs(pair_paths: Dict[Tuple[str, str], List[dict]],
-                  edge_attr: pd.DataFrame, out_dir: str) -> None:
-    """Emit:
-      * per_pair_edges.parquet  -- mask weight in the ``ig_total`` slot, same
-        schema export_pair_evidence_json.py / present_pair_evidence.py consume,
-        so PaGE-Link explanations render with OT evidence unchanged.
-      * per_pair_paths.parquet  -- one row per path (ordered typed edges + cost).
-    TODO(impl).
-    """
-    raise NotImplementedError("scaffold: output writers (see note)")
-
-
-def _load_model_and_loader(args):
-    """Reuse explain_advancement.py model build + checkpoint load +
-    LinkNeighborLoader (shared runtime helper). TODO(impl): extract + import."""
-    raise NotImplementedError("scaffold: share runtime with explain_advancement.py")
+# ----------------------------------------------------------------------------
+# Output.
+# ----------------------------------------------------------------------------
+def _edge_rows(rt: ExplainRuntime, batch, mask: EdgeMask, t_id: str, d_id: str) -> List[dict]:
+    """Per-edge rows in the per_pair_edges.parquet schema, mask weight in the
+    ig_total slot so the existing decomposition tooling consumes it unchanged."""
+    mvals = {et: v.detach().cpu().numpy() for et, v in mask.values().items()}
+    rows = []
+    for et in batch.edge_index_dict:
+        ei = batch[et].edge_index.cpu().numpy()
+        m = mvals.get(et)
+        if m is None:
+            continue
+        st, rel, dt = et
+        for j in range(ei.shape[1]):
+            su, dv = int(ei[0, j]), int(ei[1, j])
+            rows.append({
+                "target_id": t_id, "disease_id": d_id,
+                "edge_type": "::".join(et),
+                "src": int(batch[st].n_id[su].item()),
+                "dst": int(batch[dt].n_id[dv].item()),
+                "ig_total": float(m[j]),      # mask weight as the attribution
+                "mask_weight": float(m[j]),
+            })
+    return rows
 
 
 def main(args: argparse.Namespace) -> None:
-    pairs = pd.read_csv(args.pairs_csv)  # columns: target_id, disease_id
-    print(f"[pagelink] {len(pairs)} pair(s); mask_epochs={args.mask_epochs}; "
+    rt = ExplainRuntime.from_config(args.config, args.checkpoint)
+    print(f"[pagelink] device={rt.device}; mask_epochs={args.mask_epochs}; "
           f"num_paths={args.num_paths}", flush=True)
-    # model, loader, context = _load_model_and_loader(args)               # TODO
-    # for each pair:
-    #   batch = subgraph for (t, d); src_idx, dst_idx from edge_label_index
-    #   mask  = learn_edge_mask(model, batch, args)
-    #   paths = enforce_paths(batch, mask, src_idx, dst_idx, args.num_paths)
-    #   ...accumulate per-edge mask weights + paths
-    # write_outputs(pair_paths, edge_attr, args.out_dir)
-    print("[pagelink] SCAFFOLD: stages stubbed (see note/explain_pagelink.md). "
-          f"Would write {args.out_dir}", flush=True)
+
+    pair_idx = rt.select_pairs_from_csv(args.pairs_csv)
+    print(f"[pagelink] {len(pair_idx)} pairs from {args.pairs_csv}", flush=True)
+    if len(pair_idx) == 0:
+        raise SystemExit("[pagelink] no pairs resolved to the test split")
+    loader = rt.pair_loader(pair_idx)
+
+    all_edge_rows: List[dict] = []
+    all_path_rows: List[dict] = []
+    for bi, batch in enumerate(loader):
+        batch = batch.to(rt.device)
+        etd = build_edge_time_dict(batch, ADV_ETYPE)
+        t_id, d_id = rt.pair_ids(batch)
+        print(f"[pagelink] {bi+1}/{len(pair_idx)} {t_id}->{d_id}: learning mask...",
+              flush=True)
+
+        mask = learn_edge_mask(rt, batch, etd, args)
+        all_edge_rows.extend(_edge_rows(rt, batch, mask, t_id, d_id))
+
+        paths, _ = enforce_paths(rt, batch, mask, args.num_paths, args.min_mask)
+        for p in paths:
+            chain = " -> ".join(
+                [f"{p['edges'][0]['src_type']}#{p['edges'][0]['src_global']}"]
+                + [f"[{e['edge_type']}] {e['dst_type']}#{e['dst_global']}" for e in p["edges"]]
+            )
+            all_path_rows.append({
+                "target_id": t_id, "disease_id": d_id, "rank": p["rank"],
+                "n_hops": p["n_hops"], "total_cost": p["total_cost"],
+                "min_m_e": min((e["m_e"] for e in p["edges"]), default=float("nan")),
+                "path": chain,
+            })
+        print(f"[pagelink]   -> {len(paths)} path(s); "
+              f"{len([r for r in all_edge_rows if r['target_id']==t_id and r['disease_id']==d_id])} edges",
+              flush=True)
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(all_edge_rows).to_parquet(out_dir / "per_pair_edges.parquet", index=False)
+    paths_df = pd.DataFrame(all_path_rows)
+    paths_df.to_parquet(out_dir / "per_pair_paths.parquet", index=False)
+    if not paths_df.empty:
+        print("\n[pagelink] top paths:", flush=True)
+        print(paths_df.sort_values(["target_id", "rank"])
+              .head(20).to_string(index=False), flush=True)
+    print(f"\n[pagelink] wrote {len(all_edge_rows)} edge rows, "
+          f"{len(all_path_rows)} path rows -> {out_dir}", flush=True)
 
 
 def _parse() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="PaGE-Link path explanations for EAHGT advancement (scaffold).")
+        description="PaGE-Link path explanations for EAHGT advancement.")
     p.add_argument("--config", required=True)
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--pairs-csv", required=True,
                    help="target_id,disease_id pairs to explain.")
     p.add_argument("--mask-epochs", type=int, default=200)
+    p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--size-coeff", type=float, default=5e-3)
     p.add_argument("--entropy-coeff", type=float, default=1e-1)
     p.add_argument("--num-paths", type=int, default=5,
-                   help="k shortest target->disease paths to return per pair.")
+                   help="k lowest-cost target->disease paths per pair.")
+    p.add_argument("--min-mask", type=float, default=0.1,
+                   help="Drop edges with m_e below this from path search.")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--verbose", action="store_true")
     return p.parse_args()
 
 
 if __name__ == "__main__":
-    main(_parse())
+    args = _parse()
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    main(args)
