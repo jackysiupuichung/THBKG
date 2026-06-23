@@ -3,10 +3,10 @@
 #SBATCH -o %x.o%j
 #SBATCH -p gpushort
 #SBATCH -A pilot
-#SBATCH -n 1
-#SBATCH --cpus-per-gpu=8
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
 #SBATCH -t 1:0:0
-#SBATCH --mem-per-cpu=11G
+#SBATCH --mem=32G
 #SBATCH --gres=gpu:nvidia_a100_80gb_pcie:1
 
 # Faithfulness of the advancement explainer's edge attributions (#1), on the
