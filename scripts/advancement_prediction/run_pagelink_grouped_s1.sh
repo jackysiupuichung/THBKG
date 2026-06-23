@@ -17,7 +17,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SLURM_SUBMIT_DIR:-$(dirname "$(dirname "$SCRIPT_DIR")")}"
 cd "$REPO_ROOT"
 
-source .venv/bin/activate
+# This branch may run from a git worktree, which has no .venv of its own.
+# Use the main checkout's venv (same deps + networkx); fall back to a local one.
+VENV="$REPO_ROOT/.venv/bin/activate"
+[ -f "$VENV" ] || VENV=/data/home/bty414/opentarget_temporal_study/src/opentarget_het_graph/.venv/bin/activate
+source "$VENV"
 export WANDB_MODE="disabled"
 
 RUN_DIR=/gpfs/scratch/bty414/opentarget_evidences/26.03/runs/lr_grouped_k100/lrgrpk100_s1
