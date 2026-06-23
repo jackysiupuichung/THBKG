@@ -65,7 +65,10 @@ def learn_edge_mask(rt: ExplainRuntime, batch, edge_time_dict, args) -> EdgeMask
 
     edge_order = list(batch.edge_index_dict.keys())
     edge_counts = {et: batch[et].edge_index.size(1) for et in edge_order}
-    mask = EdgeMask(edge_counts, edge_order, init=1.0, device=rt.device)
+    # init<0 => sigmoid<0.5 => mask starts SPARSE, so an edge is kept only if the
+    # BCE term actively pushes it up. (init>0 started near-all-on and the weak
+    # reg never pruned it; mask mean rose to ~0.9.)
+    mask = EdgeMask(edge_counts, edge_order, init=args.init, device=rt.device)
 
     with torch.no_grad():
         base_logit = rt.predict_logit(batch, edge_time_dict=edge_time_dict).detach()
@@ -257,6 +260,10 @@ def _parse() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--size-coeff", type=float, default=5e-3)
     p.add_argument("--entropy-coeff", type=float, default=1e-1)
+    p.add_argument("--init", type=float, default=-1.0,
+                   help="EdgeMask logit init. <0 => sigmoid<0.5 => mask starts "
+                        "sparse so edges are kept only if BCE pushes them up "
+                        "(default -1.0 ~ m_e 0.27).")
     p.add_argument("--num-paths", type=int, default=5,
                    help="k lowest-cost target->disease paths per pair.")
     p.add_argument("--min-mask", type=float, default=0.1,
