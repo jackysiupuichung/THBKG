@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH -t 1:0:0
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:nvidia_a100_80gb_pcie:1
+#SBATCH --gres=gpu:1
 
 # PaGE-Link path explanations (#4) on the grouped seed-1 26.03 checkpoint.
 # Learns a soft edge mask per pair, then enforces target->disease paths.
