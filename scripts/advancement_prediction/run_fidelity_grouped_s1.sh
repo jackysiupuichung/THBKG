@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH -t 1:0:0
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:nvidia_a100_80gb_pcie:1
+#SBATCH --gres=gpu:1
 
 # Faithfulness of the advancement explainer's edge attributions (#1), on the
 # grouped seed-1 26.03 checkpoint (the representative model the case studies
