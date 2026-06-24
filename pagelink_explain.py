@@ -247,16 +247,23 @@ def main(args: argparse.Namespace) -> None:
         paths, _ = enforce_paths(rt, batch, mask, args.num_paths, args.min_mask,
                                  exclude_prefixes=exclude)
         for p in paths:
+            e0 = p["edges"][0]
+            # index chain (stable id) + human-readable accession+name chain
             chain = " -> ".join(
-                [f"{p['edges'][0]['src_type']}#{p['edges'][0]['src_global']}"]
+                [f"{e0['src_type']}#{e0['src_global']}"]
                 + [f"[{e['edge_type']}] {e['dst_type']}#{e['dst_global']}" for e in p["edges"]]
+            )
+            named = " -> ".join(
+                [rt.node_label(e0["src_type"], e0["src_global"])]
+                + [f"[{e['edge_type']}] {rt.node_label(e['dst_type'], e['dst_global'])}"
+                   for e in p["edges"]]
             )
             all_path_rows.append({
                 "target_id": t_id, "disease_id": d_id, "rank": p["rank"],
                 "n_hops": p["n_hops"], "total_cost": p["total_cost"],
                 "mean_cost": p["mean_cost"],
                 "min_m_e": min((e["m_e"] for e in p["edges"]), default=float("nan")),
-                "path": chain,
+                "path": chain, "path_named": named,
             })
         print(f"[pagelink]   -> {len(paths)} path(s); "
               f"{len([r for r in all_edge_rows if r['target_id']==t_id and r['disease_id']==d_id])} edges",
@@ -268,9 +275,11 @@ def main(args: argparse.Namespace) -> None:
     paths_df = pd.DataFrame(all_path_rows)
     paths_df.to_parquet(out_dir / "per_pair_paths.parquet", index=False)
     if not paths_df.empty:
-        print("\n[pagelink] top paths:", flush=True)
-        print(paths_df.sort_values(["target_id", "rank"])
-              .head(20).to_string(index=False), flush=True)
+        print("\n[pagelink] best path per pair (named):", flush=True)
+        for _, r in paths_df[paths_df["rank"] == 0].iterrows():
+            print(f"  [{r['target_id']} -> {r['disease_id']}] "
+                  f"hops={r['n_hops']} mean_cost={r['mean_cost']:.3f}", flush=True)
+            print(f"    {r['path_named']}", flush=True)
     print(f"\n[pagelink] wrote {len(all_edge_rows)} edge rows, "
           f"{len(all_path_rows)} path rows -> {out_dir}", flush=True)
 
