@@ -102,15 +102,30 @@ def _global_node(batch, ntype: str, local_idx: int) -> Tuple[str, int]:
     return (ntype, int(batch[ntype].n_id[local_idx].item()))
 
 
-def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
-                  min_mask: float) -> Tuple[List[dict], Dict[Tuple, float]]:
-    """k lowest-cost simple target->disease paths under cost -log(m_e).
+def _is_excluded(rel: str, exclude_prefixes: Tuple[str, ...]) -> bool:
+    """True if ``rel`` (with any rev_ stripped) starts with an excluded prefix."""
+    base = rel[4:] if rel.startswith("rev_") else rel
+    return any(base.startswith(p) for p in exclude_prefixes)
 
-    Builds a directed multigraph over (node_type, global_idx) nodes from the
-    subgraph edges (canonicalised to forward orientation), weighting each edge by
-    -log(m_e). Returns (paths, edge_mask_by_key) where each path is an ordered
-    list of typed edges and edge_mask_by_key maps a global edge key to its m_e
-    (for the per_pair_edges output).
+
+def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
+                  min_mask: float, exclude_prefixes: Tuple[str, ...],
+                  candidate_mult: int = 6
+                  ) -> Tuple[List[dict], Dict[Tuple, float]]:
+    """k best simple target->disease paths from the learned mask.
+
+    Two refinements over a plain shortest-path (so paths aren't dominated by
+    trivial 1-hop clinical-trial edges):
+      (a) EXCLUDE edge types whose (rev_-stripped) relation starts with any of
+          ``exclude_prefixes`` (e.g. 'clinical_trial') from the path graph. The
+          query edge is itself an advancement/trial edge, so trial hops are
+          near-tautological explanations; dropping them forces paths to route
+          through genetic/literature/pathway/animal-model evidence.
+      (b) LENGTH-NORMALISE: enumerate candidates by summed cost (Yen), then
+          RE-RANK by MEAN edge cost (total/n_hops) so a strong multi-hop path
+          isn't beaten purely for having more hops.
+
+    cost(edge) = -log(m_e). Returns (paths, edge_mask_by_key).
     """
     import networkx as nx
 
@@ -120,6 +135,8 @@ def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
 
     for et in batch.edge_index_dict:
         st, rel, dt = et
+        if _is_excluded(rel, exclude_prefixes):     # (a) drop excluded relations
+            continue
         ei = batch[et].edge_index.cpu().numpy()
         m = mvals.get(et)
         if m is None:
@@ -134,7 +151,6 @@ def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
             cost = -math.log(max(me, 1e-6))
             key = (et, gn_s[1], gn_d[1])
             edge_mask_by_key[key] = me
-            # Keep the lowest-cost parallel edge between the same node pair.
             if G.has_edge(gn_s, gn_d):
                 if cost < G[gn_s][gn_d]["cost"]:
                     G[gn_s][gn_d].update(cost=cost, et=et, me=me)
@@ -147,15 +163,14 @@ def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
     src = ("target", int(batch["target"].n_id[ls].item()))
     dst = ("disease", int(batch["disease"].n_id[ld].item()))
 
-    paths: List[dict] = []
+    candidates: List[dict] = []
     if src in G and dst in G:
         try:
             gen = nx.shortest_simple_paths(G, src, dst, weight="cost")
-            for rank, nodes in enumerate(gen):
-                if rank >= num_paths:
+            for ci, nodes in enumerate(gen):
+                if ci >= num_paths * candidate_mult:   # enumerate a candidate pool
                     break
-                edges = []
-                total = 0.0
+                edges, total = [], 0.0
                 for a, b in zip(nodes[:-1], nodes[1:]):
                     d = G[a][b]
                     edges.append({"edge_type": "::".join(d["et"]),
@@ -163,10 +178,18 @@ def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
                                   "dst_type": b[0], "dst_global": b[1],
                                   "m_e": d["me"]})
                     total += d["cost"]
-                paths.append({"rank": rank, "n_hops": len(edges),
-                              "total_cost": total, "edges": edges})
+                n = len(edges)
+                candidates.append({"n_hops": n, "total_cost": total,
+                                   "mean_cost": total / max(n, 1), "edges": edges})
         except nx.NetworkXNoPath:
             pass
+
+    # (b) re-rank candidates by MEAN edge cost, keep top-k.
+    candidates.sort(key=lambda p: p["mean_cost"])
+    paths = []
+    for rank, p in enumerate(candidates[:num_paths]):
+        p["rank"] = rank
+        paths.append(p)
     return paths, edge_mask_by_key
 
 
@@ -220,7 +243,9 @@ def main(args: argparse.Namespace) -> None:
         mask = learn_edge_mask(rt, batch, etd, args)
         all_edge_rows.extend(_edge_rows(rt, batch, mask, t_id, d_id))
 
-        paths, _ = enforce_paths(rt, batch, mask, args.num_paths, args.min_mask)
+        exclude = tuple(x for x in args.exclude_relations.split(",") if x)
+        paths, _ = enforce_paths(rt, batch, mask, args.num_paths, args.min_mask,
+                                 exclude_prefixes=exclude)
         for p in paths:
             chain = " -> ".join(
                 [f"{p['edges'][0]['src_type']}#{p['edges'][0]['src_global']}"]
@@ -229,6 +254,7 @@ def main(args: argparse.Namespace) -> None:
             all_path_rows.append({
                 "target_id": t_id, "disease_id": d_id, "rank": p["rank"],
                 "n_hops": p["n_hops"], "total_cost": p["total_cost"],
+                "mean_cost": p["mean_cost"],
                 "min_m_e": min((e["m_e"] for e in p["edges"]), default=float("nan")),
                 "path": chain,
             })
@@ -265,9 +291,15 @@ def _parse() -> argparse.Namespace:
                         "sparse so edges are kept only if BCE pushes them up "
                         "(default -1.0 ~ m_e 0.27).")
     p.add_argument("--num-paths", type=int, default=5,
-                   help="k lowest-cost target->disease paths per pair.")
+                   help="k best (mean-cost) target->disease paths per pair.")
     p.add_argument("--min-mask", type=float, default=0.1,
                    help="Drop edges with m_e below this from path search.")
+    p.add_argument("--exclude-relations", type=str, default="clinical_trial",
+                   help="Comma-separated relation PREFIXES (rev_ ignored) to drop "
+                        "from stage-2 path search. Default 'clinical_trial' so "
+                        "paths explain via non-trial evidence (trial hops are "
+                        "near-tautological for an advancement prediction). Pass "
+                        "'' to keep all relations.")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--verbose", action="store_true")
