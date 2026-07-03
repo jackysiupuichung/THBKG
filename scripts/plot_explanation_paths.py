@@ -162,11 +162,24 @@ if __name__ == "__main__":
         vis = [r for r in rows if r[0] <= dy]
         return (vis[-1][1], vis[-1][2]) if vis else None
 
+    def is_trivial_trial_1hop(p):
+        """A single-edge path whose only edge is a clinical_trial relation is the
+        near-tautological direct query edge (it just restates target->disease via
+        a trial edge). PaGE-Link exists to route around such shortcuts, so drop
+        these from the displayed explanation; genuine 1-hop mechanistic edges are
+        kept."""
+        if p["n"] != 1:
+            return False
+        rel = p["E"][0][0].split("::")[1]
+        base = rel[4:] if rel.startswith("rev_") else rel
+        return base.startswith("clinical_trial")
+
     for key, ps in P.items():
         dy, title, tag = DEC[key]
         node_meta = {}
         plot_rows = []
-        for p in ps[:4]:                       # top-4 paths
+        ps = [p for p in ps if not is_trivial_trial_1hop(p)]   # drop trial 1-hops
+        for p in ps[:4]:                       # top-4 remaining paths
             edges = []
             for et, a, b, me in p["E"]:
                 node_meta[a] = (gid(a)[0], name_of(a))
