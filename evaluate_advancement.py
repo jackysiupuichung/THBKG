@@ -1027,9 +1027,10 @@ def evaluate(
             + pn.scale_y_continuous(limits=(0, _rs_mor_plot_max), oob=mizani.bounds.squish)
             + pn.labs(x="N top target-disease pairs (per therapeutic area)", y="mean relative success across TAs", color="model", fill="model", linetype="model")
             + pn.theme_minimal()
-            # (6.5, 5) matches the classification boxplot aspect so the two
-            # render at equal height as side-by-side subfigures.
-            + pn.theme(figure_size=(6.5, 5))
+            # (a) is wider than the boxplot (b). Paired with LaTeX widths of
+            # 0.62/0.38 textwidth, the ~1.6x wider aspect keeps the two panels
+            # at equal rendered height (8/5 / (5/5) = 1.6 = 0.62/0.38).
+            + pn.theme(figure_size=(8, 5))
         )
 
     _rs_mor_headline = rs_mor[rs_mor["model_slug"].isin(_HEADLINE_SLUGS)].copy()
@@ -1061,10 +1062,10 @@ def evaluate(
         + pn.labs(x="", y="", fill="model")
         + pn.theme_minimal()
         # Stacked metric facets (ncol=1) keep the panel tall and narrow so it
-        # aligns in height with the line plot as a side-by-side subfigure.
+        # aligns in height with the wider line plot at 0.38 textwidth.
         # Model identity is carried by the fill legend, so drop the redundant
         # model names on the x-axis.
-        + pn.theme(figure_size=(6.5, 5), legend_position="right",
+        + pn.theme(figure_size=(5, 5), legend_position="right",
                    axis_text_x=pn.element_blank(),
                    axis_ticks_major_x=pn.element_blank()),
         plots_dir / "classification_metrics_by_ta.png",
