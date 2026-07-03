@@ -110,18 +110,25 @@ def _is_excluded(rel: str, exclude_prefixes: Tuple[str, ...]) -> bool:
 
 def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
                   min_mask: float, exclude_prefixes: Tuple[str, ...],
-                  candidate_mult: int = 6
+                  candidate_mult: int = 6, max_hops: int = 4
                   ) -> Tuple[List[dict], Dict[Tuple, float]]:
     """k best simple target->disease paths from the learned mask.
 
-    Two refinements over a plain shortest-path (so paths aren't dominated by
+    Refinements over a plain shortest-path (so paths aren't dominated by
     trivial 1-hop clinical-trial edges):
       (a) EXCLUDE edge types whose (rev_-stripped) relation starts with any of
           ``exclude_prefixes`` (e.g. 'clinical_trial') from the path graph. The
           query edge is itself an advancement/trial edge, so trial hops are
           near-tautological explanations; dropping them forces paths to route
           through genetic/literature/pathway/animal-model evidence.
-      (b) LENGTH-NORMALISE: enumerate candidates by summed cost (Yen), then
+      (b) RECEPTIVE-FIELD CAP: drop any path longer than ``max_hops``. The model
+          is a 2-layer message-passing net (num_neighbors [20,10]), so the target
+          embedding aggregates <=2 hops and the disease embedding <=2 hops; a
+          target->disease path within the model's actual receptive field is at
+          most 2+2 = 4 hops. Longer connectivity chains traverse nodes the model
+          never incorporated when scoring the query, so they are not faithful
+          explanations and are excluded.
+      (c) LENGTH-NORMALISE: enumerate candidates by summed cost (Yen), then
           RE-RANK by MEAN edge cost (total/n_hops) so a strong multi-hop path
           isn't beaten purely for having more hops.
 
@@ -167,8 +174,19 @@ def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
     if src in G and dst in G:
         try:
             gen = nx.shortest_simple_paths(G, src, dst, weight="cost")
-            for ci, nodes in enumerate(gen):
-                if ci >= num_paths * candidate_mult:   # enumerate a candidate pool
+            # shortest_simple_paths yields by increasing cost, not length, so a
+            # too-long path can appear before a valid short one: skip over-length
+            # paths (don't count them against the pool) and keep enumerating,
+            # with a hard iteration bound so a pathological graph can't loop.
+            seen = 0
+            for nodes in gen:
+                seen += 1
+                if seen > num_paths * candidate_mult * 20:
+                    break
+                n = len(nodes) - 1
+                if n > max_hops:                       # (b) receptive-field cap
+                    continue
+                if len(candidates) >= num_paths * candidate_mult:
                     break
                 edges, total = [], 0.0
                 for a, b in zip(nodes[:-1], nodes[1:]):
@@ -178,14 +196,16 @@ def enforce_paths(rt: ExplainRuntime, batch, mask: EdgeMask, num_paths: int,
                                   "dst_type": b[0], "dst_global": b[1],
                                   "m_e": d["me"]})
                     total += d["cost"]
-                n = len(edges)
                 candidates.append({"n_hops": n, "total_cost": total,
                                    "mean_cost": total / max(n, 1), "edges": edges})
         except nx.NetworkXNoPath:
             pass
 
-    # (b) re-rank candidates by MEAN edge cost, keep top-k.
-    candidates.sort(key=lambda p: p["mean_cost"])
+    # Rank candidates by TOTAL edge cost (PaGE-Link's concise-path scoring).
+    # (An earlier mean-cost re-rank favoured long chains of high-mask edges,
+    # producing 7-hop artifact paths; total cost keeps explanations concise as
+    # in the published method.)
+    candidates.sort(key=lambda p: p["total_cost"])
     paths = []
     for rank, p in enumerate(candidates[:num_paths]):
         p["rank"] = rank
@@ -235,6 +255,9 @@ def main(args: argparse.Namespace) -> None:
     all_path_rows: List[dict] = []
     for bi, batch in enumerate(loader):
         batch = batch.to(rt.device)
+        # Align the explainer's edge universe with the model's post-collapse
+        # messages when latest_edge_only is set (no-op otherwise).
+        batch = rt.collapse_batch(batch)
         etd = build_edge_time_dict(batch, ADV_ETYPE)
         t_id, d_id = rt.pair_ids(batch)
         print(f"[pagelink] {bi+1}/{len(pair_idx)} {t_id}->{d_id}: learning mask...",
@@ -245,7 +268,7 @@ def main(args: argparse.Namespace) -> None:
 
         exclude = tuple(x for x in args.exclude_relations.split(",") if x)
         paths, _ = enforce_paths(rt, batch, mask, args.num_paths, args.min_mask,
-                                 exclude_prefixes=exclude)
+                                 exclude_prefixes=exclude, max_hops=args.max_hops)
         for p in paths:
             e0 = p["edges"][0]
             # index chain (stable id) + human-readable accession+name chain
@@ -299,6 +322,11 @@ def _parse() -> argparse.Namespace:
                    help="EdgeMask logit init. <0 => sigmoid<0.5 => mask starts "
                         "sparse so edges are kept only if BCE pushes them up "
                         "(default -1.0 ~ m_e 0.27).")
+    p.add_argument("--max-hops", type=int, default=4,
+                   help="Max target->disease path length. Default 4 = the "
+                        "2-layer model's receptive field (2 hops per endpoint); "
+                        "longer paths traverse nodes the model never saw when "
+                        "scoring the query and are unfaithful.")
     p.add_argument("--num-paths", type=int, default=5,
                    help="k best (mean-cost) target->disease paths per pair.")
     p.add_argument("--min-mask", type=float, default=0.1,
