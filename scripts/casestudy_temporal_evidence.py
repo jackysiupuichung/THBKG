@@ -2,9 +2,13 @@
 
 For a (target, disease) pair, extract every direct evidence record from the
 dated Open Targets datasource parquets (evidenceDated/sourceId=*), plus the
-indirect evidence reachable via named neighbour targets (e.g. the other genes
-in the same multi-target trial / protein complex). Build a cumulative
-max-score-vs-year line plot up to the decision year, direct vs indirect.
+INDIRECT (on-path) evidence: every intermediate (target, disease) edge the
+model's fused explanation paths route through, excluding the direct query
+pair. This is the full evidence context contained in the explanation path, so
+it includes cross-disease detours (e.g. a bridge target's animal_model or
+genetic edge to an intermediate disease), not just neighbour targets that
+share the query disease. Build a cumulative max-score-vs-year line plot per
+datasource, direct vs indirect, up to the decision year and on to present.
 
 Run on a compute node (memory): srun --jobid=<J> .venv/bin/python scripts/casestudy_temporal_evidence.py
 """
@@ -38,19 +42,71 @@ GENE = {"ENSG00000078814": "MYH7B", "ENSG00000092054": "MYH7",
         "ENSG00000198851": "CD3E", "ENSG00000160654": "CD3G",
         "ENSG00000167286": "CD3D"}
 
-# Each case study: query pair + the indirect neighbour targets (verified) that
-# carry evidence for the same disease (shared trial / complex partners).
+# Each case study is a query pair; the INDIRECT neighbour targets are derived
+# automatically from the model's fused explanation paths (indirect_targets_from_paths
+# below), NOT hand-picked — so the direct/indirect temporal figure is fully
+# reproducible and exactly matches the intermediates the explanation routes through.
 CASES = {
-    "HCM": dict(
-        target="ENSG00000078814", tname="MYH7B",
-        disease="EFO_0000538", dname="hypertrophic cardiomyopathy",
-        decision=2016,
-        # other sarcomere myosins co-registered in the mavacamten HCM programme
-        indirect=["ENSG00000092054", "ENSG00000111245", "ENSG00000160808",
-                  "ENSG00000197616", "ENSG00000198336", "ENSG00000106631"],
+    "CD274_meso": dict(
+        target="ENSG00000120217", tname="CD274 (PD-L1)",
+        disease="EFO_0000588", dname="mesothelioma", decision=2016,
+    ),
+    "IL17F_psa": dict(
+        target="ENSG00000112116", tname="IL17F",
+        disease="EFO_0003778", dname="psoriatic arthritis", decision=2016,
+    ),
+    "TIGIT_nsclc": dict(
+        target="ENSG00000181847", tname="TIGIT",
+        disease="EFO_0003060", dname="non-small cell lung carcinoma", decision=2018,
     ),
 }
-# (NHL/CD3 case study dropped 2026-07-03 — the paper uses MYH7B->HCM only.)
+
+# Fused explanation paths (total-cost ranked) + the node mapping, used to derive
+# the indirect bridge targets per pair.
+PATHS_JSON = "/gpfs/scratch/bty414/biobridge_paths_totalcost.json"
+MAPPINGS = ("/gpfs/scratch/bty414/opentarget_evidences/26.03/progression/"
+            "temporal_graph_datatype_mappings.pt")
+
+
+def indirect_pairs_from_paths(target, disease):
+    """Every (target_ENSG, disease_EFO) pair that appears on a target--disease
+    edge of the fused explanation paths for the query (target, disease),
+    EXCLUDING the direct query pair itself.
+
+    "Indirect" here means the evidence *contained in the explanation path* — all
+    the intermediate target--disease edges the path routes through, including
+    detours through OTHER diseases (e.g. a bridge target's mouse-model or
+    genetic edge to a non-query disease). This is broader than "bridge targets
+    that share the query disease": it is the full on-path evidence context, so a
+    path edge like an animal_model edge to an intermediate disease is included
+    rather than filtered out. Returns a list of (ENSG, EFO) tuples.
+    """
+    import json, torch
+    try:
+        P = json.load(open(PATHS_JSON))
+    except FileNotFoundError:
+        return []
+    key = f"{target}|{disease}"
+    if key not in P:
+        return []
+    nm = torch.load(MAPPINGS, weights_only=False)["node_mapping"]
+    i2t = {v: k for k, v in dict(nm["target"]).items()}
+    i2d = {v: k for k, v in dict(nm["disease"]).items()}
+    pairs = []
+    for p in P[key]:
+        for e in p["E"]:
+            # e = [edge_type_str, src_tok, dst_tok, meta]; resolve each edge to a
+            # forward (target, disease) pair regardless of traversal direction.
+            src_tok, dst_tok = e[1], e[2]
+            toks = {tok.split("#")[0]: int(tok.split("#")[1])
+                    for tok in (src_tok, dst_tok)}
+            if "target" in toks and "disease" in toks:
+                acc_t = i2t.get(toks["target"])
+                acc_d = i2d.get(toks["disease"])
+                if acc_t and acc_d and (acc_t, acc_d) != (target, disease):
+                    if (acc_t, acc_d) not in pairs:
+                        pairs.append((acc_t, acc_d))
+    return pairs
 
 
 def load_source(src, targets):
@@ -74,18 +130,48 @@ def load_source(src, targets):
     return pd.concat(frames) if frames else pd.DataFrame()
 
 
+def _finalize(df):
+    """Common date/score coercion for an evidence frame."""
+    if not len(df):
+        return pd.DataFrame()
+    df = df.copy()
+    df["year"] = pd.to_datetime(df.evidenceDate, errors="coerce").dt.year
+    df = df.dropna(subset=["year"])
+    df["year"] = df["year"].astype(int)
+    df["score"] = pd.to_numeric(df.score, errors="coerce").fillna(0.0)
+    return df
+
+
 def evidence_for(targets, disease):
+    """Dated evidence for the given targets against a SINGLE disease (used for
+    the direct query pair)."""
     frames = [load_source(s, targets) for s in SOURCES]
     frames = [f for f in frames if len(f)]
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
     df = df[df.diseaseId == disease].copy()
-    df["year"] = pd.to_datetime(df.evidenceDate, errors="coerce").dt.year
-    df = df.dropna(subset=["year"])
-    df["year"] = df["year"].astype(int)
-    df["score"] = pd.to_numeric(df.score, errors="coerce").fillna(0.0)
-    return df
+    return _finalize(df)
+
+
+def evidence_for_pairs(pairs):
+    """Dated evidence for an explicit set of (targetId, diseaseId) pairs — the
+    on-path indirect evidence. Each edge on the explanation path contributes its
+    own (target, disease) pair, so a bridge target's evidence is only counted
+    against the disease it is actually linked to on the path (which may differ
+    from the query disease). This is the full on-path evidence context."""
+    if not pairs:
+        return pd.DataFrame()
+    targets = sorted({t for t, _ in pairs})
+    pairset = set(pairs)
+    frames = [load_source(s, targets) for s in SOURCES]
+    frames = [f for f in frames if len(f)]
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    keep = [(t, d) in pairset for t, d in zip(df.targetId, df.diseaseId)]
+    df = df[keep].copy()
+    return _finalize(df)
 
 
 def cumulative_max(df, years):
@@ -138,8 +224,16 @@ PRESENT = 2025
 
 def build(case_key, case):
     dec = case["decision"]
+    # Indirect evidence = the full on-path evidence context: every intermediate
+    # (target, disease) edge the explanation paths route through (excluding the
+    # direct query pair). DERIVED from the fused paths (not hand-picked), so the
+    # figure is fully reproducible and includes cross-disease detours (e.g. a
+    # bridge target's animal_model edge to an intermediate disease).
+    indirect_pairs = indirect_pairs_from_paths(case["target"], case["disease"])
+    print(f"  {case_key}: derived on-path indirect (target,disease) pairs = "
+          f"{indirect_pairs}", flush=True)
     direct = evidence_for([case["target"]], case["disease"])
-    indirect = evidence_for(case["indirect"], case["disease"])
+    indirect = evidence_for_pairs(indirect_pairs)
     yrs = list(range(2000, PRESENT + 1))          # extend to present, not just decision
     dsrc = cumulative_max_by_source(direct, yrs)
     isrc = cumulative_max_by_source(indirect, yrs)
@@ -156,7 +250,7 @@ def build(case_key, case):
     src_color = {s: cmap(i % 10) for i, s in enumerate(all_srcs)}
     handles = {}
     for ax, curves, title in [(ax1, dsrc, f"DIRECT: {case['tname']} – {case['dname']}"),
-                              (ax2, isrc, "INDIRECT: neighbour targets (shared trial / complex), same disease")]:
+                              (ax2, isrc, "INDIRECT: on-path intermediate target--disease edges")]:
         ax.axvspan(dec, PRESENT, color="0.92", zorder=0)
         ax.axvline(dec, ls="--", color="k", lw=1.5)
         for src, cur in sorted(curves.items(), key=lambda kv: -max(kv[1])):
@@ -213,6 +307,10 @@ def build(case_key, case):
         return recs
     summary["direct_top_records_pre"] = sample_records(direct[direct.year < dec])
     summary["indirect_top_records_pre"] = sample_records(indirect[indirect.year < dec])
+    # record the on-path (target,disease) pairs and the intermediate diseases
+    # they cover, so the write-up can name any cross-disease detour explicitly.
+    summary["indirect_pairs"] = [list(p) for p in indirect_pairs]
+    summary["indirect_diseases"] = sorted(indirect.diseaseId.unique().tolist()) if len(indirect) else []
     return summary
 
 
