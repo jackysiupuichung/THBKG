@@ -1461,17 +1461,26 @@ def evaluate(
     rs_strat["stratum_label"] = pd.Categorical(
         rs_strat["stratum_label"], categories=_stratum_label_order, ordered=True
     )
+    # Smooth per (model, stratum) with the same rolling mean as the headline
+    # TA-mean figure (3a), so the stratum lines read the same way.
+    rs_strat = rs_strat.sort_values(["stratum", "model_slug", "limit"])
+    rs_strat["relative_success_smooth"] = (
+        rs_strat.groupby(["stratum", "model_slug"])["relative_success"]
+        .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
+    )
+    _strat_slugs = [s for s in _slug_categories if s in set(rs_strat["model_slug"])]
     _save_plot(
+        # Match Figure 3a: faint raw points + smoothed line, dashed Random line.
         pn.ggplot(rs_strat, pn.aes(x="limit", y="relative_success", color="model_slug", group="model_slug"))
-        + pn.geom_line(size=0.9, alpha=0.85)
-        + pn.geom_point(size=1.5, alpha=0.85)
+        + pn.geom_point(alpha=0.3, size=1, show_legend=False)
+        + pn.geom_line(pn.aes(y="relative_success_smooth"), size=1, alpha=0.8)
         + pn.geom_hline(yintercept=1, linetype="dashed")
         + pn.facet_wrap("~ stratum_label", ncol=2, scales="free_y")
-        + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
+        + pn.scale_color_manual(values=slug_colors, breaks=_strat_slugs)
         + pn.scale_x_continuous(breaks=np.arange(10, 101, 20).tolist())
         + pn.scale_y_continuous(limits=(0, None))
-        + pn.labs(x="N top target-disease pairs (per TA)",
-                  y="relative success (TA-mean)", color="model")
+        + pn.labs(x="N top target-disease pairs (per therapeutic area)",
+                  y="mean relative success across TAs", color="model")
         + pn.theme_minimal()
         + pn.theme(figure_size=(10, 8)),
         plots_dir / "relative_success_by_limit_by_stratum.png",
