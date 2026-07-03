@@ -93,15 +93,16 @@ def plot_paths(paths, node_meta, title, out_png, dx=2.2, dy=1.6):
             nt, nm = node_meta.get(tok, ("?", tok))
             draw_node(ax, x, y, nt, nm)
         for i, e in enumerate(edges):
-            et, a, b, sn = e[0], e[1], e[2], (e[3] if len(e) > 3 else None)
-            if sn is None:
-                sc = "no edge"                      # genuinely absent at decision
-            else:
-                s, n = sn
-                # 3 sig-figs so tiny-but-real literature scores don't show as 0
-                sc = f"s={s:.3g}, n={n:.3g}"
+            et = e[0]
+            # Show the relation name only, not the per-edge s/n graph attributes.
+            # The figure's job is the mechanistic ROUTING (what connects to what);
+            # a path is only as strong as its object, and printing every edge's
+            # score invites reading a path as weak because a structural connector
+            # (shared-function, subtype-of) carries s~0, even when the anchor
+            # target-disease edge is strong. Evidence strength over time is shown
+            # in the temporal figure instead.
             is_rev = et.split("::")[1].startswith("rev_")
-            draw_edge(ax, xs[i], xs[i + 1], y, rel_label(et), sc, reverse=is_rev)
+            draw_edge(ax, xs[i], xs[i + 1], y, rel_label(et), None, reverse=is_rev)
         ax.text(-0.9, y, f"P{ri}", ha="right", va="center", fontsize=8,
                 fontweight="bold", color="#666")
     ax.set_xlim(-1.3, (maxlen) * dx + 0.4)
