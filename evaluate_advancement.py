@@ -1211,6 +1211,83 @@ def evaluate(
     fig.savefig(str(out_path), dpi=300, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
+    # Plot 5d: stratum x model RS heatmap (TA-mean per stratum). Same table
+    # style as the per-TA heatmap; rows = evidence/clinical-history strata,
+    # cols = model x cutoff. Summarises the numbers in the by-stratum text.
+    _strat_hm_order = [s for s in
+                       ["all", "evidence_free", "literature_only",
+                        "direct_evidence", "known", "pioneer"]
+                       if s in set(rs_by_limit_full["stratum"])]
+    _strat_hm_display = {
+        "all": "all pairs",
+        "evidence_free": "no prior evidence",
+        "literature_only": "text-mining only",
+        "direct_evidence": "prior experimental",
+        "known": "reached Phase II elsewhere",
+        "pioneer": "first-time Phase II",
+    }
+    shm = rs_by_limit_full[
+        rs_by_limit_full["stratum"].isin(_strat_hm_order)
+        & rs_by_limit_full["model_name"].isin(_heatmap_models)
+        & rs_by_limit_full["limit"].isin(_heatmap_limits)
+    ].copy()
+    if not shm.empty:
+        shm_pivot = shm.pivot_table(
+            index="stratum", columns=["model_name", "limit"],
+            values="relative_success", aggfunc="first",
+        )
+        s_col_order = [(m, lim) for m in _heatmap_models for lim in _heatmap_limits
+                       if (m, lim) in shm_pivot.columns]
+        shm_pivot = shm_pivot[s_col_order]
+        s_row_order = [s for s in _strat_hm_order if s in shm_pivot.index]
+        shm_pivot = shm_pivot.loc[s_row_order]
+
+        s_norms = {}
+        for m in _heatmap_models:
+            m_cols = [(mm, lim) for (mm, lim) in shm_pivot.columns if mm == m]
+            m_vals = shm_pivot[m_cols].values if m_cols else np.array([])
+            m_vals = m_vals[~np.isnan(m_vals)] if m_vals.size else m_vals
+            if m_vals.size:
+                vmn, vmx = float(np.nanmin(m_vals)), float(np.nanmax(m_vals))
+                if vmx <= vmn:
+                    vmx = vmn + 1e-6
+            else:
+                vmn, vmx = 0.0, 1.0
+            s_norms[m] = mcolors.Normalize(vmin=vmn, vmax=vmx)
+
+        s_nrows, s_ncols = shm_pivot.shape
+        s_fig_w = max(6, s_ncols * 1.2 + 3.0)
+        s_fig_h = max(2.5, s_nrows * 0.55 + 1.5)
+        sfig, sax = plt.subplots(figsize=(s_fig_w, s_fig_h))
+        sfig.patch.set_facecolor("white")
+        sax.set_aspect("auto")
+        for row_i, st in enumerate(s_row_order):
+            for col_i, (mn, lim) in enumerate(s_col_order):
+                v = shm_pivot.loc[st, (mn, lim)] if (mn, lim) in shm_pivot.columns else np.nan
+                color = per_model_cmaps[mn](s_norms[mn](v)) if pd.notna(v) else (0.85, 0.85, 0.85, 1)
+                sax.add_patch(plt.Rectangle([col_i, row_i], 1, 1, color=color))
+                if pd.notna(v):
+                    sax.text(col_i + 0.5, row_i + 0.5, f"{v:.2f}",
+                             ha="center", va="center", fontsize=8, fontweight="bold")
+        sax.set_xlim(0, s_ncols)
+        sax.set_ylim(0, s_nrows)
+        sax.set_xticks([i + 0.5 for i in range(s_ncols)])
+        sax.set_xticklabels([f"{model_display.get(m, m)}@{lim}" for m, lim in s_col_order],
+                            rotation=90, ha="center", fontsize=9)
+        sax.set_yticks([i + 0.5 for i in range(s_nrows)])
+        sax.set_yticklabels([_strat_hm_display.get(s, s) for s in s_row_order], fontsize=9)
+        sax.invert_yaxis()
+        sax.xaxis.tick_top()
+        sax.xaxis.set_label_position("top")
+        sax.tick_params(length=0)
+        for sep in range(len(_heatmap_limits), s_ncols, len(_heatmap_limits)):
+            sax.axvline(sep, color="white", linewidth=2)
+        sfig.tight_layout()
+        s_out = plots_dir / "relative_success_by_stratum_heatmap.png"
+        logger.info(f"Saving plot to {s_out}")
+        sfig.savefig(str(s_out), dpi=300, bbox_inches="tight", facecolor="white")
+        plt.close(sfig)
+
     # Plot 6: RS delta vs RDG heatmap (green = better than RDG, red = worse)
     _delta_models = [m for m in _heatmap_models if m != "rdg__no_time__positive"]
     if "rdg__no_time__positive" in all_model_names and _delta_models:
