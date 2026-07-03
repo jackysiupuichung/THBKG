@@ -883,9 +883,11 @@ def evaluate(
         .agg(relative_success=("relative_success", "mean"))
     )
     rs_mor = rs_mor.sort_values(["model_slug", "limit"])
+    # window=5 (not 9): the TA-mean grid is coarse (~11 points), so a lighter
+    # rolling mean lets the line track the dots more closely.
     rs_mor["relative_success_smooth"] = (
         rs_mor.groupby("model_slug")["relative_success"]
-        .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
+        .transform(lambda s: s.rolling(window=5, center=True, min_periods=1).mean())
     )
 
     # Bootstrap a 95% CI on the mean-of-ratios (resample over therapeutic
@@ -1466,7 +1468,7 @@ def evaluate(
     rs_strat = rs_strat.sort_values(["stratum", "model_slug", "limit"])
     rs_strat["relative_success_smooth"] = (
         rs_strat.groupby(["stratum", "model_slug"])["relative_success"]
-        .transform(lambda s: s.rolling(window=9, center=True, min_periods=1).mean())
+        .transform(lambda s: s.rolling(window=5, center=True, min_periods=1).mean())
     )
     _strat_slugs = [s for s in _slug_categories if s in set(rs_strat["model_slug"])]
     _save_plot(
