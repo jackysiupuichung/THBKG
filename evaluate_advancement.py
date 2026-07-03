@@ -1058,8 +1058,9 @@ def evaluate(
     )
     _save_plot(
         pn.ggplot(cm_ta_melt, pn.aes(x="model_slug", y="value", fill="model_slug"))
-        + pn.geom_boxplot(outlier_size=1, alpha=0.6)
-        + pn.geom_jitter(width=0.15, size=1.5, alpha=0.7)
+        + pn.geom_violin(alpha=0.55, scale="width", width=0.8, color="none")
+        + pn.geom_boxplot(width=0.12, alpha=0.7, outlier_alpha=0.0, color="black")
+        + pn.geom_jitter(width=0.12, size=1.0, alpha=0.45, color="black", show_legend=False)
         + pn.facet_wrap("~ metric", scales="free_y", ncol=1)
         + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.labs(x="", y="", fill="model")
@@ -1378,7 +1379,8 @@ def evaluate(
     # jitter layer instead, matching Plot 5, so each TA is one visible dot.
     _save_plot(
         pn.ggplot(rs_dist_df, pn.aes(x="model_slug", y="relative_success", fill="model_slug"))
-        + pn.geom_boxplot(alpha=0.55, width=0.7, color="black", outlier_alpha=0.0)
+        + pn.geom_violin(alpha=0.55, scale="width", width=0.8, color="none")
+        + pn.geom_boxplot(width=0.12, alpha=0.7, outlier_alpha=0.0, color="black")
         + pn.geom_jitter(width=0.12, size=1.0, alpha=0.45, color="black", show_legend=False)
         + pn.geom_text(data=rs_pval_df, mapping=pn.aes(x="model_slug", y="relative_success", label="plabel"),
                        inherit_aes=False, size=7, color="black", va="bottom")
@@ -1386,12 +1388,13 @@ def evaluate(
         + pn.facet_wrap("~ limit_label", nrow=1, scales="free_y")
         + pn.scale_fill_manual(values=slug_colors, breaks=_slug_categories)
         + pn.scale_color_manual(values=slug_colors, breaks=_slug_categories)
-        + pn.labs(x="", y="relative success (median, IQR; p = Wilcoxon EAHGT>model)")
+        + pn.labs(x="", y="relative success (per-TA median, IQR; p = Wilcoxon EAHGT>model)", fill="model")
         + pn.theme_minimal()
         + pn.theme(
             figure_size=(3.5 * len(_dist_limits), 5),
-            legend_position="none",
-            axis_text_x=pn.element_text(rotation=35, ha="right"),
+            legend_position="right",
+            axis_text_x=pn.element_blank(),
+            axis_ticks_major_x=pn.element_blank(),
         ),
         plots_dir / "rs_distributions_ta_box.png",
     )
