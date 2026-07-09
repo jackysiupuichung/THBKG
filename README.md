@@ -11,6 +11,15 @@ every temporal edge carries a snapshot year and a 2-dim evidence score. Models a
 trained to rank advancement candidates using only evidence available before each
 pair's decision year.
 
+## License
+
+The **source code** in this repository is released under the [MIT License](LICENSE).
+The **THBKG dataset artifacts** (the Open Targets 26.03 graph and EA-HGT
+advancement benchmark, archived at
+[doi.org/10.5281/zenodo.20795232](https://doi.org/10.5281/zenodo.20795232))
+are licensed separately under Creative Commons Attribution 4.0 International
+(CC-BY-4.0).
+
 ## Graph release
 
 The **canonical graph is the Open Targets 26.03 build** (20 relation types,
