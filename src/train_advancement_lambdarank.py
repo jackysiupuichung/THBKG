@@ -424,6 +424,14 @@ def main(cfg):
     edge_attr  = data[ADV_ETYPE].edge_attr
     edge_time  = data[ADV_ETYPE].edge_time
 
+    # Temporal masking for FUTURE-link prediction: the advancement edge_time is
+    # the transition (outcome) year; a pair must be scored on evidence strictly
+    # BEFORE that year. PyG's LinkNeighborLoader keeps context edges with
+    # edge_time <= edge_label_time (inclusive of the transition year), so we
+    # pass (edge_time - 1) as the label time to get strict `<` — the standard
+    # temporal-LP convention (t < target_time). See memory: masking_strict_before.
+    seed_time = edge_time - 1
+
     train_labels_all = edge_attr[train_mask, 0]
     n_pos = train_labels_all.sum().item()
     n_neg = len(train_labels_all) - n_pos
@@ -481,7 +489,7 @@ def main(cfg):
         "primary_tas_json",
         repo_root / "advancement_data/results/primary_therapeutic_areas.json",
     ))
-    ta_by_disease_idx, primary_tas = None, None
+    ta_by_disease_idx, group_tas, primary_tas = None, None, None
     _group_all_tas = bool(cfg.train.get("lambdarank", {}).get("group_all_tas", False))
     if Path(ta_parquet_path).exists() and Path(primary_tas_json_path).exists():
         mappings_for_ta = torch.load(cfg.data.mappings_file, weights_only=False)
@@ -552,7 +560,7 @@ def main(cfg):
         num_neighbors=num_neighbors,
         edge_label_index=(ADV_ETYPE, edge_index[:, train_mask]),
         edge_label=edge_attr[train_mask, 0],
-        edge_label_time=edge_time[train_mask],
+        edge_label_time=seed_time[train_mask],
         time_attr="edge_time",
         temporal_strategy="last",
         batch_size=cfg.train.batch_size,
@@ -564,7 +572,7 @@ def main(cfg):
         num_neighbors=num_neighbors,
         edge_label_index=(ADV_ETYPE, edge_index[:, val_mask]),
         edge_label=edge_attr[val_mask, 0],
-        edge_label_time=edge_time[val_mask],
+        edge_label_time=seed_time[val_mask],
         time_attr="edge_time",
         temporal_strategy="last",
         batch_size=cfg.train.batch_size,
@@ -584,7 +592,7 @@ def main(cfg):
 
     test_edge_index = edge_index[:, test_mask]
     test_edge_labels = edge_attr[test_mask, 0]
-    test_edge_times  = edge_time[test_mask]
+    test_edge_times  = seed_time[test_mask]   # strict `<`: score on evidence before the transition year
 
     test_ta_per_item = None
     if ta_by_disease_idx is not None:
