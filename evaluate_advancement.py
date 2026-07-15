@@ -228,6 +228,12 @@ def _collect_inject(
     """Resolve predictions from DEFAULT_RUNS into a flat inject list."""
     result = list(inject or [])
 
+    # When an explicit --inject list is given WITHOUT --only, evaluate exactly
+    # those models — do NOT also auto-load every DEFAULT_RUNS entry (that mixes
+    # unrelated runs onto the current zarr and can collide display slugs).
+    if inject and only is None:
+        return result
+
     runs = dict(DEFAULT_RUNS)
     if only is not None:
         if isinstance(only, (list, tuple)):
@@ -451,6 +457,77 @@ def _compute_rs_by_ta(evaluation_dataset: xr.Dataset,
     return pd.DataFrame(rows)
 
 
+def _compute_temporal_decay(evaluation_dataset: xr.Dataset,
+                            strata_test: pd.DataFrame,
+                            model_names: list[str],
+                            top_fraction: float = 0.10,
+                            confidence: float = 0.90,
+                            disease_filter: set | None = None) -> pd.DataFrame:
+    """Per-model performance as a function of the pair's decision year.
+
+    Answers "do trials whose decision year lies further in the future score
+    worse?" Groups test pairs by `t_decision` (the advancement-edge year carried
+    in strata_test) and, within each year, computes:
+      - relative_success: pooled top-`top_fraction` RR within that year's pairs
+        (threshold-mask, tie-inclusive, matching _compute_relative_success_by_limit)
+      - roc_auc: ranking quality within the year (needs both classes present)
+
+    A downward trend in either metric across increasing years is temporal decay.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    outcomes = evaluation_dataset.outcome.squeeze("outcomes").to_series().reset_index()
+    outcomes.columns = ["target_id", "disease_id", "outcome"]
+    preds = (
+        evaluation_dataset.prediction.sel(classes="positive")
+        .to_series().reset_index()
+        .rename(columns={"prediction": "score"})
+    )
+    preds = preds[preds["models"].isin(model_names)]
+
+    yr = strata_test[["target_id", "disease_id", "t_decision"]].drop_duplicates()
+
+    rows = []
+    for model, grp in preds.groupby("models"):
+        merged = (
+            grp.merge(outcomes, on=["target_id", "disease_id"])
+               .merge(yr, on=["target_id", "disease_id"])
+        )
+        if disease_filter is not None:
+            merged = merged[merged["disease_id"].isin(disease_filter)]
+        for year, yg in merged.groupby("t_decision"):
+            n = len(yg)
+            if n < 10:  # too few pairs for a meaningful year estimate
+                continue
+            limit = max(1, round(n * top_fraction))
+            threshold = yg["score"].nlargest(limit).min()
+            exposed = yg[yg["score"] >= threshold]
+            control = yg[yg["score"] < threshold]
+            rs = rs_low = rs_high = np.nan
+            if len(exposed) and len(control) and control["outcome"].sum() > 0:
+                rr = relative_risk(
+                    exposed["outcome"].sum(), len(exposed),
+                    control["outcome"].sum(), len(control),
+                )
+                ci = rr.confidence_interval(confidence_level=confidence)
+                rs, rs_low, rs_high = rr.relative_risk, ci.low, ci.high
+            auc = np.nan
+            if yg["outcome"].nunique() == 2:
+                auc = roc_auc_score(yg["outcome"].astype(int), yg["score"])
+            rows.append({
+                "model_name": model,
+                "t_decision": int(year),
+                "relative_success": rs if np.isfinite(rs) else np.nan,
+                "relative_success_low": rs_low,
+                "relative_success_high": rs_high,
+                "roc_auc": auc,
+                "n_pairs": n,
+                "n_positives": int(yg["outcome"].sum()),
+                "base_rate": yg["outcome"].mean(),
+            })
+    return pd.DataFrame(rows)
+
+
 # ---------------------------------------------------------------------------
 # Plot helpers
 # ---------------------------------------------------------------------------
@@ -579,6 +656,19 @@ def evaluate(
         "enc_gatv2_ens":          "GATv2",
         "enc_rgcn_ens":           "R-GCN",
         "enc_compgcn_ens":        "CompGCN",
+        # w3 retrain (26.03 w3 labels): HGT + GATv2 edge-feature ablation.
+        # Distinct slugs so they don't collide with the _ens names under the
+        # 12-char truncation used for unmapped external models.
+        "enc_hgt_w3":             "HGT",
+        "enc_gatv2_w3":           "GATv2",
+        "enc_rgcn_w3":            "R-GCN",
+        "enc_compgcn_w3":         "CompGCN",
+        "abl_score_w3":           "EAHGT-score",
+        "abl_novelty_w3":         "EAHGT-novelty",
+        "p3_eahgt_both_w3":       "EAHGT",
+        "gatv2_score_w3":         "GATv2-score",
+        "gatv2_novelty_w3":       "GATv2-novelty",
+        "gatv2_both_w3":          "GATv2-both",
         # Bilinear-decoder variant (collapse-resistant; reported alongside MLP)
         "p3_eahgt_both_bilinear": "EAHGT-Bilinear",
         # 23.06 EAHGT variations (decoder / loss / centering / training)
@@ -1570,6 +1660,71 @@ def evaluate(
         + pn.theme(figure_size=(10, 8)),
         plots_dir / "relative_success_by_limit_by_stratum.png",
     )
+
+    # ------------------------------------------------------------------
+    # Temporal decay: performance vs the pair's decision year
+    # ------------------------------------------------------------------
+    # Do trials whose decision year is further in the future score worse? Bin the
+    # test pairs by t_decision and track pooled top-10% RS and per-year ROC-AUC.
+    # Restricted to primary-TA diseases so it matches the rest of the eval set.
+    logger.info("Computing temporal decay (performance vs decision year)...")
+    decay = _compute_temporal_decay(
+        evaluation_dataset, strata_test, all_model_names,
+        top_fraction=0.10, confidence=0.90,
+        disease_filter=_primary_disease_filter,
+    )
+    if not decay.empty:
+        decay["model_slug"] = decay["model_name"].map(model_display)
+        decay.to_csv(results_dir / "temporal_decay.csv", index=False)
+        logger.info(f"Wrote {results_dir / 'temporal_decay.csv'}")
+
+        _decay_slugs = [s for s in _slug_categories if s in set(decay["model_slug"])]
+        decay["model_slug"] = _as_ordered_slug(decay["model_slug"])
+
+        # RS-vs-year panel (top): dashed Random line + per-model 90% CI ribbon.
+        # AUROC-vs-year panel (bottom): 0.5 = chance ranking.
+        rs_d = decay.dropna(subset=["relative_success"])
+        _rs_ymax = float(np.nanmax(rs_d["relative_success_high"])) * 1.05 if len(rs_d) else 5.0
+        p_rs = (
+            pn.ggplot(rs_d, pn.aes(x="t_decision", y="relative_success",
+                                   color="model_slug", fill="model_slug", group="model_slug"))
+            + pn.geom_ribbon(pn.aes(ymin="relative_success_low", ymax="relative_success_high"),
+                             alpha=0.15, color=None)
+            + pn.geom_line(size=1) + pn.geom_point(size=1.5)
+            + pn.geom_hline(yintercept=1, linetype="dashed")
+            + pn.annotate("text", x=float(rs_d["t_decision"].max()), y=1.0,
+                          label="Random (RS=1)", size=8, ha="right", va="bottom")
+            + pn.scale_color_manual(values=slug_colors, breaks=_decay_slugs)
+            + pn.scale_fill_manual(values=slug_colors, breaks=_decay_slugs)
+            + pn.scale_y_continuous(limits=(0, _rs_ymax), oob=mizani.bounds.squish)
+            + pn.labs(x="decision year (advancement-edge year)",
+                      y="relative success (pooled top 10%)", color="model", fill="model")
+            + pn.theme_minimal() + pn.theme(figure_size=(10, 4))
+        )
+        _save_plot(p_rs, plots_dir / "temporal_decay_rs.png")
+
+        auc_d = decay.dropna(subset=["roc_auc"])
+        if len(auc_d):
+            p_auc = (
+                pn.ggplot(auc_d, pn.aes(x="t_decision", y="roc_auc",
+                                        color="model_slug", group="model_slug"))
+                + pn.geom_line(size=1) + pn.geom_point(size=1.5)
+                + pn.geom_hline(yintercept=0.5, linetype="dashed")
+                + pn.scale_color_manual(values=slug_colors, breaks=_decay_slugs)
+                + pn.scale_y_continuous(limits=(0, 1))
+                + pn.labs(x="decision year (advancement-edge year)",
+                          y="ROC-AUC (within year)", color="model")
+                + pn.theme_minimal() + pn.theme(figure_size=(10, 4))
+            )
+            _save_plot(p_auc, plots_dir / "temporal_decay_auc.png")
+
+        # Console summary: earliest vs latest decision years, per model.
+        print("\n=== Temporal decay (RS pooled top-10% by decision year) ===")
+        piv = decay.pivot_table(index="model_slug", columns="t_decision",
+                                 values="relative_success", observed=True)
+        print(piv.round(2).to_string())
+    else:
+        logger.warning("Temporal decay: no year had >=10 primary-TA pairs — skipping.")
 
     focal_model = next(
         (m for m in ["p3_lambdarank_undirected", "p3_lambdarank_directed", *external_model_names] if m in all_model_names),
