@@ -71,8 +71,3 @@ class IntActParser(EdgeParser):
         out_path = os.path.join(self.output_dir, f"{out_name}.parquet")
         self.serialise(df, out_path)
         return {"intact": df}
-
-if __name__ == "__main__":
-    test_file = "/Users/pui.chungsiu/Documents/opentarget_het_graph/data/evidenceDated_subset/23.06/intact/test_intact_human.txt"
-    parser = IntActParser(root_dir="data", schema_file="config/edge_schema.yaml", output_dir="output")
-    parser.parse(file_path=test_file)
