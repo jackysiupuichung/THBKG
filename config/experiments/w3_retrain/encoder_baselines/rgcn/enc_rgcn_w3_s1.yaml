@@ -1,8 +1,8 @@
 experiment:
   name: enc_rgcn_w3_s1
 data:
-  graph_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/graph/hetero_graph_with_features_datatype_w3.pt
-  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_w3_mappings.pt
+  graph_file: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.03/graph/hetero_graph_with_features_datatype_w3.pt
+  mappings_file: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.03/progression/temporal_graph_datatype_w3_mappings.pt
   undirected: true
   random_val_frac: 0.2
   random_seed: 1
@@ -15,7 +15,7 @@ model:
   use_rte: false
   use_edge_features: false
 train:
-  output_dir: /gpfs/scratch/bty414/opentarget_evidences/26.03/runs/w3_retrain/encoder_baselines/rgcn/enc_rgcn_w3_s1
+  output_dir: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.03/runs/w3_retrain/encoder_baselines/rgcn/enc_rgcn_w3_s1
   num_epochs: 40
   lr: 0.0012210662097848076
   weight_decay: 0.004576350199545482

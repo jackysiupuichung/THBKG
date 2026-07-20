@@ -21,9 +21,14 @@ CFG = REPO / "config" / "experiments"
 OUT = CFG / "w3_retrain"
 SEEDS = [1, 7, 42, 123, 2024]
 
-W3_GRAPH = "/gpfs/scratch/bty414/opentarget_evidences/26.03/graph/hetero_graph_with_features_datatype_w3.pt"
-W3_MAP   = "/gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_w3_mappings.pt"
-OUT_ROOT = "/gpfs/scratch/bty414/opentarget_evidences/26.03/runs/w3_retrain"
+# Paths are emitted as OmegaConf env interpolations so the configs are portable:
+# set THBKG_DATA_ROOT to the unpacked release (defaults to the author's cluster
+# scratch, matching evaluate_advancement.py). Resolved at config-load time via
+# OmegaConf.to_container(cfg, resolve=True) in the training entrypoint.
+_DR = "${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}"
+W3_GRAPH = f"{_DR}/26.03/graph/hetero_graph_with_features_datatype_w3.pt"
+W3_MAP   = f"{_DR}/26.03/progression/temporal_graph_datatype_w3_mappings.pt"
+OUT_ROOT = f"{_DR}/26.03/runs/w3_retrain"
 
 # (family, subdir, source-template-dir, name-prefix)
 ENCODERS = [("hgt","hgt"), ("gatv2","gatv2"), ("rgcn","rgcn"), ("compgcn","compgcn")]

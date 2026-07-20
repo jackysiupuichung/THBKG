@@ -1,8 +1,8 @@
 experiment:
   name: gatv2_both_w3_s42
 data:
-  graph_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/graph/hetero_graph_with_features_datatype_w3.pt
-  mappings_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_w3_mappings.pt
+  graph_file: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.03/graph/hetero_graph_with_features_datatype_w3.pt
+  mappings_file: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.03/progression/temporal_graph_datatype_w3_mappings.pt
   undirected: true
   random_val_frac: 0.2
   random_seed: 42
@@ -15,7 +15,7 @@ model:
   edge_feat_cols: [0, 1]
   edge_feat_dim: 2
 train:
-  output_dir: /gpfs/scratch/bty414/opentarget_evidences/26.03/runs/w3_retrain/gatv2_ablation/both/gatv2_both_w3_s42
+  output_dir: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.03/runs/w3_retrain/gatv2_ablation/both/gatv2_both_w3_s42
   num_epochs: 40
   lr: 0.0009511974905423232
   weight_decay: 0.0011653823378934012

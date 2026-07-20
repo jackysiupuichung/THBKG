@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[3]
 CFG = REPO / "config" / "experiments"
 OUT = CFG / "w3_retrain" / "gatv2_ablation"
 SEEDS = [1, 7, 42, 123, 2024]
-OUT_ROOT = "/gpfs/scratch/bty414/opentarget_evidences/26.03/runs/w3_retrain/gatv2_ablation"
+OUT_ROOT = "${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.03/runs/w3_retrain/gatv2_ablation"
 ABL = {"score": [0], "novelty": [1], "both": [0, 1]}
 
 n = 0
