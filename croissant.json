@@ -40,7 +40,7 @@
   "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG): a biomedical knowledge graph in which every edge is dated by the year its evidence first appeared, enabling as-of queries that reconstruct a target-disease pair's evidence profile exactly as it stood at any historical decision point. Derived from Open Targets release 26.03, Reactome, ChEMBL, and ClinicalTrials.gov. Ships a leak-free clinical-advancement benchmark: each pair is scored only from evidence datable strictly before its Phase II transition year. Nodes: 110,396 across five types (target, disease, molecule, Gene Ontology term, Reactome pathway); ~11.1M edges across nineteen context relations (sixteen temporal, three static); 28,795 target-disease advancement labels split temporally into 21,602 training and 7,193 evaluation pairs (w3 window).",
   "version": "26.03",
   "license": "https://creativecommons.org/licenses/by/4.0/",
-  "url": "https://github.com/jackysiupuichung/opentarget_het_graph",
+  "url": "https://github.com/jackysiupuichung/thbkg",
   "sameAs": "https://doi.org/10.5281/zenodo.20795232",
   "citeAs": "Siu, Cabrera, Mudaliar, and Zubiaga. THBKG: A Temporal Biomedical Knowledge Graph for Leak-Free Clinical Advancement Prediction.",
   "keywords": [
@@ -62,7 +62,7 @@
       "@id": "github-repo",
       "name": "github-repo",
       "description": "THBKG source repository: construction pipeline, benchmark splits, and evaluation harness.",
-      "contentUrl": "https://github.com/jackysiupuichung/opentarget_het_graph/tree/v26.03",
+      "contentUrl": "https://github.com/jackysiupuichung/thbkg/tree/v26.03",
       "encodingFormat": "git+https",
       "sha256": "main"
     },
