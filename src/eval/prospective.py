@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.train_advancement_hgt import ADV_ETYPE, predict_test
+from src.advancement_core import ADV_ETYPE, predict_test
 
 
 def _trial_etypes(data) -> list[tuple[str, str, str]]:

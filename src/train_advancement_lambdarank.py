@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Train HGT for advancement link prediction with LambdaRank loss.
 
-Mirrors src/train_advancement_hgt.py but swaps the pointwise BCE/focal
+Mirrors src/advancement_core.py but swaps the pointwise BCE/focal
 objective for a batch-level LambdaRank loss and uses NDCG@K for early
 stopping. Graph construction, splits, model, and sampling are identical so
 runs can be compared against the BCE baseline.
@@ -25,7 +25,7 @@ import wandb
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.train_advancement_hgt import (
+from src.advancement_core import (
     ADV_ETYPE,
     TeeLogger,
     split_advancement_edges,

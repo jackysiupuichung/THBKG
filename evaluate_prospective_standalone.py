@@ -23,7 +23,7 @@ from omegaconf import OmegaConf
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.train_advancement_hgt import build_context_graph, split_advancement_edges, ADV_ETYPE
+from src.advancement_core import build_context_graph, split_advancement_edges, ADV_ETYPE
 from src.models.utils import build_model
 from src.eval.prospective import run_prospective_eval
 

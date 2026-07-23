@@ -79,7 +79,7 @@ def compute_baseline_metrics():
     baseline by scoring its predictions against the evaluation zarr."""
     import xarray as xr
     import torch
-    from src.train_advancement_hgt import compute_metrics
+    from src.advancement_core import compute_metrics
     from src.benchmark.metrics import ndcg_ta_mean_at_k, rs_ta_mean_at_k
 
     ds = xr.open_zarr(str(ZARR)).load()

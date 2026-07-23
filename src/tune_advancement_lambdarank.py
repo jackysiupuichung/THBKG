@@ -38,7 +38,7 @@ from src.data.temporal_loader import load_event_graph
 from src.models.utils import build_model
 from torch_geometric.loader import LinkNeighborLoader
 
-from src.train_advancement_hgt import (
+from src.advancement_core import (
     ADV_ETYPE,
     split_advancement_edges,
     build_context_graph,
@@ -235,7 +235,7 @@ def _trial_worker(config_path: str, sweep_overrides: dict, run_id: str,
     from src.data.temporal_loader import load_event_graph
     from src.models.utils import build_model
     from torch_geometric.loader import LinkNeighborLoader
-    from src.train_advancement_hgt import (
+    from src.advancement_core import (
         ADV_ETYPE, split_advancement_edges, build_context_graph,
     )
     from src.train_advancement_lambdarank import (
