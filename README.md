@@ -67,17 +67,9 @@ fuse:
 sbatch scripts/advancement_prediction/run_grouped_ensemble_strictmask.sh
 ```
 
-## Documentation
-
-| Doc | Contents |
-|-----|----------|
-| [GRAPH_STRUCTURE.md](GRAPH_STRUCTURE.md) | Node/edge types, feature dims, directionality, sources. |
-| [TRAINING_DETAILS.md](TRAINING_DETAILS.md) | Architectures (HGT / EA-HGT / GATv2 / LambdaRank), hyperparameters, losses, splits, metrics. |
-
 ## License
 
 Source code: [MIT](LICENSE). Dataset artifacts: CC-BY-4.0 (see Zenodo above).
 
-> The 23.06 build referenced in `GRAPH_STRUCTURE.md` has a same-year
-> clinical-trial-edge leak and is **deprecated** — use 26.03. `GRAPH_STRUCTURE.md`
-> stays useful as a type reference, but its counts and paths are for the old build.
+> The canonical build is Open Targets 26.03; the earlier 23.06 build had a
+> same-year clinical-trial-edge leak and is **deprecated**.
