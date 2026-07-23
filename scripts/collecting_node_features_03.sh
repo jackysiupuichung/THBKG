@@ -35,7 +35,7 @@ echo "   Evidence: $EVIDENCE_DIR"
 echo "   Raw Feature Data: $FEATURE_DATA_DIR"
 echo "   Output: $FEATURE_OUTPUT_DIR"
 
-python -m src.node_features.build_all_features \
+python -m preprocessing.node_features.build_all_features \
   --mappings-file "$MAPPINGS_FILE" \
   --evidence-dir "$EVIDENCE_DIR" \
   --feature-data-dir "$FEATURE_DATA_DIR" \

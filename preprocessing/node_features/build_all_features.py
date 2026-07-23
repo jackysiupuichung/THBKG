@@ -206,7 +206,7 @@ def main():
                 "--target-ids-file", node_files['target']
             ]
             print(f"✅ Using {node_files['target']}")
-            run_script("src/node_features/target_features.py", target_args)
+            run_script("preprocessing/node_features/target_features.py", target_args)
     else:
         print("⚠️  No target nodes in graph")
     
@@ -235,7 +235,7 @@ def main():
             ]
             print(f"✅ Using {node_files['disease']}")
             print(f"   Looking up data in: {evidence_dir}/diseases")
-            run_script("src/node_features/disease_description.py", disease_args)
+            run_script("preprocessing/node_features/disease_description.py", disease_args)
     else:
         print("⚠️  No disease nodes in graph")
     
@@ -274,7 +274,7 @@ def main():
                 "--embedding-dim", "64",
                 "--num-epochs", "100",
             ]
-            run_script("src/node_features/pathway_go_autoencoder.py", go_args)
+            run_script("preprocessing/node_features/pathway_go_autoencoder.py", go_args)
             
             # Subset to graph nodes if GO nodes exist in graph
             if 'go' in node_files:
@@ -312,7 +312,7 @@ def main():
                 "--embedding-dim", "64",
                 "--num-epochs", "100",
             ]
-            run_script("src/node_features/pathway_go_autoencoder.py", reactome_args)
+            run_script("preprocessing/node_features/pathway_go_autoencoder.py", reactome_args)
             
             # Subset to graph nodes if Reactome nodes exist in graph
             if 'reactome' in node_files:
@@ -353,7 +353,7 @@ def main():
             ]
             print(f"✅ Using {node_files['molecule']}")
             print(f"   Looking up data in: {evidence_dir}/molecule")
-            run_script("src/node_features/molecule_structure.py", molecule_args)
+            run_script("preprocessing/node_features/molecule_structure.py", molecule_args)
     else:
         print("⚠️  No molecule nodes in graph")
     
