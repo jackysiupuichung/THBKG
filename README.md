@@ -1,21 +1,38 @@
-# THBKG
+[![Dataset: Zenodo](https://img.shields.io/badge/dataset-Zenodo%2010.5281%2Fzenodo.20795231-1682D4)](https://doi.org/10.5281/zenodo.20795231)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![PyTorch Geometric](https://img.shields.io/badge/PyG-CUDA%2011.8-EE4C2C)](https://pyg.org/)
 
-The **Temporal Heterogeneous Biomedical Knowledge Graph** — a dated biomedical
-knowledge graph built from [Open Targets](https://www.opentargets.org/) 26.03
-(with Reactome, ChEMBL, and ClinicalTrials.gov), plus the code for its
-**clinical-advancement benchmark**: ranking target–disease pairs by their
-likelihood of advancing to Phase II, scored only from evidence datable *strictly
-before* each pair's decision year.
+# THBKG — Temporal Heterogeneous Biomedical Knowledge Graph
+
+A dated biomedical knowledge graph built from
+[Open Targets](https://www.opentargets.org/) 26.03 (with Reactome, ChEMBL, and
+ClinicalTrials.gov), plus the code for its **clinical-advancement benchmark**:
+ranking target–disease pairs by their likelihood of advancing to Phase II,
+scored only from evidence datable *strictly before* each pair's decision year.
 
 Every temporal edge carries the year its evidence first appeared, so the graph
 can be queried as of any historical decision point without leakage. Full dataset
 description and statistics are in [croissant.json](croissant.json).
 
-## Dataset
+## Load the dataset
 
 Packaged 26.03 graph + advancement benchmark are archived on Zenodo
-([doi.org/10.5281/zenodo.20795231](https://doi.org/10.5281/zenodo.20795231),
-CC-BY-4.0). Point the code at an unpacked copy:
+(CC-BY-4.0). Cite the concept DOI
+[10.5281/zenodo.20795231](https://doi.org/10.5281/zenodo.20795231) (all
+versions); the built graph tensors — `hetero_graph_with_features.pt` and
+`temporal_graph_mappings.pt` — are attached to version
+[10.5281/zenodo.21529524](https://doi.org/10.5281/zenodo.21529524).
+
+```python
+import torch
+from src.data.temporal_loader import load_event_graph
+
+graph    = load_event_graph("hetero_graph_with_features.pt")   # PyG HeteroData
+mappings = torch.load("temporal_graph_mappings.pt", weights_only=False)
+```
+
+To run the CLI against an unpacked copy, point it at the data root:
 
 ```bash
 export THBKG_DATA_ROOT=/path/to/opentarget_evidences
@@ -43,10 +60,13 @@ python evaluate_advancement.py --only p3_eahgt_both,b1_hgt  # a subset
 
 The primary metric is **Relative Success @ K** (an importance-weighted hit rate),
 reported per therapeutic area (TA-mean over 13 areas) and Wilcoxon-tested against
-a randomized-decisions baseline. RDG (Czech et al. ridge regression) and OTS
-(Open Targets global score) references come from the packaged
-`evaluation_dataset.zarr`. The official EA-HGT result is a grouped five-seed,
-validation-selected, percentile-rank-fused ensemble.
+a randomized-decisions baseline.
+
+| Reference | What it is | Source |
+|---|---|---|
+| **EA-HGT** | Grouped five-seed, validation-selected, percentile-rank-fused ensemble (official result) | this repo |
+| **RDG** | Ridge regression on decision-time features (Czech et al.) | `evaluation_dataset.zarr` |
+| **OTS** | Open Targets global association score | `evaluation_dataset.zarr` |
 
 ## Explainability
 
