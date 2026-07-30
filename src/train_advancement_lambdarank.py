@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.advancement_core import (
     ADV_ETYPE,
     TeeLogger,
+    resolve_advancement_labels,
     split_advancement_edges,
     build_context_graph,
     _build_edge_time_dict,
@@ -402,8 +403,15 @@ def main(cfg):
     data = load_event_graph(cfg.data.graph_file, to_undirected=to_undirected)
 
     _data_cfg = cfg.get("data", {})
+
+    # Advancement labels are supervision, not graph evidence: the graph only
+    # registers the labelled (target, disease) nodes, and the outcome/transition
+    # year come from the dataset CSVs here.
+    print("Loading advancement labels (external supervision)...")
+    adv_labels = resolve_advancement_labels(data=data, cfg=cfg)
+
     train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(
-        data,
+        adv_labels,
         cutoff_year=int(_data_cfg.get("train_cutoff_year", 2010)),
         val_min_year=_data_cfg.get("val_min_year", None),
         val_max_year=_data_cfg.get("val_max_year", None),
@@ -420,9 +428,9 @@ def main(cfg):
     print(f"  Val   edges: {val_mask.sum().item()}")
     print(f"  Test  edges: {test_mask.sum().item()}")
 
-    edge_index = data[ADV_ETYPE].edge_index
-    edge_attr  = data[ADV_ETYPE].edge_attr
-    edge_time  = data[ADV_ETYPE].edge_time
+    edge_index = adv_labels.edge_index
+    edge_attr  = adv_labels.edge_attr
+    edge_time  = adv_labels.edge_time
 
     # Temporal masking for FUTURE-link prediction: the advancement edge_time is
     # the transition (outcome) year; a pair must be scored on evidence strictly
@@ -835,7 +843,8 @@ def main(cfg):
     prosp_cfg = eval_cfg.get("prospective", None) if eval_cfg is not None else None
     if prosp_cfg is not None and list(prosp_cfg.get("diseases", []) or []):
         from src.eval.prospective import run_prospective_eval
-        run_prospective_eval(model, data, context, mappings, cfg, output_dir)
+        run_prospective_eval(model, data, context, mappings, cfg, output_dir,
+                             adv_labels=adv_labels)
 
     wandb.finish()
 

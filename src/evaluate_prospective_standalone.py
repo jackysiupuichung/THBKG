@@ -24,7 +24,12 @@ from omegaconf import OmegaConf
 # file is run directly rather than as `python -m src.evaluate_prospective_standalone`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.advancement_core import build_context_graph, split_advancement_edges, ADV_ETYPE
+from src.advancement_core import (
+    ADV_ETYPE,
+    build_context_graph,
+    resolve_advancement_labels,
+    split_advancement_edges,
+)
 from src.models.utils import build_model
 from src.eval.prospective import run_prospective_eval
 
@@ -85,8 +90,9 @@ def main():
     print(f"Loading graph from {cfg.data.graph_file} (undirected={to_undirected})")
     data = load_event_graph(cfg.data.graph_file, to_undirected=to_undirected)
 
-    train_mask, _, _, _ = split_advancement_edges(data)
-    edge_time = data[ADV_ETYPE].edge_time
+    adv_labels = resolve_advancement_labels(data=data, cfg=cfg)
+    train_mask, _, _, _ = split_advancement_edges(adv_labels)
+    edge_time = adv_labels.edge_time
 
     print("Building context graph...")
     context = build_context_graph(data)
@@ -122,7 +128,8 @@ def main():
 
     mappings = torch.load(cfg.data.mappings_file, weights_only=False)
 
-    run_prospective_eval(model, data, context, mappings, cfg, output_dir)
+    run_prospective_eval(model, data, context, mappings, cfg, output_dir,
+                         adv_labels=adv_labels)
 
 
 if __name__ == "__main__":

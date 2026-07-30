@@ -39,7 +39,7 @@ sys.path.insert(0, str(ROOT))
 from src.data.temporal_loader import (
     ADV_ETYPE, REV_ADV_ETYPE, build_context_graph,
     build_edge_time_dict as _build_edge_time_dict,
-    load_event_graph, split_advancement_edges,
+    load_event_graph, resolve_advancement_labels, split_advancement_edges,
 )
 from src.models.utils import build_model
 
@@ -166,13 +166,14 @@ def main(run_dir: Path):
     cfg, data, context, mappings, model = load_model(run_dir, device)
 
     # Build test edge_label_index
+    adv_labels = resolve_advancement_labels(data=data, cfg=cfg)
     train_mask, val_mask, test_mask, _ = split_advancement_edges(
-        data,
+        adv_labels,
         val_min_year=cfg.data.get("val_min_year"),
         val_max_year=cfg.data.get("val_max_year"),
     )
-    ei = data[ADV_ETYPE].edge_index
-    ea = data[ADV_ETYPE].edge_attr
+    ei = adv_labels.edge_index
+    ea = adv_labels.edge_attr
     test_idx = test_mask.nonzero(as_tuple=False).flatten()
     test_ei = ei[:, test_idx]
     test_labels = ea[test_idx, 0].cpu().numpy().astype(int)

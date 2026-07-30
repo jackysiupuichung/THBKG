@@ -40,6 +40,7 @@ from torch_geometric.loader import LinkNeighborLoader
 
 from src.advancement_core import (
     ADV_ETYPE,
+    resolve_advancement_labels,
     split_advancement_edges,
     build_context_graph,
     TeeLogger,
@@ -237,6 +238,7 @@ def _trial_worker(config_path: str, sweep_overrides: dict, run_id: str,
     from torch_geometric.loader import LinkNeighborLoader
     from src.advancement_core import (
         ADV_ETYPE, split_advancement_edges, build_context_graph,
+        resolve_advancement_labels,
     )
     from src.train_advancement_lambdarank import (
         run_epoch_lambdarank, evaluate_lambdarank, _make_loss_fn,
@@ -264,15 +266,16 @@ def _trial_worker(config_path: str, sweep_overrides: dict, run_id: str,
         _data_cfg = cfg.data
         data = load_event_graph(cfg.data.graph_file,
                                 to_undirected=bool(_data_cfg.get("undirected", False)))
+        adv_labels = resolve_advancement_labels(data=data, cfg=cfg)
         train_mask, val_mask, _, _ = split_advancement_edges(
-            data,
+            adv_labels,
             cutoff_year=int(_data_cfg.get("train_cutoff_year", 2010)),
             val_min_year=_data_cfg.get("val_min_year", None),
             val_max_year=_data_cfg.get("val_max_year", None),
         )
-        edge_index = data[ADV_ETYPE].edge_index
-        edge_attr  = data[ADV_ETYPE].edge_attr
-        edge_time  = data[ADV_ETYPE].edge_time
+        edge_index = adv_labels.edge_index
+        edge_attr  = adv_labels.edge_attr
+        edge_time  = adv_labels.edge_time
         train_idx = train_mask.nonzero(as_tuple=True)[0]
         val_idx   = val_mask.nonzero(as_tuple=True)[0]
         context = build_context_graph(data)

@@ -70,7 +70,7 @@
       "@type": "cr:FileObject",
       "@id": "graph-pt",
       "name": "hetero-graph",
-      "description": "PyTorch-Geometric HeteroData object: the assembled temporal heterogeneous graph with node features and dated, feature-carrying edges (26.03, w3 advancement labels).",
+      "description": "PyTorch-Geometric HeteroData object: the assembled temporal heterogeneous graph with node features and dated, feature-carrying edges (26.03). Evidence only \u2014 the advancement labels are distributed separately as CSVs and joined to the graph by node ID at train/eval time.",
       "containedIn": {"@id": "github-repo"},
       "contentUrl": "graph/hetero_graph_with_features_datatype_w3.pt",
       "encodingFormat": "application/octet-stream"

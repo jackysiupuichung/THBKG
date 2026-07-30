@@ -56,15 +56,29 @@ def build_prior_precedence_set(data, cutoff_year: int) -> set[tuple[int, int]]:
     return out
 
 
+def _adv_pairs(adv_labels, time_mask) -> set[tuple[int, int]]:
+    """(target_idx, disease_idx) pairs from external advancement labels."""
+    if adv_labels is None:
+        return set()
+    mask = time_mask(adv_labels.edge_time)
+    if mask.sum().item() == 0:
+        return set()
+    sel = adv_labels.edge_index[:, mask]
+    return set(zip(sel[0].tolist(), sel[1].tolist()))
+
+
 def build_future_positive_set(
-    data, cutoff_year: int, prior_set: set[tuple[int, int]]
+    data, cutoff_year: int, prior_set: set[tuple[int, int]], adv_labels=None
 ) -> set[tuple[int, int]]:
-    """Pairs with a clinical_trial OR advancement edge at edge_time > cutoff,
-    excluding any pair that already had precedence at edge_time <= cutoff."""
+    """Pairs with a clinical_trial edge OR an advancement label at time > cutoff,
+    excluding any pair that already had precedence at edge_time <= cutoff.
+
+    ``adv_labels``: AdvancementLabels loaded outside the graph. Advancement pairs
+    are skipped when it is None (the graph itself no longer carries them)."""
     fut: set[tuple[int, int]] = set()
     for et in _trial_etypes(data):
         fut |= _pairs_from_etype(data, et, lambda t: t > cutoff_year)
-    fut |= _pairs_from_etype(data, ADV_ETYPE, lambda t: t > cutoff_year)
+    fut |= _adv_pairs(adv_labels, lambda t: t > cutoff_year)
     return fut - prior_set
 
 
@@ -102,8 +116,12 @@ def run_prospective_eval(
     mappings,
     cfg,
     output_dir: Path,
+    adv_labels=None,
 ) -> None:
-    """Compute per-disease prospective P@K / R@K and write CSVs + parquet."""
+    """Compute per-disease prospective P@K / R@K and write CSVs + parquet.
+
+    ``adv_labels``: AdvancementLabels (external supervision). Passed through to
+    the future-positive set, which counts advancement pairs alongside trials."""
     p_cfg = cfg.eval.prospective
     diseases: list[str] = list(p_cfg.get("diseases", []) or [])
     if not diseases:
@@ -138,7 +156,8 @@ def run_prospective_eval(
     print(f"  prior precedence pairs: {len(prior_set)}")
 
     print("Building future positive set...")
-    future_set = build_future_positive_set(data, cutoff_year, prior_set)
+    future_set = build_future_positive_set(data, cutoff_year, prior_set,
+                                           adv_labels=adv_labels)
     print(f"  future positive pairs: {len(future_set)}")
 
     out_dir = Path(output_dir) / "prospective"
@@ -321,17 +340,25 @@ def run_prospective_eval(
 # exclusive: a pair positive in an earlier split is excluded from later pools.
 #
 # A "trial-related edge" is any clinical_trial_* edge (either orientation) or an
-# advancement edge — i.e. exactly the set used by `_trial_etypes` / `ADV_ETYPE`.
+# advancement pair — i.e. `_trial_etypes` plus the external AdvancementLabels
+# (advancement is supervision now, so it is passed in rather than read off the graph).
 
 
-def first_trial_year_by_pair(data) -> dict[tuple[int, int], int]:
+def first_trial_year_by_pair(data, adv_labels=None) -> dict[tuple[int, int], int]:
     """Map (target_idx, disease_idx) -> earliest year of any trial-related edge.
 
-    Covers all clinical_trial_* relations (either orientation) and the
-    advancement relation. Pairs with no trial-related edge are absent from the
-    returned dict.
+    Covers all clinical_trial_* relations (either orientation) and, when
+    ``adv_labels`` is given, the external advancement supervision pairs. Pairs
+    with no trial-related edge are absent from the returned dict.
     """
     out: dict[tuple[int, int], int] = {}
+
+    def _ingest_pairs(t_row, d_row, years):
+        for t, d, yr in zip(t_row, d_row, years):
+            key = (t, d)
+            prev = out.get(key)
+            if prev is None or yr < prev:
+                out[key] = int(yr)
 
     def _ingest(etype):
         src, _, dst = etype
@@ -343,15 +370,16 @@ def first_trial_year_by_pair(data) -> dict[tuple[int, int], int]:
             d_row, t_row = ei[0].tolist(), ei[1].tolist()
         else:
             raise ValueError(f"Unexpected etype orientation: {etype}")
-        for t, d, yr in zip(t_row, d_row, et_time.tolist()):
-            key = (t, d)
-            prev = out.get(key)
-            if prev is None or yr < prev:
-                out[key] = int(yr)
+        _ingest_pairs(t_row, d_row, et_time.tolist())
 
     for et in _trial_etypes(data):
         _ingest(et)
-    _ingest(ADV_ETYPE)
+    if adv_labels is not None:
+        _ingest_pairs(
+            adv_labels.edge_index[0].tolist(),
+            adv_labels.edge_index[1].tolist(),
+            adv_labels.edge_time.tolist(),
+        )
     return out
 
 

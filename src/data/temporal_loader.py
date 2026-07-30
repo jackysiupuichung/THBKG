@@ -577,12 +577,253 @@ REV_ADV_ETYPE = ("disease", "rev_advancement", "target")
 TRAIN_YEAR_MAX = 2015   # transition years from train_dataset.csv
 TEST_YEAR_MIN = 2016    # transition years from test_dataset.csv
 
+# Advancement labels are supervision, not evidence: the graph registers the
+# labelled (target, disease) NODES but carries no advancement edge type. The
+# labels below are read from the same CSVs the graph build was pointed at.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_ADV_DIR = _REPO_ROOT / "data/clinical_trial_advancement/26.03_w3"
+DEFAULT_ADV_TRAIN_CSV = str(DEFAULT_ADV_DIR / "train_dataset.csv")
+DEFAULT_ADV_TEST_CSV = str(DEFAULT_ADV_DIR / "test_dataset.csv")
 
-def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_year=None,
+
+class AdvancementLabels:
+    """Supervision edges for the advancement task, held outside the graph.
+
+    Mirrors the attribute names of the old in-graph ``data[ADV_ETYPE]`` store so
+    downstream code reads the same fields:
+
+    - ``edge_index``  [2, E] long — row 0 target index, row 1 disease index
+    - ``edge_attr``   [E, 2] float — column 0 is the outcome label (0/1),
+                      column 1 is novelty (constant 1.0, kept for shape parity)
+    - ``edge_time``   [E] long — transition year
+    - ``split``       [E] object ndarray — "train"/"test", i.e. source CSV
+    """
+
+    def __init__(self, edge_index, edge_attr, edge_time, split=None, target_ids=None,
+                 disease_ids=None):
+        self.edge_index = edge_index
+        self.edge_attr = edge_attr
+        self.edge_time = edge_time
+        self.split = split
+        self.target_ids = target_ids
+        self.disease_ids = disease_ids
+
+    @property
+    def label(self):
+        """Outcome label per supervision edge, [E] float."""
+        return self.edge_attr[:, 0]
+
+    @property
+    def num_edges(self) -> int:
+        return int(self.edge_index.size(1))
+
+    def __len__(self) -> int:
+        return self.num_edges
+
+    def __repr__(self) -> str:
+        return (f"AdvancementLabels(num_edges={self.num_edges}, "
+                f"n_pos={int(self.label.sum().item())}, "
+                f"years=[{int(self.edge_time.min())}..{int(self.edge_time.max())}])")
+
+    def to_frame(self):
+        """Long-form DataFrame: target_id, disease_id, transition_year, outcome, split."""
+        return pd.DataFrame({
+            "target_id": self.target_ids,
+            "disease_id": self.disease_ids,
+            "target_idx": self.edge_index[0].tolist(),
+            "disease_idx": self.edge_index[1].tolist(),
+            "transition_year": self.edge_time.tolist(),
+            "outcome": self.label.tolist(),
+            "split": self.split,
+        })
+
+
+def _resolve_repo_path(path) -> Path:
+    """Absolute paths pass through; relative ones resolve against the repo root
+    so configs work regardless of the working directory the job was launched from."""
+    p = Path(path)
+    if p.is_absolute() or p.exists():
+        return p
+    return _REPO_ROOT / p
+
+
+def _resolve_node_mapping(mappings=None, mappings_file=None) -> Dict[str, Dict[str, int]]:
+    """Get {node_type: {node_id: index}} from a mappings dict or a mappings .pt path."""
+    if mappings is None:
+        if mappings_file is None:
+            raise ValueError("Provide either `mappings` or `mappings_file`.")
+        mappings = torch.load(str(mappings_file), weights_only=False)
+    return mappings["node_mapping"] if "node_mapping" in mappings else mappings
+
+
+def load_advancement_labels(
+    train_csv: str = None,
+    test_csv: str = None,
+    mappings=None,
+    mappings_file: str = None,
+    verbose: bool = True,
+) -> AdvancementLabels:
+    """Load advancement supervision labels from the dataset CSVs.
+
+    The CSVs carry ``target_id, disease_id, transition_year, outcome``; node IDs
+    are resolved to graph indices through the build-time node mapping. Rows whose
+    endpoints are absent from the graph are dropped with a warning (they cannot
+    be scored) — with a graph built by ``build_event_graph.py`` against the same
+    CSVs there should be none, since those endpoints are registered as nodes.
+
+    Args:
+        train_csv / test_csv: dataset CSVs; default to the in-repo 26.03_w3 pair
+        mappings / mappings_file: build-time mappings object or its .pt path
+        verbose: print row counts and label balance
+
+    Returns:
+        AdvancementLabels
+    """
+    import numpy as np
+
+    node_mapping = _resolve_node_mapping(mappings, mappings_file)
+    target_map = node_mapping["target"]
+    disease_map = node_mapping["disease"]
+
+    train_csv = train_csv or DEFAULT_ADV_TRAIN_CSV
+    test_csv = test_csv or DEFAULT_ADV_TEST_CSV
+
+    frames = []
+    for path, split in [(train_csv, "train"), (test_csv, "test")]:
+        if not path:
+            continue
+        path = _resolve_repo_path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Advancement {split} CSV not found: {path}")
+        df = pd.read_csv(path)
+        missing = {"target_id", "disease_id", "transition_year", "outcome"} - set(df.columns)
+        if missing:
+            raise ValueError(f"{path} is missing required columns: {sorted(missing)}")
+        df = df.copy()
+        df["split"] = split
+        frames.append(df)
+        if verbose:
+            print(f"   Advancement {split}: {len(df):,} rows from {Path(path).name}")
+
+    if not frames:
+        raise ValueError("No advancement CSVs given.")
+
+    df = pd.concat(frames, ignore_index=True)
+    df["target_id"] = df["target_id"].astype(str)
+    df["disease_id"] = df["disease_id"].astype(str)
+
+    src = df["target_id"].map(target_map)
+    dst = df["disease_id"].map(disease_map)
+    unmapped = src.isna() | dst.isna()
+    if unmapped.any():
+        n_t = int(src.isna().sum())
+        n_d = int(dst.isna().sum())
+        print(f"   ⚠️  Dropping {int(unmapped.sum()):,} advancement rows with endpoints "
+              f"absent from the graph ({n_t:,} unknown targets, {n_d:,} unknown diseases)")
+        df = df[~unmapped].reset_index(drop=True)
+        src = src[~unmapped]
+        dst = dst[~unmapped]
+
+    edge_index = torch.tensor(
+        [src.astype(int).tolist(), dst.astype(int).tolist()], dtype=torch.long
+    )
+    outcome = torch.tensor(
+        df["outcome"].astype(bool).astype(float).values, dtype=torch.float
+    ).unsqueeze(-1)
+    # Column 1 mirrors the old in-graph edge_novelty (constant 1.0): no novelty
+    # decay applies to a label. Kept so edge_attr stays [E, 2] as before.
+    novelty = torch.ones_like(outcome)
+    edge_attr = torch.cat([outcome, novelty], dim=-1)
+    edge_time = torch.tensor(df["transition_year"].astype(int).values, dtype=torch.long)
+
+    labels = AdvancementLabels(
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        edge_time=edge_time,
+        split=df["split"].values,
+        target_ids=df["target_id"].tolist(),
+        disease_ids=df["disease_id"].tolist(),
+    )
+    if verbose:
+        n_pos = int(labels.label.sum().item())
+        print(f"✅ Advancement labels: {len(labels):,} pairs "
+              f"(n_pos={n_pos:,}, n_neg={len(labels) - n_pos:,}), "
+              f"years {int(edge_time.min())}..{int(edge_time.max())}")
+    return labels
+
+
+def resolve_advancement_labels(
+    data=None,
+    cfg=None,
+    train_csv: str = None,
+    test_csv: str = None,
+    mappings=None,
+    mappings_file: str = None,
+    verbose: bool = True,
+) -> AdvancementLabels:
+    """Get advancement labels for a run, preferring the external CSVs.
+
+    Paths are taken from explicit arguments, else from ``cfg.data``
+    (``advancement_train_csv`` / ``advancement_test_csv`` / ``mappings_file``),
+    else from the in-repo defaults.
+
+    Legacy fallback: graphs built before labels were externalised still carry an
+    ``("target","advancement","disease")`` edge type. If no mapping source is
+    available and ``data`` has that edge type, its store is wrapped and returned
+    so old artifacts keep working.
+    """
+    cfg_data = (cfg.get("data", {}) if cfg is not None else {}) or {}
+    train_csv = train_csv or cfg_data.get("advancement_train_csv", None)
+    test_csv = test_csv or cfg_data.get("advancement_test_csv", None)
+    mappings_file = mappings_file or cfg_data.get("mappings_file", None)
+
+    if mappings is None and mappings_file is None:
+        if data is not None and ADV_ETYPE in data.edge_types:
+            print("⚠️  No mappings available; falling back to in-graph advancement "
+                  "edges (legacy graph). Rebuild the graph to externalise labels.")
+            store = data[ADV_ETYPE]
+            return AdvancementLabels(
+                edge_index=store.edge_index,
+                edge_attr=store.edge_attr,
+                edge_time=store.edge_time,
+            )
+        raise ValueError(
+            "Cannot load advancement labels: no mappings_file given and the graph "
+            "carries no advancement edges."
+        )
+
+    return load_advancement_labels(
+        train_csv=train_csv,
+        test_csv=test_csv,
+        mappings=mappings,
+        mappings_file=mappings_file,
+        verbose=verbose,
+    )
+
+
+def _advancement_edge_time(obj):
+    """edge_time of the supervision edges, from either an AdvancementLabels or a
+    (legacy) HeteroData carrying the advancement edge type."""
+    if isinstance(obj, AdvancementLabels):
+        return obj.edge_time
+    if isinstance(obj, HeteroData):
+        if ADV_ETYPE not in obj.edge_types:
+            raise ValueError(
+                "Graph has no advancement edges — labels now live outside the graph. "
+                "Pass the AdvancementLabels from load_advancement_labels() instead."
+            )
+        return obj[ADV_ETYPE].edge_time
+    return obj.edge_time
+
+
+def split_advancement_edges(labels, cutoff_year=2010, val_min_year=None, val_max_year=None,
                             random_val_frac=None, random_seed=42):
-    """Chronological split of advancement edges. Default (cutoff_year=2010)
-    matches the canonical setup: train = edge_time ≤ 2010, val = 2011..2015,
-    test = ≥ 2016.
+    """Chronological split of advancement supervision edges. Default
+    (cutoff_year=2010) matches the canonical setup: train = edge_time ≤ 2010,
+    val = 2011..2015, test = ≥ 2016.
+
+    ``labels`` is an ``AdvancementLabels`` (from ``load_advancement_labels``); a
+    legacy HeteroData carrying the advancement edge type is also accepted.
 
     Passing explicit ``val_min_year`` / ``val_max_year`` restricts val to the
     inclusive year range — used by the val-window experiments.
@@ -598,7 +839,7 @@ def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_y
     Returns: train_mask, val_mask, test_mask, cutoff_year
     """
     import torch
-    edge_time = data[ADV_ETYPE].edge_time
+    edge_time = _advancement_edge_time(labels)
 
     train_year_mask = edge_time <= TRAIN_YEAR_MAX
     test_year_mask = edge_time >= TEST_YEAR_MIN
@@ -632,6 +873,10 @@ def split_advancement_edges(data, cutoff_year=2010, val_min_year=None, val_max_y
 
 def build_context_graph(data, collapse: bool = False):
     """Remove advancement edges (BOTH directions) from the graph.
+
+    Graphs built after labels were externalised contain no advancement edge type
+    at all, so this is a copy — it stays as the defensive guard for legacy graph
+    artifacts, which do carry the labels as edges.
 
     Both the forward ``('target','advancement','disease')`` and the reverse
     ``('disease','rev_advancement','target')`` edge types are excluded.

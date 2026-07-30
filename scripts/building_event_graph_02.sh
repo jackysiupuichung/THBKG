@@ -19,9 +19,12 @@ STATIC_EDGES_DIR="${KG_OUTPUT_DIR}/static_edges"
 RAW_EDGES_DIR="${KG_OUTPUT_DIR}/edges"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
 
-# Advancement labels — 26.03 w3 window. The 23.06 label CSVs had a same-year
-# clinical-trial-edge leak and are retired; the w3 labels are built on the 26.03
-# graph generation. See data/clinical_trial_advancement/.
+# Advancement datasets — 26.03 w3 window. Passed here to REGISTER their
+# target/disease nodes in the graph; the outcome labels themselves are NOT
+# written into the graph and are loaded externally at train/eval time (see
+# src/data/temporal_loader.py: load_advancement_labels). The 23.06 label CSVs had
+# a same-year clinical-trial-edge leak and are retired; the w3 labels are built
+# on the 26.03 graph generation. See data/clinical_trial_advancement/.
 ADV_TRAIN="data/clinical_trial_advancement/26.03_w3/train_dataset.csv"
 ADV_TEST="data/clinical_trial_advancement/26.03_w3/test_dataset.csv"
 

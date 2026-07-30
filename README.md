@@ -82,7 +82,7 @@ evidence dump and the IntAct / GO / Reactome / ChEMBL / EFO sources):
 
 ```bash
 sbatch scripts/collecting_edges_01.sh          # dated event lists per datasource
-sbatch scripts/building_event_graph_02.sh      # HeteroData temporal + advancement edges
+sbatch scripts/building_event_graph_02.sh      # HeteroData temporal edges (+ advancement nodes)
 sbatch scripts/collecting_node_features_03.sh  # node features
 sbatch scripts/assembling_graph_04.sh          # attach features → final graph
 ```

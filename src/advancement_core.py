@@ -54,9 +54,12 @@ from src.data.temporal_loader import (
     ADV_ETYPE,
     TRAIN_YEAR_MAX,
     TEST_YEAR_MIN,
+    AdvancementLabels,
     build_context_graph,
     build_edge_time_dict as _build_edge_time_dict,
+    load_advancement_labels,
     load_event_graph,
+    resolve_advancement_labels,
     split_advancement_edges,
     to_time_agnostic,
 )

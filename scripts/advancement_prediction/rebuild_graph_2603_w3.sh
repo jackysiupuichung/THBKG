@@ -21,10 +21,11 @@ BASE="/gpfs/scratch/bty414/opentarget_evidences/${OT_VERSION}"
 EVENT_DIR="${BASE}/progression"
 FEATURE_DIR="${BASE}/features/processed"
 GRAPH_DIR="${BASE}/graph"
+# Node registration only — outcome labels stay external (loaded at train time).
 ADV_TRAIN="data/clinical_trial_advancement/26.03_w3/train_dataset.csv"
 ADV_TEST="data/clinical_trial_advancement/26.03_w3/test_dataset.csv"
 
-echo "[$(date)] STEP 1: build event graph (datatype) with w3 advancement labels"
+echo "[$(date)] STEP 1: build event graph (datatype) with w3 advancement nodes"
 python preprocessing/temporal_graph/pipeline/build_event_graph.py \
   --input "${EVENT_DIR}/events_datatype.parquet" \
   --output "${EVENT_DIR}/temporal_graph_datatype_w3.pt" \

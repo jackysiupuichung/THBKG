@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.data.temporal_loader import (
     ADV_ETYPE, build_context_graph, build_edge_time_dict as _build_edge_time_dict,
-    load_event_graph, split_advancement_edges,
+    load_event_graph,
 )
 from src.models.utils import build_model
 

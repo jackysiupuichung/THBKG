@@ -133,25 +133,43 @@ def _load_graph_and_mappings(graph_file: Path, mappings_file: Path):
     return data, mappings
 
 
-def _compute_target_novelty(data, mappings) -> pd.DataFrame:
-    """One row per advancement edge: (target_id, disease_id, t_decision, is_pioneer).
+def _load_advancement_df(train_csv: str = None, test_csv: str = None) -> pd.DataFrame:
+    """Advancement supervision labels, read from the dataset CSVs.
 
-    Pioneer iff no advancement edge on the same target with edge_time strictly
-    less than the current edge_time and a different disease_id.
+    Labels are not stored in the graph (it only registers the labelled nodes),
+    so every label-derived stratification here reads them from source.
+
+    Returns columns: target_id, disease_id, transition_year, outcome (0/1), split.
     """
-    node_mapping = mappings["node_mapping"]
-    idx_to_target  = {v: k for k, v in node_mapping["target"].items()}
-    idx_to_disease = {v: k for k, v in node_mapping["disease"].items()}
+    from src.data.temporal_loader import DEFAULT_ADV_TRAIN_CSV, DEFAULT_ADV_TEST_CSV
 
-    adv = data[_ADV_ETYPE]
-    src = adv.edge_index[0].cpu().numpy()
-    dst = adv.edge_index[1].cpu().numpy()
-    t   = adv.edge_time.cpu().numpy()
+    frames = []
+    for path, split in [(train_csv or DEFAULT_ADV_TRAIN_CSV, "train"),
+                        (test_csv or DEFAULT_ADV_TEST_CSV, "test")]:
+        if not Path(path).exists():
+            raise FileNotFoundError(f"Advancement {split} CSV not found: {path}")
+        df = pd.read_csv(path)
+        df["split"] = split
+        frames.append(df)
 
+    df = pd.concat(frames, ignore_index=True)
+    df["target_id"] = df["target_id"].astype(str)
+    df["disease_id"] = df["disease_id"].astype(str)
+    df["transition_year"] = df["transition_year"].astype(int)
+    df["outcome"] = df["outcome"].astype(bool).astype(int)
+    return df
+
+
+def _compute_target_novelty(adv_df: pd.DataFrame) -> pd.DataFrame:
+    """One row per advancement label: (target_id, disease_id, t_decision, is_pioneer).
+
+    Pioneer iff no advancement label on the same target with a transition year
+    strictly less than the current one and a different disease_id.
+    """
     df = pd.DataFrame({
-        "target_id":  [idx_to_target[i]  for i in src],
-        "disease_id": [idx_to_disease[i] for i in dst],
-        "t_decision": t,
+        "target_id":  adv_df["target_id"].values,
+        "disease_id": adv_df["disease_id"].values,
+        "t_decision": adv_df["transition_year"].values,
     })
 
     is_pioneer = np.ones(len(df), dtype=bool)
@@ -517,6 +535,8 @@ def evaluate(
     inject: list[dict] | None = None,
     graph_file: str = _GRAPH_FILE,
     mappings_file: str = _MAPPINGS_FILE,
+    advancement_train_csv: str = None,
+    advancement_test_csv: str = None,
 ):
     """
     Evaluate model predictions against the saved evaluation dataset.
@@ -530,6 +550,10 @@ def evaluate(
         only:             comma-separated subset of DEFAULT_RUNS to evaluate
         results_dir:      output directory for CSVs and plots
         inject:           explicit list of {"path": ..., "model_name": ...} dicts
+        advancement_train_csv / advancement_test_csv:
+                          advancement label CSVs used for test-pair stratification
+                          (default: the in-repo 26.03_w3 pair). Labels live outside
+                          the graph, so they are read from source here.
     """
     datasets_dir = Path(datasets_dir)
     results_dir  = Path(results_dir)
@@ -734,9 +758,10 @@ def evaluate(
         logger.info(f"Loading cached test pair strata from {strata_csv}")
         strata_df = pd.read_csv(strata_csv)
     else:
-        logger.info("Cached strata not found — computing from graph...")
+        logger.info("Cached strata not found — computing from graph + label CSVs...")
         data, mappings = _load_graph_and_mappings(Path(graph_file), Path(mappings_file))
-        novelty_df = _compute_target_novelty(data, mappings)
+        adv_df = _load_advancement_df(advancement_train_csv, advancement_test_csv)
+        novelty_df = _compute_target_novelty(adv_df)
         strata_df = _compute_evidence_sparsity(data, mappings, novelty_df)
         strata_df["novelty_stratum"] = np.where(strata_df["is_pioneer"], "pioneer", "known")
         strata_df.to_csv(strata_csv, index=False)
@@ -1681,30 +1706,17 @@ _INFLATION_EVIDENCE_RELATIONS = (
 )
 
 
-def _compute_advancement_split_points(data, mappings) -> pd.DataFrame:
-    """Per-pair split points derived from advancement edges of the event graph.
+def _compute_advancement_split_points(adv_df: pd.DataFrame) -> pd.DataFrame:
+    """Per-pair split points derived from the advancement label CSVs.
 
     Columns: target_id, disease_id, t_adv_first, t_adv_last, advanced.
-    advanced=1 iff any advancement edge for the pair has edge_weight==1.
+    advanced=1 iff any label row for the pair has outcome==1.
     """
-    node_mapping = mappings["node_mapping"]
-    idx_to_target  = {v: k for k, v in node_mapping["target"].items()}
-    idx_to_disease = {v: k for k, v in node_mapping["disease"].items()}
-
-    adv = data[_ADV_ETYPE]
-    src = adv.edge_index[0].cpu().numpy()
-    dst = adv.edge_index[1].cpu().numpy()
-    t   = adv.edge_time.cpu().numpy()
-    # Outcome is stored in edge_attr[:, 0] (0 = not advanced, 1 = advanced) — not in edge_weight.
-    if not (hasattr(adv, "edge_attr") and adv.edge_attr is not None):
-        raise ValueError("Advancement edges have no edge_attr; cannot recover outcome label.")
-    w = adv.edge_attr[:, 0].cpu().numpy()
-
     df = pd.DataFrame({
-        "target_id":  [idx_to_target[i]  for i in src],
-        "disease_id": [idx_to_disease[i] for i in dst],
-        "t":          t,
-        "w":          w,
+        "target_id":  adv_df["target_id"].values,
+        "disease_id": adv_df["disease_id"].values,
+        "t":          adv_df["transition_year"].values,
+        "w":          adv_df["outcome"].values,
     })
     grouped = df.groupby(["target_id", "disease_id"], as_index=False).agg(
         t_adv_first=("t", "min"),
@@ -2076,6 +2088,8 @@ def inflation_analysis(
     out_dir: str = f"{_REPO_ROOT}/advancement_data/results/inflation",
     split: str = "first",
     compute_centrality: bool = True,
+    advancement_train_csv: str = None,
+    advancement_test_csv: str = None,
 ):
     """Edge-count temporal-inflation analysis around advancement edges.
 
@@ -2086,11 +2100,13 @@ def inflation_analysis(
     distributional comparison.
 
     Args:
-        graph_file: hetero graph .pt with advancement edges
+        graph_file: hetero graph .pt (evidence edges; carries no advancement labels)
         mappings_file: node-mapping .pt
         out_dir: output directory (created if missing)
         split: 'first' (default) or 'last' — which advancement year to split at
         compute_centrality: whether to compute the PageRank/degree comparison
+        advancement_train_csv / advancement_test_csv: advancement label CSVs
+            (default: the in-repo 26.03_w3 pair)
     """
     out_dir = Path(out_dir)
     plots_dir = out_dir / "plots"
@@ -2101,14 +2117,15 @@ def inflation_analysis(
     data, mappings = _load_graph_and_mappings(Path(graph_file), Path(mappings_file))
 
     logger.info("Computing advancement split points...")
-    split_points = _compute_advancement_split_points(data, mappings)
+    adv_df = _load_advancement_df(advancement_train_csv, advancement_test_csv)
+    split_points = _compute_advancement_split_points(adv_df)
     n_total = len(split_points)
     n_adv1  = int((split_points["advanced"] == 1).sum())
     n_adv0  = int((split_points["advanced"] == 0).sum())
-    logger.info(f"  pairs with advancement edges: {n_total} (advanced=1: {n_adv1}, advanced=0: {n_adv0})")
+    logger.info(f"  pairs with advancement labels: {n_total} (advanced=1: {n_adv1}, advanced=0: {n_adv0})")
     if n_adv0 < 50:
         logger.warning(
-            f"advanced=0 group has only {n_adv0} pairs (advancement edges with edge_weight<0.5). "
+            f"advanced=0 group has only {n_adv0} pairs (advancement labels with outcome=0). "
             "Between-group comparisons will be underpowered."
         )
 

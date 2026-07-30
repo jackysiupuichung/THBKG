@@ -4,6 +4,12 @@ experiment:
 data:
   graph_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/graph/hetero_graph_with_features_datatype_w3.pt
   mappings_file: /gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_w3_mappings.pt
+  # Advancement labels are supervision, not graph evidence: the graph registers
+  # the labelled target/disease nodes only, and the outcome + transition year are
+  # read from these CSVs at train/eval time. Must be the same pair the graph was
+  # built against. Omitting them falls back to these in-repo defaults.
+  advancement_train_csv: data/clinical_trial_advancement/26.03_w3/train_dataset.csv
+  advancement_test_csv: data/clinical_trial_advancement/26.03_w3/test_dataset.csv
 
 model:
   name: hgt

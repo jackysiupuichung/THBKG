@@ -49,6 +49,7 @@ from torch_geometric.loader import LinkNeighborLoader
 
 from src.advancement_core import (
     ADV_ETYPE,
+    resolve_advancement_labels,
     split_advancement_edges,
     build_context_graph,
     run_epoch,
@@ -270,11 +271,12 @@ def main():
     print(f"Loading graph from {cfg.data.graph_file}")
     data = load_event_graph(cfg.data.graph_file)
 
-    train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(data)
+    adv_labels = resolve_advancement_labels(data=data, cfg=cfg)
+    train_mask, val_mask, test_mask, cutoff_year = split_advancement_edges(adv_labels)
 
-    edge_index = data[ADV_ETYPE].edge_index
-    edge_attr  = data[ADV_ETYPE].edge_attr
-    edge_time  = data[ADV_ETYPE].edge_time
+    edge_index = adv_labels.edge_index
+    edge_attr  = adv_labels.edge_attr
+    edge_time  = adv_labels.edge_time
 
     train_idx = train_mask.nonzero(as_tuple=True)[0]
     val_idx   = val_mask.nonzero(as_tuple=True)[0]

@@ -28,6 +28,7 @@ from src.data.temporal_loader import (
     build_context_graph,
     build_edge_time_dict,
     load_event_graph,
+    resolve_advancement_labels,
     split_advancement_edges,
 )
 from src.models.utils import build_model
@@ -88,10 +89,11 @@ class ExplainRuntime:
         }
         name_maps = cls._load_name_maps(cfg.data.graph_file)
 
-        _, _, test_mask, _ = split_advancement_edges(data)
-        edge_index = data[ADV_ETYPE].edge_index
-        edge_attr = data[ADV_ETYPE].edge_attr
-        edge_time = data[ADV_ETYPE].edge_time
+        adv_labels = resolve_advancement_labels(data=data, cfg=cfg, mappings=mappings)
+        _, _, test_mask, _ = split_advancement_edges(adv_labels)
+        edge_index = adv_labels.edge_index
+        edge_attr = adv_labels.edge_attr
+        edge_time = adv_labels.edge_time
         context = build_context_graph(data)
 
         model = build_model(

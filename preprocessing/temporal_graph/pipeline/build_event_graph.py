@@ -111,13 +111,19 @@ def load_static_edges(static_dir: str) -> pd.DataFrame:
     return combined
 
 
-def extract_nodes_from_edges(edges: pd.DataFrame) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+def extract_nodes_from_edges(
+    edges: pd.DataFrame,
+    extra_nodes: Dict[str, List[str]] = None,
+) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
     """
     Extract unique nodes from edges.
-    
+
     Args:
         edges: DataFrame with edges containing sourceId, targetId, source_type, target_type
-        
+        extra_nodes: Optional {node_type: [node_id, ...]} registered even when the
+            node has no edge in the graph (e.g. advancement-labelled endpoints,
+            whose labels live outside the graph — see load_advancement_nodes)
+
     Returns:
         nodes: Dictionary mapping node type to list of node IDs
         id_to_type: Dictionary mapping node ID to node type
@@ -148,7 +154,21 @@ def extract_nodes_from_edges(edges: pd.DataFrame) -> Tuple[Dict[str, List[str]],
         if node_id not in id_to_type:
             nodes[node_type].append(node_id)
             id_to_type[node_id] = node_type
-    
+
+    # Register edge-less nodes (isolated in the graph, but addressable by index)
+    if extra_nodes:
+        n_added = 0
+        for node_type, node_ids in extra_nodes.items():
+            nodes.setdefault(node_type, [])
+            for nid in node_ids:
+                node_id = str(nid)
+                if node_id not in id_to_type:
+                    nodes[node_type].append(node_id)
+                    id_to_type[node_id] = node_type
+                    n_added += 1
+        if n_added:
+            print(f"   Registered {n_added:,} edge-less nodes from extra_nodes")
+
     # Remove duplicates and sort
     for node_type in nodes:
         nodes[node_type] = sorted(list(set(nodes[node_type])))
@@ -157,7 +177,11 @@ def extract_nodes_from_edges(edges: pd.DataFrame) -> Tuple[Dict[str, List[str]],
 
 
 
-def build_hetero_graph(edges: pd.DataFrame, edge_type_mode: str = 'relation_datasource') -> Tuple[HeteroData, Dict]:
+def build_hetero_graph(
+    edges: pd.DataFrame,
+    edge_type_mode: str = 'relation_datasource',
+    extra_nodes: Dict[str, List[str]] = None,
+) -> Tuple[HeteroData, Dict]:
     """
     Build heterogeneous graph from edges.
     
@@ -172,7 +196,9 @@ def build_hetero_graph(edges: pd.DataFrame, edge_type_mode: str = 'relation_data
                relation, datasourceId, score)
                Optional: edge_time (year/timestamp), edge_weight (for events)
         edge_type_mode: 'relation_datasource' or 'relation_only'
-        
+        extra_nodes: Optional {node_type: [node_id, ...]} to register in the node
+               mapping even if they carry no edge
+
     Returns:
         hetero_data: HeteroData object
         mappings: Dictionary containing:
@@ -185,7 +211,7 @@ def build_hetero_graph(edges: pd.DataFrame, edge_type_mode: str = 'relation_data
     
     # Extract nodes
     print("📊 Extracting nodes from edges...")
-    nodes, id_to_type = extract_nodes_from_edges(edges)
+    nodes, id_to_type = extract_nodes_from_edges(edges, extra_nodes=extra_nodes)
     
     # Create ID mappings
     node_mapping = {}
@@ -300,23 +326,29 @@ def build_hetero_graph(edges: pd.DataFrame, edge_type_mode: str = 'relation_data
     
     return hetero_data, mappings
 
-def load_advancement_edges(train_csv: str, test_csv: str) -> pd.DataFrame:
+def load_advancement_nodes(train_csv: str, test_csv: str) -> Dict[str, List[str]]:
     """
-    Load clinical trial advancement edges from CSV files and format them
-    as graph edges compatible with build_hetero_graph.
+    Collect the target/disease NODES referenced by the clinical trial advancement
+    datasets, so every labelled pair is addressable by node index in the graph.
+
+    The labels themselves (``outcome``, ``transition_year``) are deliberately NOT
+    written into the graph — they are supervision, not evidence, and baking them
+    in as an ``("target", "advancement", "disease")`` edge type leaked the label
+    into message passing and forced every consumer to strip it back out. They are
+    loaded at train/eval time straight from these CSVs via
+    ``src.data.temporal_loader.load_advancement_labels``.
 
     Args:
         train_csv: Path to train_dataset.csv
         test_csv: Path to test_dataset.csv
 
     Returns:
-        DataFrame with columns: sourceId, targetId, source_type, target_type,
-        relation, datasourceId, edge_time, edge_weight
+        {"target": [target_id, ...], "disease": [disease_id, ...]}
     """
-    print(f"\n📂 Loading advancement edges...")
+    print(f"\n📂 Loading advancement nodes (labels stay external)...")
     dfs = []
     for path, label in [(train_csv, "train"), (test_csv, "test")]:
-        if not os.path.exists(path):
+        if not path or not os.path.exists(path):
             print(f"   ⚠️  {label} CSV not found: {path}")
             continue
         df = pd.read_csv(path)
@@ -325,24 +357,18 @@ def load_advancement_edges(train_csv: str, test_csv: str) -> pd.DataFrame:
 
     if not dfs:
         print("   ❌ No advancement CSVs loaded")
-        return pd.DataFrame()
+        return {}
 
     df = pd.concat(dfs, ignore_index=True)
     print(f"   Total advancement rows: {len(df):,}")
 
-    adv = pd.DataFrame({
-        "sourceId":     df["target_id"].astype(str),
-        "targetId":     df["disease_id"].astype(str),
-        "source_type":  "target",
-        "target_type":  "disease",
-        "relation":     "advancement",
-        "datasourceId": "advancement",
-        "edge_time":    df["transition_year"].astype(int),
-        "edge_weight":  df["outcome"].astype(float),
-        "edge_novelty": 1.0,  # no novelty decay applies to advancement labels
-    })
-    print(f"✅ Advancement edges ready: {len(adv):,}")
-    return adv
+    nodes = {
+        "target":  sorted(df["target_id"].astype(str).unique().tolist()),
+        "disease": sorted(df["disease_id"].astype(str).unique().tolist()),
+    }
+    print(f"✅ Advancement nodes: {len(nodes['target']):,} targets, "
+          f"{len(nodes['disease']):,} diseases")
+    return nodes
 
 
 def build_literature_sidecar(raw_edges_dir: str, output_path: str):
@@ -408,8 +434,9 @@ def build_event_graph(
         event_file: Path to events parquet file
         output_file: Output .pt file
         static_edges_dir: Optional directory with static edges
-        advancement_train_csv: Optional path to advancement train CSV
-        advancement_test_csv: Optional path to advancement test CSV
+        advancement_train_csv: Optional advancement train CSV — contributes NODES
+            only; the outcome labels are loaded externally at train/eval time
+        advancement_test_csv: Optional advancement test CSV (nodes only, as above)
     """
     print("\n" + "="*80)
     print("BUILDING EVENT-BASED TEMPORAL GRAPH")
@@ -433,15 +460,14 @@ def build_event_graph(
         print(f"❌ Missing columns: {missing}")
         return
     
-    # Load advancement edges (injected before static edges so their nodes are registered)
+    # Register advancement endpoints as NODES only — the labels are loaded
+    # externally at train/eval time (see load_advancement_nodes).
+    advancement_nodes = {}
     if advancement_train_csv or advancement_test_csv:
-        adv_edges = load_advancement_edges(
+        advancement_nodes = load_advancement_nodes(
             advancement_train_csv or "",
             advancement_test_csv or "",
         )
-        if not adv_edges.empty:
-            events = pd.concat([events, adv_edges], ignore_index=True)
-            print(f"   Events + advancement: {len(events):,} total rows")
 
     # Load static edges
     static_edges = pd.DataFrame()
@@ -479,7 +505,11 @@ def build_event_graph(
 
     # Build graph
     # build_hetero_graph now supports edge_time and edge_weight
-    hetero_data, mappings = build_hetero_graph(all_edges, edge_type_mode=edge_type_mode)
+    hetero_data, mappings = build_hetero_graph(
+        all_edges,
+        edge_type_mode=edge_type_mode,
+        extra_nodes=advancement_nodes,
+    )
 
     # Save
     print(f"\n💾 Saving event graph to {output_file}...")
@@ -543,13 +573,14 @@ def main():
         "--advancement-train-csv",
         type=str,
         default=None,
-        help="Path to advancement train CSV (optional)"
+        help="Advancement train CSV (optional). Registers its target/disease nodes; "
+             "labels are NOT written into the graph."
     )
     parser.add_argument(
         "--advancement-test-csv",
         type=str,
         default=None,
-        help="Path to advancement test CSV (optional)"
+        help="Advancement test CSV (optional). Nodes only, as with --advancement-train-csv."
     )
     parser.add_argument(
         "--raw-edges",

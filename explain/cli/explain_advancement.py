@@ -47,6 +47,7 @@ from src.data.temporal_loader import (
     build_context_graph,
     build_edge_time_dict as _build_edge_time_dict,
     load_event_graph,
+    resolve_advancement_labels,
     split_advancement_edges,
 )
 from src.models.utils import build_model
@@ -439,10 +440,11 @@ def main(args):
                   f"{args.raw_edges_dir}; skipping evidence lookup",
                   flush=True)
 
-    train_mask, val_mask, test_mask, _ = split_advancement_edges(data)
-    edge_index = data[ADV_ETYPE].edge_index
-    edge_attr = data[ADV_ETYPE].edge_attr
-    edge_time = data[ADV_ETYPE].edge_time
+    adv_labels = resolve_advancement_labels(data=data, cfg=cfg)
+    train_mask, val_mask, test_mask, _ = split_advancement_edges(adv_labels)
+    edge_index = adv_labels.edge_index
+    edge_attr = adv_labels.edge_attr
+    edge_time = adv_labels.edge_time
 
     context = build_context_graph(data)
 
