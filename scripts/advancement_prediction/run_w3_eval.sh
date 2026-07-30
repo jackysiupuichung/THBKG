@@ -34,7 +34,7 @@ INJECT+="{\"path\":\"$W3RUNS/gatv2_ablation/novelty/ensemble/test_predictions.pa
 INJECT+="{\"path\":\"$W3RUNS/gatv2_ablation/both/ensemble/test_predictions.parquet\",\"model_name\":\"gatv2_both_w3\"}"
 INJECT+="]"
 
-python evaluate_advancement.py evaluate \
+python -m src.evaluate_advancement evaluate \
     --inject "$INJECT" \
     --datasets_dir "$W3ZARR" \
     --graph_file "$W3GRAPH" \

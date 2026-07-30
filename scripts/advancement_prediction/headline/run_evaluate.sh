@@ -1,5 +1,5 @@
 #!/bin/bash
-# Two runs of evaluate_advancement.py to keep figures focused:
+# Two runs of src/evaluate_advancement.py to keep figures focused:
 #   headline:  EAHGT (s42) — main paper claim (RDG/OTS auto-included)
 #   ablation:  HGT/GATv2/R-GCN/CompGCN/EAHGT (all s42) — GNN ablation
 # Tabular baselines (RDG/OTS) are auto-loaded from the zarr; we pass
@@ -36,7 +36,7 @@ print(json.dumps(entries))
 PY
 )
     echo "=== ${label}: ${archs[*]} ==="
-    uv run python evaluate_advancement.py evaluate \
+    uv run python -m src.evaluate_advancement evaluate \
         --graph_file "$GRAPH" \
         --mappings_file "$MAPPINGS" \
         --results_dir "$out_dir" \

@@ -18,9 +18,9 @@ export WANDB_MODE="disabled"
 python scripts/advancement_prediction/build_encoder_baseline_ensembles.py
 
 # Step 3: evaluate the FULL Table-4 set together (encoders + edge-feature
-# variants + headline; RDG/OTS auto-load from the zarr). NOTE: evaluate_advancement.py
+# variants + headline; RDG/OTS auto-load from the zarr). NOTE: src/evaluate_advancement.py
 # is a fire CLI with subcommands -> use `evaluate`, not a bare flag.
-python evaluate_advancement.py evaluate \
+python -m src.evaluate_advancement evaluate \
     --only enc_hgt_ens,enc_gatv2_ens,enc_rgcn_ens,enc_compgcn_ens,abl_score_ens,abl_novelty_ens,p3_eahgt_both \
     --datasets_dir /gpfs/scratch/bty414/clinical_advancement_paper/data/datasets \
     --results_dir headline_results/full_ablation_eval

@@ -1,6 +1,6 @@
 """Supplementary table: train & eval pairs and positives, stratified by therapeutic area.
 
-Counting matches RS-by-TA in evaluate_advancement.py: a pair is counted in every TA
+Counting matches RS-by-TA in src/evaluate_advancement.py: a pair is counted in every TA
 its disease maps to (multi-membership), so per-TA rows do not sum to the split total.
 The 'all' row gives the true de-duplicated totals.
 """
@@ -113,7 +113,7 @@ if len(dropped):
 caption = [
     "# Supplementary table: 26.03 w3 clinical-advancement dataset, pairs & positives by therapeutic area.",
     "# Counting is multi-membership: a target-disease pair is counted in EVERY therapeutic area its",
-    "# disease maps to, matching the RS-by-TA computation in evaluate_advancement.py. Per-TA rows therefore",
+    "# disease maps to, matching the RS-by-TA computation in src/evaluate_advancement.py. Per-TA rows therefore",
     "# OVERLAP and do NOT sum to the split totals. De-duplicated totals: train = 21602 pairs / 4917 pos",
     "# (22.76%); eval = 7193 pairs / 668 pos (9.29%). The 'all' row gives overlapping (not de-duplicated)",
     "# totals across primary TAs. The train/eval positive-rate gap reflects decision-aligned temporal",

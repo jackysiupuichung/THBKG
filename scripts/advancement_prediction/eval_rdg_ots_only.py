@@ -14,7 +14,7 @@ import pandas as pd
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
-import evaluate_advancement as ea
+from src import evaluate_advancement as ea
 
 TA_PARQUET = REPO / "advancement_data/features/therapeutic_areas.parquet"
 PRIMARY_JSON = REPO / "advancement_data/results/primary_therapeutic_areas.json"

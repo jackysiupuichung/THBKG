@@ -13,9 +13,9 @@ Prediction sources:
 By default, evaluates all runs in DEFAULT_RUNS that have predictions.
 
 Usage:
-    python evaluate_advancement.py
-    python evaluate_advancement.py --only b1_hgt,p3_eahgt_both
-    python evaluate_advancement.py --help
+    python -m src.evaluate_advancement
+    python -m src.evaluate_advancement --only b1_hgt,p3_eahgt_both
+    python -m src.evaluate_advancement --help
 """
 import json
 import logging
@@ -34,6 +34,10 @@ import scipy.sparse as sp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Repo root (this module lives in src/), used for the in-repo advancement_data
+# defaults below.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
 # Run registry
@@ -505,11 +509,11 @@ def _build_color_map(model_names: list[str]) -> dict:
 # ---------------------------------------------------------------------------
 
 def evaluate(
-    datasets_dir: str = f"{Path(__file__).parent}/advancement_data/datasets",
-    ta_parquet: str = f"{Path(__file__).parent}/advancement_data/features/therapeutic_areas.parquet",
-    primary_tas_json: str = f"{Path(__file__).parent}/advancement_data/results/primary_therapeutic_areas.json",
+    datasets_dir: str = f"{_REPO_ROOT}/advancement_data/datasets",
+    ta_parquet: str = f"{_REPO_ROOT}/advancement_data/features/therapeutic_areas.parquet",
+    primary_tas_json: str = f"{_REPO_ROOT}/advancement_data/results/primary_therapeutic_areas.json",
     only: str | None = None,
-    results_dir: str = f"{Path(__file__).parent}/advancement_data/results/external",
+    results_dir: str = f"{_REPO_ROOT}/advancement_data/results/external",
     inject: list[dict] | None = None,
     graph_file: str = _GRAPH_FILE,
     mappings_file: str = _MAPPINGS_FILE,
@@ -2069,7 +2073,7 @@ def _summarise_centrality_groups(split_points: pd.DataFrame,
 def inflation_analysis(
     graph_file: str = _GRAPH_FILE,
     mappings_file: str = _MAPPINGS_FILE,
-    out_dir: str = f"{Path(__file__).parent}/advancement_data/results/inflation",
+    out_dir: str = f"{_REPO_ROOT}/advancement_data/results/inflation",
     split: str = "first",
     compute_centrality: bool = True,
 ):

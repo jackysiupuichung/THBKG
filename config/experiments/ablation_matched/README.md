@@ -28,12 +28,12 @@ Configs here were generated from `config/experiments/lr_grouped_k100/lrgrpk100_s
 3. **Evaluate all three together + regenerate figures** (single core; see
    feedback_eval_one_core), injecting the new registry names:
    ```
-   sbatch ... python evaluate_advancement.py \
+   sbatch ... python -m src.evaluate_advancement \
      --only p3_eahgt_both,abl_score_ens,abl_novelty_ens \
      --results_dir headline_results/ablation_matched_eval
    ```
    (`abl_score_ens` / `abl_novelty_ens` are registered in
-   `evaluate_advancement.py` DEFAULT_RUNS; RDG/OTS auto-load from the zarr.)
+   `src/evaluate_advancement.py` DEFAULT_RUNS; RDG/OTS auto-load from the zarr.)
 
 4. **Copy the 5 plots** from `headline_results/ablation_matched_eval/plots/`
    into `THBKG/figures/results/` under the paper filenames (see the mapping in

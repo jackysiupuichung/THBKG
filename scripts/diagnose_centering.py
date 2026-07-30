@@ -39,7 +39,7 @@ import xarray as xr
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import evaluate_advancement as ev  # for _load_dataset, _inject_predictions, _compute_*
+from src import evaluate_advancement as ev  # for _load_dataset, _inject_predictions, _compute_*
 
 ZARR = ROOT / "advancement_data" / "datasets" / "evaluation_dataset.zarr"
 TA_PARQUET = ROOT / "advancement_data" / "features" / "therapeutic_areas.parquet"

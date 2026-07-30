@@ -239,7 +239,7 @@ def build(case_key, case):
     isrc = cumulative_max_by_source(indirect, yrs)
 
     # two-panel: direct (top) and indirect (bottom), one line per datasource.
-    # Legend OUTSIDE each panel (right), styling matched to evaluate_advancement.py
+    # Legend OUTSIDE each panel (right), styling matched to src/evaluate_advancement.py
     # (dpi 300, tight bbox, white facecolor, 8-9pt fonts).
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
     fig.patch.set_facecolor("white")

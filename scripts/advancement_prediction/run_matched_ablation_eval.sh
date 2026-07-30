@@ -24,7 +24,7 @@ python scripts/advancement_prediction/build_matched_ablation_ensembles.py
 # --- Step 3: evaluate score / novelty / both ensembles + regenerate figures ---
 # RDG and OTS auto-load from the evaluation_dataset.zarr; defaults point at the
 # 26.03 graph/zarr. abl_score_ens / abl_novelty_ens are registered in DEFAULT_RUNS.
-python evaluate_advancement.py evaluate \
+python -m src.evaluate_advancement evaluate \
     --only p3_eahgt_both,abl_score_ens,abl_novelty_ens \
     --results_dir headline_results/ablation_matched_eval
 

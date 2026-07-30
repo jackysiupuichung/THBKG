@@ -18,7 +18,7 @@ OUT_DIR=headline_results/grouped_ensemble_strictmask_eval
 uv run python scripts/advancement_prediction/build_grouped_ensemble_strictmask.py
 
 # 2. Evaluate it via official evaluate_advancement (inject the ensemble parquet).
-uv run python evaluate_advancement.py evaluate \
+uv run python -m src.evaluate_advancement evaluate \
   --results_dir "$OUT_DIR" \
   --only "" \
   --inject "[{\"path\": \"$RUNS/grouped_ensemble_strictmask_s5/test_predictions.parquet\", \"model_name\": \"grouped_ensemble_strictmask_s5\"}]"

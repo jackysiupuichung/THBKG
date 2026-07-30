@@ -23,7 +23,7 @@ SEEDS = [1, 7, 42, 123, 2024]
 
 # Paths are emitted as OmegaConf env interpolations so the configs are portable:
 # set THBKG_DATA_ROOT to the unpacked release (defaults to the author's cluster
-# scratch, matching evaluate_advancement.py). Resolved at config-load time via
+# scratch, matching src/evaluate_advancement.py). Resolved at config-load time via
 # OmegaConf.to_container(cfg, resolve=True) in the training entrypoint.
 _DR = "${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}"
 W3_GRAPH = f"{_DR}/26.03/graph/hetero_graph_with_features_datatype_w3.pt"

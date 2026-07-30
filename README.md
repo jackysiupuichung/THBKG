@@ -54,8 +54,8 @@ uv sync
 ## Evaluate
 
 ```bash
-python evaluate_advancement.py                              # all registered runs
-python evaluate_advancement.py --only p3_eahgt_both,b1_hgt  # a subset
+python -m src.evaluate_advancement                              # all registered runs
+python -m src.evaluate_advancement --only p3_eahgt_both,b1_hgt  # a subset
 ```
 
 The primary metric is **Relative Success @ K** (an importance-weighted hit rate),

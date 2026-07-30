@@ -19,7 +19,7 @@ OUT=headline_results/rdg_ots_eval
 
 for SET in datasets_26.03_w2 datasets_26.03_w3 datasets_26.03_w4; do
   echo "=========== EVAL $SET (RDG + OTS only) ==========="
-  python evaluate_advancement.py evaluate \
+  python -m src.evaluate_advancement evaluate \
       --datasets_dir "$DATA/$SET" \
       --results_dir "$OUT/$SET"
 done

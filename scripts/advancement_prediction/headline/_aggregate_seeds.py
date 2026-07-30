@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Average the 3-seed predictions for each headline architecture into a
 single test_predictions.parquet per architecture, named with the canonical
-slug evaluate_advancement.py expects (e.g. p3_eahgt_both, b1_hgt, ...).
+slug src/evaluate_advancement.py expects (e.g. p3_eahgt_both, b1_hgt, ...).
 
 Writes to /gpfs/scratch/bty414/opentarget_evidences/26.03/runs/headline_agg/
 """

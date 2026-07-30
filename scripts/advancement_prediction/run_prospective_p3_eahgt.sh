@@ -30,7 +30,7 @@ for x in df['EFO_ID'].dropna().tolist():
 
 echo "Loaded ${#DISEASES[@]} diseases from ${CSV}"
 
-python evaluate_prospective_standalone.py \
+python -m src.evaluate_prospective_standalone \
     --output_dir "${OUTPUT_DIR}" \
     --cutoff_year 2015 \
     --ks 100 200 500 \

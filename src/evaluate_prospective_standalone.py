@@ -6,7 +6,7 @@ Reuses the run's saved config (`<output_dir>/config.yaml`) and best model
 training time and then calls `run_prospective_eval`.
 
 Example:
-  python evaluate_prospective_standalone.py \
+  python -m src.evaluate_prospective_standalone \
       --output_dir runs/advancement_lambdarank \
       --diseases EFO_0000676 EFO_0003767
 """
@@ -14,14 +14,15 @@ Example:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Repo root (this module lives in src/), so `src.*` imports resolve when this
+# file is run directly rather than as `python -m src.evaluate_prospective_standalone`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.advancement_core import build_context_graph, split_advancement_edges, ADV_ETYPE
 from src.models.utils import build_model
