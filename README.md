@@ -1,4 +1,5 @@
 [![Dataset: Zenodo](https://img.shields.io/badge/dataset-Zenodo%2010.5281%2Fzenodo.20795231-1682D4)](https://doi.org/10.5281/zenodo.20795231)
+[![HuggingFace Dataset](https://img.shields.io/badge/HuggingFace-Dataset-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/datasets/jackysiupuichung/THBKG)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![PyTorch Geometric](https://img.shields.io/badge/PyG-CUDA%2011.8-EE4C2C)](https://pyg.org/)
