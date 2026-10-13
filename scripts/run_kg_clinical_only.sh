@@ -12,7 +12,8 @@
 set -euo pipefail
 source .venv/bin/activate
 
-OT_VERSION="${OT_VERSION:-26.03}"
+OT_VERSION="${OT_VERSION:-26.09}"
+export OT_VERSION
 INPUT="/gpfs/scratch/bty414/opentarget_evidences/${OT_VERSION}/evidenceDated/"
 OUT_BASE="/gpfs/scratch/bty414/opentarget_evidences/${OT_VERSION}/evidences"
 RAW_EDGES_DIR="${OUT_BASE}/edges"
@@ -27,11 +28,12 @@ import sys, os
 sys.path.insert(0, os.path.abspath("preprocessing/temporal_graph"))
 from parsers.parser import NodeParser, EdgeParser
 
-INPUT = "/gpfs/scratch/bty414/opentarget_evidences/26.03/evidenceDated/"
+V = os.environ["OT_VERSION"]
+INPUT = f"/gpfs/scratch/bty414/opentarget_evidences/{V}/evidenceDated/"
 NODE_SCHEMA  = "config/node_schema.yaml"
-EDGE_SCHEMA  = "config/edge_schema_26.03_clinical_only.yaml"
-NODE_OUT     = "/gpfs/scratch/bty414/opentarget_evidences/26.03/evidences/nodes"
-EDGE_OUT     = "/gpfs/scratch/bty414/opentarget_evidences/26.03/evidences/edges"
+EDGE_SCHEMA  = f"config/edge_schema_{V}_clinical_only.yaml"
+NODE_OUT     = f"/gpfs/scratch/bty414/opentarget_evidences/{V}/evidences/nodes"
+EDGE_OUT     = f"/gpfs/scratch/bty414/opentarget_evidences/{V}/evidences/edges"
 
 print("🔹 Parsing nodes...", flush=True)
 nodes, node_store = NodeParser(INPUT, NODE_SCHEMA, NODE_OUT, node_store=None).parse()

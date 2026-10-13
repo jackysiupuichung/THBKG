@@ -18,8 +18,13 @@ DEBUG_FLAG=""
 # === Configuration ===
 CONFIG="config/event_graph_config.yaml"
 
-# === OpenTargets release (23.06 | 26.03) ===
-OT_VERSION="${OT_VERSION:-26.03}"
+# === OpenTargets release (23.06 | 26.03 | 26.09) ===
+OT_VERSION="${OT_VERSION:-26.09}"
+export OT_VERSION
+
+# === Steps to run (set to 0 to skip a step already completed) ===
+RUN_TRIAL_RESOLUTION="${RUN_TRIAL_RESOLUTION:-1}"
+RUN_KG_PIPELINE="${RUN_KG_PIPELINE:-1}"
 
 # --- Input ---
 EVIDENCE_SUBDIR="evidenceDated"
@@ -39,21 +44,40 @@ RAW_NODES_DIR="${KG_OUTPUT_DIR}/nodes"
 STATIC_EDGES_DIR="${KG_OUTPUT_DIR}/static_edges"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
 
-# === 0. KG Pipeline (Raw Evidence -> Nodes/Edges) === [already completed]
-# echo "🚀 [1/2] Running KG Pipeline..."
-# echo "   Input: $INPUT_EVIDENCE_DIR"
-# echo "   Output: $KG_OUTPUT_DIR"
+# === 0a. Trial resolution (Stage B) ===
+# Rewrites the clinical_precedence parquets in place using the NCT terminal-date
+# cache (data/nct_terminal_dates_${OT_VERSION}.parquet, from
+# scripts/build_nct_terminal_dates.sh). The untouched download is copied once to
+# raw_backup/ first, since the in-place rewrite cannot be undone.
+if [ "$RUN_TRIAL_RESOLUTION" = "1" ]; then
+  echo "🚀 [0a] Resolving clinical trial outcomes..."
+  CLIN_PREC_DIR="${INPUT_EVIDENCE_DIR}sourceId=clinical_precedence"
+  CLIN_PREC_BACKUP="${OUTPUT_BASE}/raw_backup/sourceId=clinical_precedence"
+  if [ ! -d "$CLIN_PREC_BACKUP" ]; then
+    mkdir -p "$(dirname "$CLIN_PREC_BACKUP")"
+    cp -a "$CLIN_PREC_DIR" "$CLIN_PREC_BACKUP"
+    echo "   Backed up original files to $CLIN_PREC_BACKUP"
+  fi
+  python -m preprocessing.temporal_graph.parsers.apply_trial_resolution
+fi
 
-# python preprocessing/temporal_graph/pipeline/kg_pipeline.py \
-#   --input "$INPUT_EVIDENCE_DIR" \
-#   --node-input "$NODE_INPUT_DIR" \
-#   --node-schema "$NODE_SCHEMA" \
-#   --ot-version "$OT_VERSION" \
-#   --static-edge-schema "$STATIC_EDGE_SCHEMA" \
-#   --node-output "$RAW_NODES_DIR" \
-#   --edge-output "$RAW_EDGES_DIR" \
-#   --static-edge-output "$STATIC_EDGES_DIR" \
-#   $DEBUG_FLAG
+# === 0b. KG Pipeline (Raw Evidence -> Nodes/Edges) ===
+if [ "$RUN_KG_PIPELINE" = "1" ]; then
+  echo "🚀 [0b] Running KG Pipeline..."
+  echo "   Input: $INPUT_EVIDENCE_DIR"
+  echo "   Output: $KG_OUTPUT_DIR"
+
+  python preprocessing/temporal_graph/pipeline/kg_pipeline.py \
+    --input "$INPUT_EVIDENCE_DIR" \
+    --node-input "$NODE_INPUT_DIR" \
+    --node-schema "$NODE_SCHEMA" \
+    --ot-version "$OT_VERSION" \
+    --static-edge-schema "$STATIC_EDGE_SCHEMA" \
+    --node-output "$RAW_NODES_DIR" \
+    --edge-output "$RAW_EDGES_DIR" \
+    --static-edge-output "$STATIC_EDGES_DIR" \
+    $DEBUG_FLAG
+fi
 
 # === 1. Build Event Lists ===
 echo "🚀 [2/3] Building Event Lists (datasource-level and datatype-level)..."

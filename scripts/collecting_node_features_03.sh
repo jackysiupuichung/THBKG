@@ -14,12 +14,13 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Configuration ===
-OUTPUT_BASE="/gpfs/scratch/bty414/opentarget_evidences/26.03"
-MAPPINGS_FILE="/gpfs/scratch/bty414/opentarget_evidences/26.03/progression/temporal_graph_datatype_mappings.pt"
-EVIDENCE_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/evidenceDated"
-FEATURE_DATA_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/features/raw"
-FEATURE_OUTPUT_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/features/processed"
-TEMP_NODE_DIR="/gpfs/scratch/bty414/opentarget_evidences/26.03/features/temp_nodes"
+OT_VERSION="${OT_VERSION:-26.09}"
+OUTPUT_BASE="/gpfs/scratch/bty414/opentarget_evidences/${OT_VERSION}"
+MAPPINGS_FILE="${OUTPUT_BASE}/progression/temporal_graph_datatype_mappings.pt"
+EVIDENCE_DIR="${OUTPUT_BASE}/evidenceDated"
+FEATURE_DATA_DIR="${OUTPUT_BASE}/features/raw"
+FEATURE_OUTPUT_DIR="${OUTPUT_BASE}/features/processed"
+TEMP_NODE_DIR="${OUTPUT_BASE}/features/temp_nodes"
 
 # OUTPUT_BASE="output"
 # MAPPINGS_FILE="${OUTPUT_BASE}/progression/temporal_graph_sample_mappings.pt"

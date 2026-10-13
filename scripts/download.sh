@@ -37,6 +37,9 @@ declare -A NODES=(
     ["go"]="go"
     ["interaction_evidence"]="interactionEvidence"
 )
+# 26.09 moved target.tractability into its own dataset; the label pipeline
+# (clinical_advancement_paper export_features) reads it from here.
+[ "$OT_VERSION" != "26.03" ] && NODES["target_tractability"]="target_tractability"
 
 mkdir -p "$OUTDIR"
 

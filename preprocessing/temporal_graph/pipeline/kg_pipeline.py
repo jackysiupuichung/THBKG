@@ -42,7 +42,7 @@ if __name__ == "__main__":
     parser.add_argument("--input", required=True, help="Directory with evidence parquet files (edge source)")
     parser.add_argument("--node-input", default=None, help="Directory with node parquet files; defaults to --input if omitted")
     parser.add_argument("--node-schema", required=True, help="YAML schema for nodes")
-    parser.add_argument("--ot-version", choices=["23.06", "26.03"], default="26.03",
+    parser.add_argument("--ot-version", choices=["23.06", "26.03", "26.09"], default="26.09",
                         help="OpenTargets release; selects config/edge_schema_<ver>.yaml unless --edge-schema is given")
     parser.add_argument("--edge-schema", default=None, help="Override edge schema path (otherwise derived from --ot-version)")
     parser.add_argument("--static-edge-schema", required=True, help="YAML schema for static edges")

@@ -12,7 +12,7 @@ set -euo pipefail
 source .venv/bin/activate
 
 # === Configuration ===
-OT_VERSION="${OT_VERSION:-26.03}"
+OT_VERSION="${OT_VERSION:-26.09}"
 OUTPUT_BASE="/gpfs/scratch/bty414/opentarget_evidences/${OT_VERSION}"
 EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
 FEATURE_OUTPUT_DIR="${OUTPUT_BASE}/features/processed"
