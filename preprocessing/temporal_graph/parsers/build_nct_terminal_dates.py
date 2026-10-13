@@ -9,9 +9,16 @@ Collects NCT IDs from two Open Targets evidence dumps:
 
 For every distinct NCT ID, fetch the StatusModule and resolve a single
 `terminal_date` using the priority:
-    resultsFirstPostDate > lastUpdatePostDate > completionDate(ACTUAL)
-    > primaryCompletionDate(ACTUAL) > completionDate(ESTIMATED)
-    > primaryCompletionDate(ESTIMATED)
+    completionDate(ACTUAL) > primaryCompletionDate(ACTUAL)
+    > resultsFirstPostDate > lastUpdatePostDate
+    > completionDate(ESTIMATED) > primaryCompletionDate(ESTIMATED)
+
+The actual end of the trial comes first. lastUpdatePostDate is a fallback
+only: it moves forward whenever the sponsor edits the record, so it can sit
+years after the trial ended and depends on when the cache was fetched. It
+still ranks above ESTIMATED dates, which can fall before the real end and
+would date an outcome before it was known. Every candidate date is also
+stored, so the priority can be changed without re-fetching.
 
 Non-NCT IDs and IDs not returned by the API are written with found=False so
 coverage is explicit downstream. Resumable: rerun and only missing IDs are
@@ -54,13 +61,35 @@ SLEEP_SEC = 0.3
 NCT_RE = re.compile(r"^NCT\d{8}$")
 
 DATE_PRIORITY = [
-    ("resultsFirstPostDateStruct", None),
-    ("lastUpdatePostDateStruct", None),
     ("completionDateStruct", "ACTUAL"),
     ("primaryCompletionDateStruct", "ACTUAL"),
+    ("resultsFirstPostDateStruct", None),
+    ("lastUpdatePostDateStruct", None),
     ("completionDateStruct", "ESTIMATED"),
     ("primaryCompletionDateStruct", "ESTIMATED"),
 ]
+
+# Raw StatusModule dates kept per trial: (column, struct field, carries a type).
+CANDIDATE_DATES = [
+    ("completion_date", "completionDateStruct", True),
+    ("primary_completion_date", "primaryCompletionDateStruct", True),
+    ("results_first_post_date", "resultsFirstPostDateStruct", False),
+    ("last_update_post_date", "lastUpdatePostDateStruct", False),
+]
+
+
+def candidate_dates(status: dict) -> dict:
+    out = {}
+    for col, field, typed in CANDIDATE_DATES:
+        blob = status.get(field) or {}
+        out[col] = blob.get("date")
+        if typed:
+            out[f"{col}_type"] = blob.get("type")
+    return out
+
+
+def empty_candidate_dates() -> dict:
+    return candidate_dates({})
 
 
 _NCT_IN_URL_RE = re.compile(r"(NCT\d{8})")
@@ -214,6 +243,7 @@ def build_cache(out_path: Path, limit: int | None = None) -> None:
                         "terminal_date_source": None,
                         "overall_status": None,
                         "why_stopped": None,
+                        **empty_candidate_dates(),
                     }
                 )
                 continue
@@ -226,6 +256,7 @@ def build_cache(out_path: Path, limit: int | None = None) -> None:
                     "terminal_date_source": source,
                     "overall_status": status.get("overallStatus"),
                     "why_stopped": status.get("whyStopped"),
+                    **candidate_dates(status),
                 }
             )
 
@@ -248,6 +279,7 @@ def build_cache(out_path: Path, limit: int | None = None) -> None:
                     "terminal_date_source": None,
                     "overall_status": None,
                     "why_stopped": "non-NCT identifier",
+                    **empty_candidate_dates(),
                 }
             )
 
@@ -264,6 +296,10 @@ def build_cache(out_path: Path, limit: int | None = None) -> None:
             "open_targets_release": OT_VERSION,
             "clinical_precedence_glob": CLIN_PREC_GLOB,
             "source": CTGOV_URL,
+            "date_priority": [
+                f"{field.replace('Struct', '')}({t})" if t else field.replace("Struct", "")
+                for field, t in DATE_PRIORITY
+            ],
             "last_fetch_started_at": started_at,
             "last_fetch_finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "rows_total": int(len(out)),

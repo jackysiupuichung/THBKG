@@ -48,7 +48,8 @@ EVENT_OUTPUT_DIR="${OUTPUT_BASE}/progression"
 # Rewrites the clinical_precedence parquets in place using the NCT terminal-date
 # cache (data/nct_terminal_dates_${OT_VERSION}.parquet, from
 # scripts/build_nct_terminal_dates.sh). The untouched download is copied once to
-# raw_backup/ first, since the in-place rewrite cannot be undone.
+# raw_backup/ and restored before every run: the rewrite duplicates rows, so it
+# must always start from the original files.
 if [ "$RUN_TRIAL_RESOLUTION" = "1" ]; then
   echo "🚀 [0a] Resolving clinical trial outcomes..."
   CLIN_PREC_DIR="${INPUT_EVIDENCE_DIR}sourceId=clinical_precedence"
@@ -57,6 +58,10 @@ if [ "$RUN_TRIAL_RESOLUTION" = "1" ]; then
     mkdir -p "$(dirname "$CLIN_PREC_BACKUP")"
     cp -a "$CLIN_PREC_DIR" "$CLIN_PREC_BACKUP"
     echo "   Backed up original files to $CLIN_PREC_BACKUP"
+  else
+    rm -rf "$CLIN_PREC_DIR"
+    cp -a "$CLIN_PREC_BACKUP" "$CLIN_PREC_DIR"
+    echo "   Restored original files from $CLIN_PREC_BACKUP"
   fi
   python -m preprocessing.temporal_graph.parsers.apply_trial_resolution
 fi
