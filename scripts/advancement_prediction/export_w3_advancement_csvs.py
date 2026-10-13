@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Export the 26.03 w3 clinical-advancement pipeline labels as train/test CSVs
+"""Export the w3 clinical-advancement pipeline labels as train/test CSVs
 for build_event_graph.py (columns: target_id, disease_id, transition_year, outcome).
 
-train_dataset.csv  <- datasets_26.03_w3/training_dataset.zarr
-test_dataset.csv   <- datasets_26.03_w3/evaluation_dataset.zarr
+train_dataset.csv  <- datasets_<OT_VERSION>_w<ADV_WINDOW>/training_dataset.zarr
+test_dataset.csv   <- datasets_<OT_VERSION>_w<ADV_WINDOW>/evaluation_dataset.zarr
+
+OT_VERSION (default 26.09) and ADV_WINDOW (default 3) come from the
+environment; output goes to this repo's data/clinical_trial_advancement/.
 """
+import os
 import xarray as xr
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
-SRC = Path("/gpfs/scratch/bty414/clinical_advancement_paper/data/datasets_26.03_w3")
-OUT = Path("/data/home/bty414/opentarget_temporal_study/src/opentarget_het_graph/"
-           "data/clinical_trial_advancement/26.03_w3")
+OT_VERSION = os.environ.get("OT_VERSION", "26.09")
+ADV_WINDOW = os.environ.get("ADV_WINDOW", "3")
+TAG = f"{OT_VERSION}_w{ADV_WINDOW}"
+SRC = Path(f"/gpfs/scratch/bty414/clinical_advancement_paper/data/datasets_{TAG}")
+OUT = Path(__file__).resolve().parents[2] / "data" / "clinical_trial_advancement" / TAG
 OUT.mkdir(parents=True, exist_ok=True)
 
 
