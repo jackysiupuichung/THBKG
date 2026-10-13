@@ -1,0 +1,49 @@
+experiment:
+  name: add_both_w3_2609_s2024
+data:
+  graph_file: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.09/graph/hetero_graph_with_features_datatype.pt
+  mappings_file: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.09/progression/temporal_graph_datatype_mappings.pt
+  advancement_train_csv: data/clinical_trial_advancement/26.09_w3/train_dataset.csv
+  advancement_test_csv: data/clinical_trial_advancement/26.09_w3/test_dataset.csv
+  undirected: true
+  random_val_frac: 0.2
+  random_seed: 2024
+model:
+  name: hgt
+  hidden_dim: 128
+  num_heads: 2
+  num_layers: 2
+  dropout: 0.1
+  decoder_dropout: 0.1
+  decoder_kind: mlp
+  use_rte: false
+  use_edge_features: true
+  edge_feat_cols: [0, 1]
+  edge_feat_dim: 2
+train:
+  output_dir: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.09/runs/w3/additive/both/add_both_w3_2609_s2024
+  num_epochs: 40
+  lr: 0.0003
+  weight_decay: 0.002
+  eta_min: 1.0e-6
+  cosine_t_max: 40
+  batch_size: 256
+  num_neighbors: [20, 10]
+  eval_every: 1
+  lambdarank:
+    impl: allrank_grouped
+    weighing_scheme: lambdaRank_scheme
+    sigma: 1.4319388789983414
+    ndcg_k: 100
+    group_all_tas: true
+  early_stopping:
+    enabled: false
+    patience: 999
+    metric: rs_ta_median@50
+    mode: max
+seed: 2024
+eval:
+  prospective:
+    diseases: []
+    cutoff_year: 2015
+    ks: [100]
