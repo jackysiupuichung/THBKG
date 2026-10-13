@@ -34,7 +34,10 @@ class IntActParser(EdgeParser):
             if not files:
                 print(f"⚠️ No IntAct files found in {intact_dir}")
                 return {}
-            file_path = files[0]
+            # The species zip also unpacks human_negative.txt and viral subsets;
+            # only human.txt is the human PPI set.
+            human = os.path.join(intact_dir, "human.txt")
+            file_path = human if human in files else files[0]
 
         print(f"📦 Parsing IntAct: {file_path}")
         results = []

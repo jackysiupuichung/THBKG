@@ -2,7 +2,8 @@
 Stage A: build an offline cache of NCT terminal dates from ClinicalTrials.gov v2.
 
 Collects NCT IDs from two Open Targets evidence dumps:
-  - 26.03 sourceId=clinical_precedence: NCT lives in `clinicalReportId`
+  - OT_VERSION (default 26.09) sourceId=clinical_precedence: NCT lives in
+    `clinicalReportId`
   - 23.06 sourceId=chembl:               NCT lives inside `urls` struct list as
                                          https://clinicaltrials.gov/ct2/show/NCT########
 
@@ -14,29 +15,38 @@ For every distinct NCT ID, fetch the StatusModule and resolve a single
 
 Non-NCT IDs and IDs not returned by the API are written with found=False so
 coverage is explicit downstream. Resumable: rerun and only missing IDs are
-fetched.
+fetched. The cache is per OT release (nct_terminal_dates_{OT_VERSION}.parquet),
+so a new release starts from an empty cache and every ID is re-fetched. A
+sidecar nct_terminal_dates_{OT_VERSION}.meta.json records the OT release and
+fetch dates.
 """
 
 from __future__ import annotations
 
 import argparse
 import glob
+import json
+import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 import requests
 
+OT_VERSION = os.environ.get("OT_VERSION", "26.09")
 CLIN_PREC_GLOB = (
-    "/gpfs/scratch/bty414/opentarget_evidences/26.03/evidenceDated/"
+    f"/gpfs/scratch/bty414/opentarget_evidences/{OT_VERSION}/evidenceDated/"
     "sourceId=clinical_precedence/*.parquet"
 )
 CHEMBL_2306_GLOB = (
     "/gpfs/scratch/bty414/opentarget_evidences/23.06/evidenceDated/"
     "sourceId=chembl/*.parquet"
 )
-DEFAULT_OUT = Path(__file__).resolve().parents[3] / "data" / "nct_terminal_dates.parquet"
+DEFAULT_OUT = (
+    Path(__file__).resolve().parents[3] / "data" / f"nct_terminal_dates_{OT_VERSION}.parquet"
+)
 
 CTGOV_URL = "https://clinicaltrials.gov/api/v2/studies"
 BATCH_SIZE = 50
@@ -57,10 +67,14 @@ _NCT_IN_URL_RE = re.compile(r"(NCT\d{8})")
 
 
 def _collect_from_clinical_precedence() -> tuple[list[str], list[str]]:
-    """26.03 path: NCT is in clinicalReportId."""
+    """26.03+ path: NCT is in clinicalReportId."""
     files = sorted(glob.glob(CLIN_PREC_GLOB))
     if not files:
-        return [], []
+        # Without this the cache would hold only the 23.06 chembl NCTs while
+        # its meta sidecar claims OT_VERSION.
+        raise FileNotFoundError(
+            f"no clinical_precedence parquets for OT {OT_VERSION}: {CLIN_PREC_GLOB}"
+        )
     df = pd.concat(
         [pd.read_parquet(f, columns=["clinicalReportId"]) for f in files],
         ignore_index=True,
@@ -106,9 +120,9 @@ def _collect_from_chembl_2306() -> tuple[list[str], list[str]]:
 
 
 def collect_input_ids() -> tuple[list[str], list[str]]:
-    """Aggregate NCTs from both 26.03 clinical_precedence and 23.06 chembl.
+    """Aggregate NCTs from OT_VERSION clinical_precedence and 23.06 chembl.
 
-    Non-NCT identifiers (EudraCT etc.) only come from the 26.03 dump (the
+    Non-NCT identifiers (EudraCT etc.) only come from the OT_VERSION dump (the
     23.06 urls field has only NCTs).
     """
     nct_a, non_nct = _collect_from_clinical_precedence()
@@ -157,6 +171,7 @@ def fetch_batch(ids: list[str], session: requests.Session) -> dict[str, dict]:
 
 def build_cache(out_path: Path, limit: int | None = None) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     nct_ids, non_nct = collect_input_ids()
     print(f"input: {len(nct_ids)} NCT-shaped, {len(non_nct)} non-NCT")
@@ -240,6 +255,24 @@ def build_cache(out_path: Path, limit: int | None = None) -> None:
     out = pd.DataFrame(combined).drop_duplicates(subset=["nct_id"], keep="last")
     out.to_parquet(out_path, index=False)
     print(f"wrote {len(out)} rows to {out_path}")
+
+    meta_path = out_path.with_suffix(".meta.json")
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    meta.setdefault("first_fetch_started_at", started_at)
+    meta.update(
+        {
+            "open_targets_release": OT_VERSION,
+            "clinical_precedence_glob": CLIN_PREC_GLOB,
+            "source": CTGOV_URL,
+            "last_fetch_started_at": started_at,
+            "last_fetch_finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "rows_total": int(len(out)),
+            "rows_found": int(out["found"].sum()),
+            "rows_fetched_last_run": len(todo),
+        }
+    )
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+    print(f"wrote {meta_path}")
 
 
 if __name__ == "__main__":

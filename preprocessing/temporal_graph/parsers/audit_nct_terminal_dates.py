@@ -1,7 +1,7 @@
 """
 Stage A.5: coverage audit for the NCT terminal-date cache.
 
-Reads `data/nct_terminal_dates.parquet` and the clinical_precedence evidence
+Reads `data/nct_terminal_dates_{OT_VERSION}.parquet` and the clinical_precedence evidence
 parquets, and prints coverage broken down by:
   - all unique clinicalReportIds vs failure-bucket rows
   - terminal_date_source field (which date won)
@@ -16,6 +16,7 @@ No parser changes happen here. Use the numbers to decide drop policy.
 from __future__ import annotations
 
 import argparse
+import os
 import glob
 import json
 import re
@@ -23,11 +24,14 @@ from pathlib import Path
 
 import pandas as pd
 
+OT_VERSION = os.environ.get("OT_VERSION", "26.09")
 CLIN_PREC_GLOB = (
-    "/gpfs/scratch/bty414/opentarget_evidences/26.03/evidenceDated/"
+    f"/gpfs/scratch/bty414/opentarget_evidences/{OT_VERSION}/evidenceDated/"
     "sourceId=clinical_precedence/*.parquet"
 )
-DEFAULT_CACHE = Path(__file__).resolve().parents[3] / "data" / "nct_terminal_dates.parquet"
+DEFAULT_CACHE = (
+    Path(__file__).resolve().parents[3] / "data" / f"nct_terminal_dates_{OT_VERSION}.parquet"
+)
 
 FAILURE_KEYWORDS = ("negative", "safety", "side effect", "sideeffect", "toxicity")
 
@@ -186,7 +190,7 @@ def main(cache_path: Path) -> None:
             uniq_merged["terminal_date"].notna().sum()
         ),
     }
-    out_json = cache_path.with_name("nct_terminal_dates_audit.json")
+    out_json = cache_path.with_name(f"{cache_path.stem}_audit.json")
     with open(out_json, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"\nwrote summary to {out_json}")

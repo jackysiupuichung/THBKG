@@ -50,7 +50,7 @@ CHEMBL_DIR = Path(
     "/gpfs/scratch/bty414/opentarget_evidences/23.06/evidenceDated/sourceId=chembl"
 )
 DEFAULT_CACHE = (
-    Path(__file__).resolve().parents[3] / "data" / "nct_terminal_dates.parquet"
+    Path(__file__).resolve().parents[3] / "data" / "nct_terminal_dates_26.03.parquet"
 )
 
 NCT_RE = re.compile(r"(NCT\d{8})")

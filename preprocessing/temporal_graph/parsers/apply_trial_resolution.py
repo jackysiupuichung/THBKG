@@ -1,5 +1,5 @@
 """
-Stage B: mutate the 26.03 clinical_precedence parquets in place.
+Stage B: mutate the OT_VERSION (default 26.09) clinical_precedence parquets in place.
 
 Dual-edge mode: every NCT-shaped row becomes 1 OR 2 output rows.
   - All rows emit an `ongoing` evidence at studyStartDate
@@ -29,17 +29,19 @@ Idempotent: tolerates running on already-mutated parquets.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 from pathlib import Path
 
 import pandas as pd
 
+OT_VERSION = os.environ.get("OT_VERSION", "26.09")
 CLIN_PREC_DIR = Path(
-    "/gpfs/scratch/bty414/opentarget_evidences/26.03/evidenceDated/sourceId=clinical_precedence"
+    f"/gpfs/scratch/bty414/opentarget_evidences/{OT_VERSION}/evidenceDated/sourceId=clinical_precedence"
 )
 DEFAULT_CACHE = (
-    Path(__file__).resolve().parents[3] / "data" / "nct_terminal_dates.parquet"
+    Path(__file__).resolve().parents[3] / "data" / f"nct_terminal_dates_{OT_VERSION}.parquet"
 )
 
 NCT_RE = re.compile(r"^NCT\d{8}$")
