@@ -12,13 +12,18 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
+FAILED_SCRIPTS = []
+
+
 def run_script(script_path: str, args: list):
     cmd = [sys.executable, script_path] + args
     print(f"\n🚀 Running {script_path} {' '.join(args)}...")
     result = subprocess.run(cmd)
     if result.returncode != 0:
         print(f"❌ Failed to run {script_path}")
-        # We don't exit here, to allow partial completion if needed
+        # Keep going so the other node types still get built; main() exits
+        # non-zero at the end so the job (and any dependent job) fails.
+        FAILED_SCRIPTS.append(script_path)
 
 
 def subset_embeddings(
@@ -346,7 +351,8 @@ def main():
             molecule_args = [
                 "--drug-dir", f"{evidence_dir}/molecule",
                 "--output-dir", output_dir,
-                "--parquet-glob", "part-*.parquet",
+                # OT 26.09 names this file 00000000.parquet, not part-*.
+                "--parquet-glob", "*.parquet",
                 "--id-col", "id",
                 "--smiles-col", "canonicalSmiles",
                 "--kg-ids-file", node_files['molecule']
@@ -357,6 +363,10 @@ def main():
     else:
         print("⚠️  No molecule nodes in graph")
     
+    if FAILED_SCRIPTS:
+        print(f"\n❌ {len(FAILED_SCRIPTS)} feature builder(s) failed: {FAILED_SCRIPTS}")
+        sys.exit(1)
+
     print(f"\n{'='*60}")
     print("✅ ALL NODE FEATURES BUILT")
     print(f"{'='*60}")
