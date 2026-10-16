@@ -4,532 +4,438 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>THBKG — Temporal Biomedical Knowledge Graph</title>
-<meta name="description" content="A biomedical knowledge graph where every edge is dated, plus a leak-free clinical-advancement benchmark. Built from Open Targets 26.09.">
+<meta name="description" content="THBKG: a temporal biomedical knowledge graph in which every edge is dated, with a decision-aligned clinical-advancement benchmark.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  color-scheme: light;
-  --paper: #f6f3ea;
-  --paper-2: #efeadc;
-  --ink: #16150f;
-  --ink-2: #4c4a40;
-  --ink-3: #7a776a;
-  --rule: #d9d3c1;
-  --accent: #b5401f;
-  --code-bg: #1d1c18;
-  --code-ink: #ede8d8;
-  --grid: #e4dfcf;
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --series-3: #1baf7a;
-  --series-4: #eda100;
-  --series-5: #e87ba4;
+  --beige: #f9f9f9;
+  --off-white: #f4f4f4;
+  --cream: #efebe4;
+  --dark: #1a1a1a;
+  --near-black: #222222;
+  --navy: #325c76;
+  --navy-hover: #264559;
+  --muted: #666666;
+  --faint: #999999;
+  --light-border: rgba(0,0,0,0.07);
+  --shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(50,92,118,0.06);
 }
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --paper: #18191b;
-    --paper-2: #202124;
-    --ink: #f1ede1;
-    --ink-2: #c4bfae;
-    --ink-3: #8f8a7b;
-    --rule: #34352f;
-    --accent: #ef7b56;
-    --code-bg: #0f1011;
-    --code-ink: #e7e2d2;
-    --grid: #2a2b2d;
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --series-5: #d55181;
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --paper: #18191b;
-  --paper-2: #202124;
-  --ink: #f1ede1;
-  --ink-2: #c4bfae;
-  --ink-3: #8f8a7b;
-  --rule: #34352f;
-  --accent: #ef7b56;
-  --code-bg: #0f1011;
-  --code-ink: #e7e2d2;
-  --grid: #2a2b2d;
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --series-3: #199e70;
-  --series-4: #c98500;
-  --series-5: #d55181;
-}
-
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
 body {
-  margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font: 400 17px/1.6 "IBM Plex Sans", sans-serif;
-  background-image:
-    repeating-linear-gradient(0deg, transparent 0 31px, color-mix(in srgb, var(--rule) 35%, transparent) 31px 32px);
-  background-attachment: local;
+  margin: 0; background: var(--beige); color: var(--dark);
+  font-family: "Manrope", sans-serif; letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
 }
-a { color: var(--accent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
-a:hover { text-decoration-thickness: 2px; }
-::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+a { color: inherit; }
+img { max-width: 100%; }
 
-.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
-@media (max-width: 600px) { .wrap { padding: 0 16px; } body { font-size: 16px; } }
+/* nav */
+.nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50; height: 48px;
+  display: flex; align-items: center; justify-content: space-between; padding: 0 24px;
+  border-bottom: 1px solid transparent; transition: background-color .3s, border-color .3s;
+}
+.nav.scrolled { background: rgba(249,249,249,.92); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border-bottom-color: var(--light-border); }
+.wordmark { font-weight: 700; font-size: 17px; letter-spacing: -0.02em; text-decoration: none; color: var(--dark); }
+.wordmark span { color: var(--navy); }
+.nav-links { display: flex; gap: 8px; }
+.pill {
+  border: 1px solid var(--navy); border-radius: 100px; padding: 4px 14px;
+  font-weight: 500; font-size: 13px; color: var(--navy); text-decoration: none;
+  transition: background-color .25s, color .25s;
+}
+.pill:hover { background: var(--navy); color: #fff; }
 
-/* --- masthead --- */
-.mast {
-  display: flex; justify-content: space-between; align-items: center; gap: 16px;
-  padding: 20px 0; border-bottom: 1px solid var(--rule);
-  font: 500 13px/1 "IBM Plex Mono", monospace; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--ink-2);
-}
-.mast nav { display: flex; gap: 18px; flex-wrap: wrap; }
-.mast nav a { color: var(--ink-2); text-decoration: none; }
-.mast nav a:hover { color: var(--accent); }
-.theme-btn {
-  font: inherit; color: var(--ink-2); background: none; border: 1px solid var(--rule);
-  border-radius: 999px; padding: 6px 12px; cursor: pointer;
-}
-.theme-btn:hover { border-color: var(--ink-3); }
+/* layout */
+.wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+.narrow { max-width: 720px; margin: 0 auto; }
+section { padding: 120px 0; }
+section.alt { background: var(--off-white); }
+@media (max-width: 700px) { section { padding: 80px 0; } .wrap { padding: 0 16px; } .nav { padding: 0 16px; } }
 
-/* --- hero --- */
-.hero { display: grid; grid-template-columns: 1.25fr .75fr; gap: 48px; padding: 72px 0 56px; align-items: end; }
-@media (max-width: 860px) { .hero { grid-template-columns: 1fr; gap: 28px; padding-top: 48px; } }
-.kicker {
-  font: 500 12px/1 "IBM Plex Mono", monospace; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--accent); margin: 0 0 22px;
-}
-h1 {
-  font: 800 clamp(44px, 7.4vw, 92px)/.95 "Fraunces", serif; letter-spacing: -.035em;
-  margin: 0; font-variation-settings: "opsz" 144;
-}
-h1 em { font-style: italic; font-weight: 400; color: var(--accent); }
-.lede { font-size: 20px; line-height: 1.55; color: var(--ink-2); max-width: 36em; margin: 26px 0 0; }
-.hero-card {
-  border-top: 3px solid var(--ink); padding-top: 18px;
-}
-.hero-card dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 18px 20px; }
-.hero-card dt { font: 500 11px/1.2 "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
-.hero-card dd { margin: 4px 0 0; font: 600 30px/1 "Fraunces", serif; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.btns { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+.eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--navy); text-align: center; }
+h2 { font-size: 32px; font-weight: 500; line-height: 1.2; letter-spacing: -0.01em; text-align: center; margin: 8px 0 0; }
+.lead { font-size: 16px; line-height: 1.7; color: var(--muted); text-align: center; margin: 16px 0 0; }
+
+/* hero */
+.hero { padding: 180px 0 100px; }
+.hero h1 { font-size: 52px; font-weight: 500; line-height: 1.1; letter-spacing: -0.02em; text-align: center; margin: 0; }
+.hero h1 b { font-weight: 700; color: var(--navy); }
+.authors { text-align: center; margin-top: 28px; font-size: 20px; font-weight: 500; color: #3a3a3a; }
+.authors sup, .affils sup, .notes sup { font-size: 12px; font-weight: 600; color: var(--navy); margin-left: 1px; }
+.dot { margin: 0 7px; color: #c0c0c0; font-size: 12px; user-select: none; }
+.affils { text-align: center; margin-top: 14px; font-size: 14px; color: var(--muted); line-height: 1.6; }
+.affils sup { font-size: 10px; margin: 0 2px 0 0; }
+.notes { text-align: center; margin-top: 10px; font-size: 12px; color: var(--faint); line-height: 1.7; }
+.notes a { color: var(--muted); }
+.abstract { background: var(--cream); border-radius: 16px; padding: 32px; margin-top: 48px; }
+.abstract p { font-size: 18px; line-height: 1.7; margin: 0; }
+.dropcap { float: left; font-size: 56px; font-weight: 700; line-height: .8; color: var(--navy); margin: 4px 10px 0 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
 .btn {
-  display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
-  font: 500 14px/1 "IBM Plex Mono", monospace; padding: 12px 16px; border-radius: 3px;
-  border: 1px solid var(--ink); color: var(--ink);
+  display: inline-block; border-radius: 100px; padding: 10px 24px; font-size: 14px; font-weight: 500;
+  text-decoration: none; border: 1px solid var(--dark); color: var(--dark); transition: all .2s;
 }
-.btn.primary { background: var(--ink); color: var(--paper); }
-.btn:hover { transform: translateY(-1px); }
+.btn:hover { background: var(--dark); color: var(--beige); }
+.btn.primary { background: var(--dark); color: var(--beige); border-color: var(--dark); }
+.btn.primary:hover { background: var(--near-black); }
+@media (max-width: 700px) { .hero { padding: 120px 0 72px; } .hero h1 { font-size: 34px; } .authors { font-size: 17px; } .abstract { padding: 22px; } .abstract p { font-size: 16px; } }
 
-/* --- sections --- */
-section { padding: 56px 0; border-top: 1px solid var(--rule); }
-.sec-head { display: grid; grid-template-columns: 120px 1fr; gap: 24px; margin-bottom: 28px; }
-@media (max-width: 700px) { .sec-head { grid-template-columns: 1fr; gap: 6px; } }
-.sec-no { font: 500 13px/1.6 "IBM Plex Mono", monospace; color: var(--accent); letter-spacing: .08em; padding-top: 10px; }
-h2 { font: 600 clamp(28px, 3.6vw, 40px)/1.1 "Fraunces", serif; letter-spacing: -.02em; margin: 0; }
-.sec-body { margin-left: 144px; max-width: 760px; }
-@media (max-width: 700px) { .sec-body { margin-left: 0; } }
-.sec-body p { margin: 0 0 16px; color: var(--ink-2); }
-.sec-body strong { color: var(--ink); font-weight: 600; }
+/* cards */
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 48px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 40px; }
+@media (max-width: 860px) { .grid3, .grid4 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .grid3, .grid4 { grid-template-columns: 1fr; } }
+.card { background: #fff; border-radius: 16px; padding: 28px; border: 1px solid var(--light-border); box-shadow: var(--shadow); }
+.card .label { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--navy); text-transform: uppercase; letter-spacing: .08em; }
+.card .stat { font-size: 24px; font-weight: 600; line-height: 1.2; margin-top: 10px; letter-spacing: -0.01em; }
+.card p { font-size: 14px; line-height: 1.65; color: var(--muted); margin: 12px 0 0; }
+.card.mini { padding: 22px; }
+.card.mini .stat { font-size: 28px; font-variant-numeric: tabular-nums; }
+.card.mini p { margin-top: 6px; font-size: 13px; }
 
-/* --- as-of chart --- */
-.asof { margin-left: 144px; }
-@media (max-width: 700px) { .asof { margin-left: 0; } }
-.asof-top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
-.asof-year { font: 800 64px/.9 "Fraunces", serif; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-.asof-year small { display: block; font: 500 11px/1 "IBM Plex Mono", monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
-.asof-total { text-align: right; }
-.asof-total b { display: block; font: 600 34px/1 "Fraunces", serif; font-variant-numeric: tabular-nums; }
-.asof-total span { font: 500 11px/1 "IBM Plex Mono", monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
-.chart-box { position: relative; }
-#chart { display: block; width: 100%; height: auto; touch-action: none; cursor: crosshair; }
-#chart text { font: 12px "IBM Plex Mono", monospace; fill: var(--ink-3); }
-.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 14px 0 0; padding: 0; list-style: none; }
-.legend li { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-2); }
-.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-.legend b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-input[type=range] { width: 100%; margin: 18px 0 4px; accent-color: var(--accent); }
-.range-ends { display: flex; justify-content: space-between; font: 12px "IBM Plex Mono", monospace; color: var(--ink-3); }
-.cut-note { font-size: 14px; color: var(--ink-3); margin-top: 12px; }
-details.table { margin-top: 18px; font-size: 14px; }
-details.table summary { cursor: pointer; font: 500 13px "IBM Plex Mono", monospace; color: var(--ink-2); }
-.tscroll { overflow-x: auto; margin-top: 10px; }
+/* figures */
+figure { margin: 56px 0 0; }
+.frame { background: #fff; border-radius: 16px; padding: 20px; border: 1px solid var(--light-border); box-shadow: var(--shadow); }
+.frame img { display: block; width: 100%; height: auto; border-radius: 8px; }
+.frame.pad-lg { padding: 28px 32px; }
+.frame.center img { max-width: 620px; margin: 0 auto; }
+figcaption { font-size: 13px; line-height: 1.65; color: var(--muted); margin: 14px auto 0; max-width: 820px; }
+figcaption b { color: var(--navy); font-weight: 600; }
+.fig-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .fig-row { grid-template-columns: 1fr; } }
+.tag {
+  display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--navy); background: rgba(50,92,118,.08); border-radius: 100px; padding: 3px 10px; margin-bottom: 10px;
+}
 
-/* --- tables --- */
-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-th, td { text-align: right; padding: 9px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+/* split timeline */
+.split { margin-top: 40px; }
+.split-bar { display: grid; grid-template-columns: 21fr 6fr 4fr; gap: 6px; }
+.split-bar div { border-radius: 10px; padding: 14px 16px; font-size: 13px; line-height: 1.4; }
+.split-bar .tr { background: var(--navy); color: #fff; }
+.split-bar .ev { background: #6f97ae; color: #fff; }
+.split-bar .fu { background: #fff; border: 1px dashed rgba(0,0,0,.18); color: var(--muted); }
+.split-bar b { display: block; font-size: 15px; font-weight: 600; }
+@media (max-width: 640px) { .split-bar { grid-template-columns: 1fr; } }
+
+/* table */
+.tbl { margin-top: 40px; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); }
+th, td { padding: 12px 18px; text-align: right; border-bottom: 1px solid var(--light-border); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
-thead th { font: 500 11px/1.2 "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); border-bottom: 2px solid var(--ink); }
-td.delta { color: var(--ink-3); font-size: 14px; }
-.stats-table { margin-left: 144px; max-width: 760px; overflow-x: auto; }
-@media (max-width: 700px) { .stats-table { margin-left: 0; } }
+thead th { font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--navy); background: #fbfbfb; }
+tbody tr:last-child td { border-bottom: 0; }
+td.chg { color: var(--faint); }
 
-/* --- timeline figure --- */
-.split { margin: 26px 0 8px; }
-.split svg { width: 100%; height: auto; display: block; }
-.split text { font: 12px "IBM Plex Mono", monospace; fill: var(--ink-2); }
+code { font-family: "JetBrains Mono", monospace; font-size: .9em; background: rgba(0,0,0,.05); padding: 1px 6px; border-radius: 4px; }
+pre.code { margin: 32px 0 0; background: #1a1a1a; color: #e8e6e1; border-radius: 16px; padding: 24px; overflow-x: auto; font: 13px/1.7 "JetBrains Mono", monospace; }
+pre.code .c { color: #8a8a80; }
+pre.code .s { color: #a9cfa4; }
 
-/* --- code --- */
-pre {
-  background: var(--code-bg); color: var(--code-ink); padding: 20px 22px; border-radius: 4px;
-  overflow-x: auto; font: 14px/1.65 "IBM Plex Mono", monospace; margin: 0 0 18px;
-}
-pre .c { color: #8e8a78; }
-pre .k { color: #f0a37f; }
-pre .s { color: #a8d5a2; }
-code { font-family: "IBM Plex Mono", monospace; font-size: .9em; }
-p code, li code { background: var(--paper-2); padding: 1px 6px; border-radius: 3px; }
-.copy-wrap { position: relative; }
-.copy {
-  position: absolute; top: 10px; right: 10px; font: 500 12px "IBM Plex Mono", monospace;
-  background: transparent; color: #b9b39f; border: 1px solid #3c3a33; border-radius: 3px; padding: 4px 8px; cursor: pointer;
-}
-.copy:hover { color: #fff; border-color: #6b675a; }
+/* footer */
+footer { background: var(--dark); color: #d6d6d6; padding: 80px 0; }
+footer h3 { font-size: 24px; font-weight: 500; color: #fff; margin: 0; letter-spacing: -0.01em; }
+.foot-links { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 20px; }
+.foot-links a { color: #d6d6d6; text-decoration: none; font-size: 16px; }
+.foot-links a:hover { color: #fff; }
+.cite-head { display: flex; justify-content: space-between; align-items: center; margin-top: 56px; }
+.cite-head span { font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #9fb7c6; }
+.copy { font: 12px "JetBrains Mono", monospace; background: transparent; color: #d6d6d6; border: 1px solid #444; border-radius: 100px; padding: 5px 12px; cursor: pointer; }
+.copy:hover { border-color: #888; color: #fff; }
+footer pre { margin: 12px 0 0; background: #0f0f0f; color: #e8e6e1; border-radius: 12px; padding: 20px; font: 12px/1.7 "JetBrains Mono", monospace; white-space: pre; overflow-x: auto; }
+.fine { font-size: 13px; color: #8a8a8a; margin-top: 32px; line-height: 1.7; }
+.fine a { color: #b9b9b9; }
 
-/* --- downloads --- */
-.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-left: 144px; border-top: 1px solid var(--ink); }
-@media (max-width: 860px) { .cards { grid-template-columns: 1fr; margin-left: 0; } }
-.card { padding: 22px 22px 24px 0; border-bottom: 1px solid var(--rule); text-decoration: none; color: var(--ink); display: block; }
-.card + .card { padding-left: 22px; border-left: 1px solid var(--rule); }
-@media (max-width: 860px) { .card + .card { padding-left: 0; border-left: 0; } }
-.card h3 { font: 600 22px/1.2 "Fraunces", serif; margin: 0 0 8px; }
-.card p { margin: 0; color: var(--ink-2); font-size: 15px; }
-.card .arrow { font: 500 13px "IBM Plex Mono", monospace; color: var(--accent); margin-top: 14px; display: inline-block; }
-.card:hover h3 { color: var(--accent); }
-
-.note {
-  border-left: 3px solid var(--accent); background: var(--paper-2); padding: 14px 18px; border-radius: 0 4px 4px 0;
-  font-size: 15px; color: var(--ink-2); margin: 18px 0 0;
-}
-footer { border-top: 1px solid var(--rule); padding: 32px 0 56px; font: 13px/1.7 "IBM Plex Mono", monospace; color: var(--ink-3); }
-
-/* --- load motion --- */
+/* reveal on scroll */
 @media (prefers-reduced-motion: no-preference) {
-  .rise { opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.2,.7,.2,1) forwards; }
-  .d1 { animation-delay: .05s; } .d2 { animation-delay: .15s; } .d3 { animation-delay: .28s; } .d4 { animation-delay: .4s; }
-  @keyframes rise { to { opacity: 1; transform: none; } }
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s cubic-bezier(.23,1,.32,1), transform .6s cubic-bezier(.23,1,.32,1); }
+  .reveal.in { opacity: 1; transform: none; }
 }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>
 </head>
 <body>
-<div class="wrap">
 
-<header class="mast">
-  <span>THBKG · OT 26.09</span>
-  <nav>
-    <a href="#as-of">As-of</a>
-    <a href="#benchmark">Benchmark</a>
-    <a href="#start">Quick start</a>
-    <a href="#get">Get the data</a>
-    <a href="#cite">Cite</a>
-    <button class="theme-btn" id="theme" type="button" aria-label="Toggle colour theme">Theme</button>
-  </nav>
-</header>
+<nav class="nav" id="nav">
+  <a class="wordmark" href="#top">THB<span>KG</span></a>
+  <div class="nav-links">
+    <a class="pill" href="https://github.com/jackysiupuichung/THBKG" target="_blank" rel="noopener">Code</a>
+    <a class="pill" href="https://huggingface.co/datasets/jspc00012567/THBKG" target="_blank" rel="noopener">Dataset</a>
+    <a class="pill" href="https://doi.org/10.5281/zenodo.20795231" target="_blank" rel="noopener">Zenodo</a>
+  </div>
+</nav>
 
-<div class="hero">
-  <div>
-    <p class="kicker rise d1">Temporal Heterogeneous Biomedical Knowledge Graph</p>
-    <h1 class="rise d2">What was known,<br><em>and when.</em></h1>
-    <p class="lede rise d3">
-      THBKG is a biomedical knowledge graph in which every edge carries the year
-      its evidence first appeared. Cut it at any date and you get the graph as a
-      drug-discovery team would have seen it then — which makes it possible to
-      benchmark target prioritisation without leaking the future.
-    </p>
-    <div class="btns rise d4">
-      <a class="btn primary" href="https://huggingface.co/datasets/jspc00012567/THBKG">Dataset on Hugging Face →</a>
-      <a class="btn" href="https://github.com/jackysiupuichung/THBKG">Code on GitHub</a>
-      <a class="btn" href="https://doi.org/10.5281/zenodo.20795231">Zenodo DOI</a>
-    </div>
-  </div>
-  <div class="hero-card rise d4" aria-label="Release at a glance">
-    <dl>
-      <div><dt>Nodes</dt><dd>109,087</dd></div>
-      <div><dt>Edges</dt><dd>13.6M</dd></div>
-      <div><dt>Relations</dt><dd>19</dd></div>
-      <div><dt>Labelled pairs</dt><dd>47,802</dd></div>
-    </dl>
-  </div>
-</div>
+<!-- Hero -->
+<section class="hero" id="top">
+  <div class="wrap">
+    <div style="max-width:820px;margin:0 auto">
+      <h1 class="reveal"><b>THBKG</b>: A Temporal Biomedical Knowledge Graph for Decision-Aligned Clinical Advancement Prediction</h1>
+      <div class="authors reveal">
+        Pui Chung Siu<sup>1,2</sup><span class="dot">·</span>Claudia Cabrera<sup>1,†</sup><span class="dot">·</span>Mani Mudaliar<sup>2,†</sup><span class="dot">·</span>Arkaitz Zubiaga<sup>1,†</sup>
+      </div>
+      <p class="affils reveal">
+        <sup>1</sup>Queen Mary University of London<span class="dot">·</span><sup>2</sup>Recursion Pharmaceuticals
+      </p>
+      <p class="notes reveal">
+        <sup>†</sup> Corresponding authors:
+        <a href="mailto:c.cabrera@qmul.ac.uk">c.cabrera@qmul.ac.uk</a>,
+        <a href="mailto:mani.mudaliar@recursion.com">mani.mudaliar@recursion.com</a>,
+        <a href="mailto:a.zubiaga@qmul.ac.uk">a.zubiaga@qmul.ac.uk</a>
+      </p>
 
-<section id="as-of">
-  <div class="sec-head"><div class="sec-no">§ 01</div><h2>The graph, as of a decision year</h2></div>
-  <div class="sec-body">
-    <p>
-      Static knowledge graphs answer questions with everything known <em>today</em>.
-      For predicting which drug targets will succeed, that is a leak: the
-      evidence that made a target famous often arrived after the decision you are
-      trying to model. THBKG dates every evidence edge, so a model scoring a
-      2016 decision only ever sees edges dated before 2016.
-    </p>
-    <p>Drag through the years to see how much evidence existed at each point.</p>
-  </div>
-  <div class="asof">
-    <div class="asof-top">
-      <div class="asof-year"><small>Graph as of end of</small><span id="yr">2015</span></div>
-      <div class="asof-total"><b id="tot">—</b><span>dated evidence edges</span></div>
+      <div class="abstract reveal">
+        <p><span class="dropcap">I</span>nadequate target–disease linkage accounts for 40–50% of Phase II efficacy
+        failures, so anticipating which programmes will advance would let sponsors back the hypotheses most
+        likely to reach patients. What a programme can be judged on is the evidence that supported its linkage
+        <em>when it entered the clinic</em>. No existing biomedical knowledge graph allows that evidence profile
+        to be assembled as of a past date. We present the Temporal Heterogeneous Biomedical Knowledge Graph
+        (<strong>THBKG</strong>), which describes and predicts therapeutic target–disease links through time:
+        110,396 entities and 11.1M edges across nineteen relation types, each dated by the year its evidence
+        first appeared, so a pair's profile can be recovered as it stood when its own decision fell due. On this
+        graph we define a decision-aligned benchmark that predicts, for a target–disease pair entering Phase II,
+        whether it advances to Phase III on evidence datable before that decision. Graph propagation over the
+        THBKG outperforms the prior state of the art, a tabular model over engineered evidence features,
+        reaching a relative success of 4.5 at the top ten pairs per therapeutic area against 2.7. The margin is
+        widest on the 72% of pairs carrying no direct target–disease evidence at their decision point, where
+        the encoders enrich five- to sixfold over random ranking on support no direct-edge model can see.
+        Because the score is computed on a dated subgraph, a path-based explainer decomposes each prediction
+        into the observations behind it, the route they travelled, and when each entered the record. We release
+        the THBKG as a continually updated substrate for studying therapeutic target hypotheses by
+        retrospective validation.</p>
+        <div class="actions">
+          <a class="btn primary" href="https://huggingface.co/datasets/jspc00012567/THBKG" target="_blank" rel="noopener">Dataset</a>
+          <a class="btn" href="https://github.com/jackysiupuichung/THBKG" target="_blank" rel="noopener">Code</a>
+          <a class="btn" href="https://doi.org/10.5281/zenodo.20795231" target="_blank" rel="noopener">Zenodo DOI</a>
+        </div>
+      </div>
     </div>
-    <div class="chart-box">
-      <svg id="chart" viewBox="0 0 900 340" role="img" aria-labelledby="chart-title">
-        <title id="chart-title">Cumulative dated evidence edges in THBKG 26.09 by evidence type, 1995 to 2025</title>
-      </svg>
-    </div>
-    <label class="sr-only" for="year">Decision year</label>
-    <input type="range" id="year" min="1995" max="2025" step="1" value="2015">
-    <div class="range-ends"><span>≤ 1995</span><span>2025</span></div>
-    <ul class="legend" id="legend"></ul>
-    <p class="cut-note">Counts are edges with <code>edge_time</code> ≤ the selected year; 124,376 edges without a date (ontology and other static links) are always present.</p>
-    <details class="table">
-      <summary>Show as a table</summary>
-      <div class="tscroll"><table id="asof-table"></table></div>
-    </details>
   </div>
 </section>
 
-<section id="contents">
-  <div class="sec-head"><div class="sec-no">§ 02</div><h2>What's in the 26.09 release</h2></div>
-  <div class="sec-body">
-    <p>
-      Five node types — targets, diseases, molecules, Gene Ontology terms and
-      Reactome pathways — joined by sixteen dated relations and three static
-      hierarchies. Sources: <a href="https://platform.opentargets.org/">Open Targets</a> 26.09,
-      Gene Ontology, Reactome, IntAct, the Human Protein Atlas and
-      ClinicalTrials.gov, each pinned to a recorded version.
-    </p>
-    <p>
-      Clinical-trial edges are dated by outcome: a trial adds an
-      <code>ongoing</code> edge when it starts and, once finished, an outcome
-      edge (positive, unmet efficacy, adverse effects or unknown) at its actual
-      completion date.
-    </p>
-  </div>
-  <div class="stats-table">
-    <table>
-      <thead><tr><th>Release</th><th>26.09</th><th>26.03</th><th>Change</th></tr></thead>
-      <tbody>
-        <tr><td>Targets</td><td>19,620</td><td>19,620</td><td class="delta">—</td></tr>
-        <tr><td>Diseases</td><td>45,896</td><td>47,030</td><td class="delta">−2%</td></tr>
-        <tr><td>Molecules</td><td>2,596</td><td>2,636</td><td class="delta">−1.5%</td></tr>
-        <tr><td>GO terms</td><td>38,092</td><td>38,495</td><td class="delta">−1%</td></tr>
-        <tr><td>Reactome pathways</td><td>2,883</td><td>2,615</td><td class="delta">+10%</td></tr>
-        <tr><td>Edges</td><td>13.64M</td><td>11.07M</td><td class="delta">+23%</td></tr>
-        <tr><td>Clinical-trial edges</td><td>275,414</td><td>171,316</td><td class="delta">+61%</td></tr>
-        <tr><td>Advancement pairs</td><td>47,802</td><td>28,795</td><td class="delta">+66%</td></tr>
-      </tbody>
-    </table>
-    <p class="note">
-      Builds are not directly comparable: in 26.06 Open Targets replaced many EFO
-      disease IDs with MONDO IDs, and 26.09 merged duplicate terms and added
-      substantially more clinical and IMPC data.
-    </p>
-  </div>
-</section>
-
-<section id="benchmark">
-  <div class="sec-head"><div class="sec-no">§ 03</div><h2>The advancement benchmark</h2></div>
-  <div class="sec-body">
-    <p>
-      Each example is a <strong>target–disease pair that entered Phase II</strong>.
-      The task is to rank pairs by how likely they are to reach Phase III, using
-      only evidence dated <strong>strictly before</strong> the pair's Phase II
-      year. Labels follow a fixed horizon (the protocol of Czech et al.): a pair
-      is positive if it reached Phase III by 2018 (train) or 2024 (eval).
-    </p>
-    <div class="split" aria-hidden="true">
-      <svg viewBox="0 0 760 120">
-        <line x1="20" y1="60" x2="740" y2="60" stroke="var(--rule)" stroke-width="2"/>
-        <rect x="20" y="44" width="420" height="32" rx="4" fill="var(--series-1)" opacity=".85"/>
-        <rect x="446" y="44" width="122" height="32" rx="4" fill="var(--series-2)" opacity=".85"/>
-        <text x="30" y="65" fill="#fff" style="fill:#fff">TRAIN · Phase II entry 1995–2015</text>
-        <text x="452" y="65" style="fill:#fff">EVAL 2016–21</text>
-        <line x1="526" y1="30" x2="526" y2="90" stroke="var(--ink-3)" stroke-dasharray="3 3"/>
-        <text x="482" y="104">horizon 2018</text>
-        <line x1="700" y1="30" x2="700" y2="90" stroke="var(--ink-3)" stroke-dasharray="3 3"/>
-        <text x="656" y="104">horizon 2024</text>
-        <text x="20" y="22">34,740 pairs · 17.7% positive</text>
-        <text x="446" y="22">13,062 pairs · 7.9% positive</text>
-      </svg>
+<!-- Main result -->
+<section>
+  <div class="wrap">
+    <div class="narrow">
+      <div class="eyebrow reveal">Main result</div>
+      <h2 class="reveal">Judge a programme on what was known when it entered the clinic</h2>
+      <p class="lead reveal">
+        Every edge in the THBKG carries the year its evidence first appeared, so each target–disease pair
+        is scored only on the graph as it stood at its own Phase II decision. Under that constraint, graph
+        propagation finds signal that a direct-evidence model cannot see.
+      </p>
     </div>
-    <p>
-      The primary metric is <strong>Relative Success @ K</strong>, an
-      importance-weighted hit rate, reported per therapeutic area (13 areas) and
-      Wilcoxon-tested against a randomized-decisions baseline. Labels are kept
-      outside the graph and joined by node ID, so supervision never enters
-      message passing.
-    </p>
+    <div class="grid3">
+      <div class="card reveal">
+        <div class="label">Beats the prior state of the art</div>
+        <div class="stat">RS@10 of 4.5 vs 2.7</div>
+        <p>Relative success at the top ten pairs per therapeutic area, graph encoders against the tabular model over engineered evidence features.</p>
+      </div>
+      <div class="card reveal">
+        <div class="label">Where evidence is missing</div>
+        <div class="stat">5–6× over random</div>
+        <p>72% of pairs have no direct target–disease evidence at their decision point; the encoders still enrich five- to sixfold over random ranking.</p>
+      </div>
+      <div class="card reveal">
+        <div class="label">Explanations with dates</div>
+        <div class="stat">Paths, through time</div>
+        <p>A path-based explainer breaks each prediction into the observations behind it, the route they travelled, and when each entered the record.</p>
+      </div>
+    </div>
   </div>
 </section>
 
-<section id="start">
-  <div class="sec-head"><div class="sec-no">§ 04</div><h2>Quick start</h2></div>
-  <div class="sec-body">
-    <p>The Hugging Face release is pickle-free (safetensors + parquet) and ships a standalone loader.</p>
-    <div class="copy-wrap">
-<pre><code><span class="k">from</span> huggingface_hub <span class="k">import</span> snapshot_download
-<span class="k">from</span> load_thbkg <span class="k">import</span> load_graph, load_labels, node_index  <span class="c"># shipped with the dataset</span>
+<!-- Dataset -->
+<section class="alt">
+  <div class="wrap">
+    <div class="narrow">
+      <div class="eyebrow reveal">The graph</div>
+      <h2 class="reveal">Dated evidence, assembled into a heterogeneous graph</h2>
+      <p class="lead reveal">
+        Evidence records from Open Targets, Gene Ontology, Reactome, IntAct, the Human Protein Atlas and
+        ClinicalTrials.gov are scored and dated, then assembled into five node types joined by sixteen
+        temporal and three static relations. Cutting the graph at a year gives the evidence available then.
+      </p>
+    </div>
+    <figure class="reveal">
+      <div class="frame pad-lg"><img src="images/pipeline.png" alt="THBKG construction pipeline: dated evidence records are aggregated by score and year, assigned a novelty value, and assembled into a temporal heterogeneous graph whose nodes and edges appear and update over time." loading="lazy"></div>
+      <figcaption><b>Figure 1.</b> Construction pipeline. Dated evidence records are scored by harmonic aggregation and assembled into a heterogeneous graph; new nodes, new edges and edge updates enter at the year their evidence first appeared.</figcaption>
+    </figure>
+    <figure class="reveal">
+      <div class="frame center"><img src="images/schema.png" alt="THBKG schema: molecule, target, disease, GO term and Reactome pathway nodes, with six evidence and five clinical-trial relations from target to disease." loading="lazy"></div>
+      <figcaption><b>Figure 2.</b> Schema: five node types (target, disease, molecule, Reactome pathway, GO term) connected by 16 temporal edge types, masked per instance at the decision year, and 3 static ontology edge types present regardless of cutoff. The advancement relation is the prediction target and is held outside the graph.</figcaption>
+    </figure>
+    <div class="grid4">
+      <div class="card mini reveal"><div class="label">Nodes</div><div class="stat">109,087</div><p>targets, diseases, molecules, GO terms, pathways</p></div>
+      <div class="card mini reveal"><div class="label">Edges</div><div class="stat">13.6M</div><p>over 19 relation types</p></div>
+      <div class="card mini reveal"><div class="label">Labelled pairs</div><div class="stat">47,802</div><p>target–disease pairs entering Phase II</p></div>
+      <div class="card mini reveal"><div class="label">Release</div><div class="stat">OT 26.09</div><p>current build; every source version pinned</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Through time -->
+<section>
+  <div class="wrap">
+    <div class="narrow">
+      <div class="eyebrow reveal">Through time</div>
+      <h2 class="reveal">The same graph, at five cutoffs</h2>
+      <p class="lead reveal">
+        The mix of evidence changes as the record grows: animal-model evidence makes up more than half the
+        graph at 2005, while protein interactions and literature take a growing share later. A model trained on today's graph
+        would see a different world from the one each decision was made in.
+      </p>
+    </div>
+    <figure class="reveal">
+      <div class="frame"><img src="images/chord.png" alt="Chord diagrams of THBKG edge types at cumulative cutoffs 2005, 2010, 2015, 2020 and 2025." loading="lazy"></div>
+      <figcaption><b>Figure 3.</b> Temporal edge distribution of the THBKG at five cumulative cutoffs (≤2005 to ≤2025). Each node is a directed edge-type triple; arc size is proportional to edge count at that cutoff, and ribbons connect triples that co-occur on shared entities.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- Benchmark -->
+<section class="alt">
+  <div class="wrap">
+    <div class="narrow">
+      <div class="eyebrow reveal">Benchmark</div>
+      <h2 class="reveal">Will a pair entering Phase II reach Phase III?</h2>
+      <p class="lead reveal">
+        Each example is a target–disease pair at its Phase II entry. Models rank pairs using only evidence
+        dated strictly before that year. Labels follow a fixed horizon: a pair is positive if it reached
+        Phase III by 2018 (train) or 2024 (evaluation). The primary metric is relative success at top <em>N</em>,
+        reported per therapeutic area.
+      </p>
+    </div>
+    <div class="split reveal">
+      <div class="split-bar">
+        <div class="tr"><b>Train · 1995–2015</b>34,740 pairs, 17.7% positive</div>
+        <div class="ev"><b>Eval · 2016–21</b>13,062 pairs, 7.9% positive</div>
+        <div class="fu"><b>Follow-up</b>to 2024</div>
+      </div>
+      <p class="lead" style="font-size:13px;margin-top:10px">Split sizes for the current 26.09 release.</p>
+    </div>
+    <figure class="reveal">
+      <span class="tag">Published results · Open Targets 26.03</span>
+      <div class="frame"><img src="images/rs_by_topn.png" alt="Mean relative success across therapeutic areas against top-N cutoff: graph encoders EAHGT-novelty and GATv2-both above the RDG and OTS baselines, all above random." loading="lazy"></div>
+      <figcaption><b>Figure 4.</b> Therapeutic-area mean relative success against top-<em>N</em> cutoff, averaged across 13 therapeutic areas. Graph encoders lead the tabular baselines (RDG, OTS) across the actionable range; dotted lines mark the top 1% and 2% of test pairs, the dashed line random ranking.</figcaption>
+    </figure>
+    <figure class="reveal">
+      <span class="tag">Published results · Open Targets 26.03</span>
+      <div class="frame"><img src="images/rs_by_stratum.png" alt="Relative success by top-N cutoff in four strata: all test pairs, first-time Phase II targets, targets with prior Phase II history, and pairs with no prior target–disease evidence." loading="lazy"></div>
+      <figcaption><b>Figure 5.</b> Relative success within each stratum: all test pairs (n = 7,193); targets entering Phase II for the first time (n = 170); targets with Phase II history in another disease (n = 7,023); and the dominant no-prior-evidence stratum (n = 5,239).</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- Explainability -->
+<section>
+  <div class="wrap">
+    <div class="narrow">
+      <div class="eyebrow reveal">Explanations</div>
+      <h2 class="reveal">Why a pair scored high, and when the evidence arrived</h2>
+      <p class="lead reveal">
+        Because each score is computed on a dated subgraph, the explainer can show the multi-hop routes
+        between a target and a disease and the year each piece of evidence entered the record. Case study:
+        IL17F → psoriatic arthritis, decided in 2016.
+      </p>
+    </div>
+    <figure class="reveal">
+      <div class="fig-row">
+        <div class="frame"><img src="images/case_paths.png" alt="Recovered explanation paths between IL17F and psoriatic arthritis through intermediate targets, diseases and pathways." loading="lazy"></div>
+        <div class="frame"><img src="images/case_timeline.png" alt="Evidence strength over time for the direct IL17F–psoriatic arthritis edge and the neighbouring evidence the explanation routes through." loading="lazy"></div>
+      </div>
+      <figcaption><b>Figure 6.</b> Left: recovered multi-hop explanation paths for IL17F → psoriatic arthritis (2016); node colour denotes entity type and edge labels give the schema relation. Right: evidence available over time for the direct edge (top) and the on-path neighbour evidence (bottom); the dashed line marks the decision year.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- Releases -->
+<section class="alt">
+  <div class="wrap">
+    <div class="narrow">
+      <div class="eyebrow reveal">Releases</div>
+      <h2 class="reveal">A continually updated graph</h2>
+      <p class="lead reveal">
+        THBKG is rebuilt on each Open Targets release. The paper's results use the 26.03 build, which stays
+        available as Hugging Face revision <code>v26.03</code>. Builds are not directly comparable: disease
+        identifiers moved from EFO to MONDO in 26.06, and 26.09 adds substantially more clinical data.
+      </p>
+    </div>
+    <div class="tbl reveal">
+      <table>
+        <thead><tr><th>Build</th><th>26.09 (current)</th><th>26.03 (paper)</th><th>Change</th></tr></thead>
+        <tbody>
+          <tr><td>Nodes</td><td>109,087</td><td>110,396</td><td class="chg">−1%</td></tr>
+          <tr><td>Edges</td><td>13.64M</td><td>11.07M</td><td class="chg">+23%</td></tr>
+          <tr><td>Clinical-trial edges</td><td>275,414</td><td>171,316</td><td class="chg">+61%</td></tr>
+          <tr><td>Labelled pairs</td><td>47,802</td><td>28,795</td><td class="chg">+66%</td></tr>
+          <tr><td>Evaluation pairs</td><td>13,062</td><td>7,193</td><td class="chg">+82%</td></tr>
+        </tbody>
+      </table>
+    </div>
+<pre class="code reveal"><span class="c"># load the current release (pickle-free: safetensors + parquet)</span>
+from huggingface_hub import snapshot_download
+from load_thbkg import load_graph, load_labels   <span class="c"># shipped with the dataset</span>
 
 path  = snapshot_download(<span class="s">"jspc00012567/THBKG"</span>, repo_type=<span class="s">"dataset"</span>)
-graph = load_graph(path)            <span class="c"># PyG HeteroData, training view</span>
+graph = load_graph(path)            <span class="c"># PyG HeteroData</span>
 train = load_labels(path, <span class="s">"train"</span>)  <span class="c"># target_id, disease_id, transition_year, outcome</span>
-evals = load_labels(path, <span class="s">"eval"</span>)
 
-<span class="c"># the graph as of a decision year: keep edges dated strictly before it</span>
-year = <span class="s">2016</span>
-<span class="k">for</span> et <span class="k">in</span> graph.edge_types:
-    <span class="k">if</span> <span class="s">"edge_time"</span> <span class="k">in</span> graph[et]:
-        keep = graph[et].edge_time &lt; year
-        graph[et].edge_index = graph[et].edge_index[:, keep]</code></pre>
-      <button class="copy" type="button">copy</button>
-    </div>
-    <p>To rebuild from source or train the reference models, see the <a href="https://github.com/jackysiupuichung/THBKG#readme">repository README</a>.</p>
-  </div>
-</section>
-
-<section id="get">
-  <div class="sec-head"><div class="sec-no">§ 05</div><h2>Get the data</h2></div>
-  <div class="cards">
-    <a class="card" href="https://huggingface.co/datasets/jspc00012567/THBKG">
-      <h3>Hugging Face</h3>
-      <p>26.09 graph, labels and loader. Revision <code>v26.03</code> holds the previous build.</p>
-      <span class="arrow">huggingface.co →</span>
-    </a>
-    <a class="card" href="https://doi.org/10.5281/zenodo.20795231">
-      <h3>Zenodo</h3>
-      <p>Archived, citable snapshots of every release under one concept DOI.</p>
-      <span class="arrow">10.5281/zenodo.20795231 →</span>
-    </a>
-    <a class="card" href="https://github.com/jackysiupuichung/THBKG">
-      <h3>GitHub</h3>
-      <p>Construction pipeline, benchmark harness, training configs and explainability code.</p>
-      <span class="arrow">github.com →</span>
-    </a>
-  </div>
-</section>
-
-<section id="cite">
-  <div class="sec-head"><div class="sec-no">§ 06</div><h2>Cite</h2></div>
-  <div class="sec-body">
-    <div class="copy-wrap">
-<pre><code>Siu, Cabrera, Mudaliar, and Zubiaga.
-THBKG: A Temporal Biomedical Knowledge Graph for Leak-Free Clinical Advancement Prediction.
-Dataset: https://doi.org/10.5281/zenodo.20795231</code></pre>
-      <button class="copy" type="button">copy</button>
-    </div>
-    <p>Dataset artifacts are released under <a href="https://creativecommons.org/licenses/by/4.0/">CC-BY-4.0</a>; source code under the MIT license.</p>
+<span class="c"># the paper's 26.03 build</span>
+snapshot_download(<span class="s">"jspc00012567/THBKG"</span>, repo_type=<span class="s">"dataset"</span>, revision=<span class="s">"v26.03"</span>)</pre>
   </div>
 </section>
 
 <footer>
-  THBKG · Queen Mary University of London; Recursion Pharmaceuticals · Built from Open Targets 26.09.
-  The earlier 23.06 build had a same-year clinical-trial-edge leak and is deprecated.
+  <div class="wrap">
+    <h3>THBKG</h3>
+    <div class="foot-links">
+      <a href="https://github.com/jackysiupuichung/THBKG" target="_blank" rel="noopener">Code</a>
+      <a href="https://huggingface.co/datasets/jspc00012567/THBKG" target="_blank" rel="noopener">Hugging Face</a>
+      <a href="https://doi.org/10.5281/zenodo.20795231" target="_blank" rel="noopener">Zenodo</a>
+      <a href="mailto:pui.siu@qmul.ac.uk">Contact</a>
+    </div>
+    <div class="cite-head"><span>Citation</span><button class="copy" type="button" id="copy">Copy BibTeX</button></div>
+<pre id="bibtex">@misc{siu2026thbkg,
+  title     = {THBKG: A Temporal Biomedical Knowledge Graph for
+               Decision-Aligned Clinical Advancement Prediction},
+  author    = {Siu, Pui Chung and Cabrera, Claudia and
+               Mudaliar, Mani and Zubiaga, Arkaitz},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.20795231},
+  url       = {https://doi.org/10.5281/zenodo.20795231}
+}</pre>
+    <p class="fine">
+      Dataset artifacts are released under <a href="https://creativecommons.org/licenses/by/4.0/">CC-BY-4.0</a>; source code under the MIT license.
+      Built from <a href="https://platform.opentargets.org/">Open Targets</a>. An earlier 23.06 build had a same-year clinical-trial-edge leak and is deprecated.
+    </p>
+  </div>
 </footer>
-</div>
 
 <script>
-// Cumulative dated evidence edges in the 26.09 graph, by evidence type
-// (edge_time <= year). Computed from hetero_graph_with_features_datatype.pt.
-const DATA = {"years":[1995,1996,1997,1998,1999,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025],"series":[{"name":"Literature","values":[114551,145062,178996,216877,258516,304593,355825,411797,474314,543868,622727,708297,802840,909934,1030810,1172426,1336807,1531826,1755675,2003728,2275191,2570379,2899208,3248247,3645843,4134914,4719714,5343259,5935622,6553816,7232638]},{"name":"Animal models","values":[475602,586359,713886,835484,968926,1099568,1221326,1357222,1493503,1617156,1721140,1840587,1963262,2077843,2176893,2256806,2357765,2443633,2517340,2587935,2645367,2703213,2748805,2812385,2857876,2905566,2952861,2980620,3009691,3032586,3044330]},{"name":"Genetics","values":[3660,4580,5524,6801,7975,9433,10761,12156,13522,14955,16297,17882,19400,21576,24626,28782,36041,46567,58797,75872,93343,128208,155999,218576,262996,364956,535868,637905,790541,1150184,1874848]},{"name":"Other evidence","values":[12057,15891,20385,26454,32877,40136,47483,55795,64638,79520,98822,122090,150877,174079,209336,244489,278829,307372,348202,390569,443775,463722,530664,556436,580474,699160,886415,983398,998057,1025399,1084714]},{"name":"Clinical trials","values":[3292,4150,5609,6982,9001,11763,15930,20781,26037,32708,41372,51856,63406,74837,86555,98109,110549,122138,133403,145784,158247,170875,183306,194502,206966,219952,232230,244730,256649,267701,275414]}]};
-const COLORS = ["--series-1","--series-2","--series-3","--series-4","--series-5"];
-
 (function () {
-  const svg = document.getElementById("chart");
-  const NS = "http://www.w3.org/2000/svg";
-  const W = 900, H = 340, M = { l: 54, r: 16, t: 14, b: 30 };
-  const iw = W - M.l - M.r, ih = H - M.t - M.b;
-  const years = DATA.years, n = years.length;
-  const totals = years.map((_, i) => DATA.series.reduce((s, d) => s + d.values[i], 0));
-  const yMax = 14e6;
-  const x = i => M.l + (i / (n - 1)) * iw;
-  const y = v => M.t + ih - (v / yMax) * ih;
-  const fmt = v => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 1 : 2) + "M" : v >= 1e3 ? Math.round(v / 1e3) + "k" : String(v);
-  const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+  var nav = document.getElementById("nav");
+  function onScroll() { nav.classList.toggle("scrolled", window.scrollY > 40); }
+  window.addEventListener("scroll", onScroll, { passive: true }); onScroll();
 
-  // gridlines + y axis
-  for (let v = 0; v <= yMax; v += 2e6) {
-    svg.appendChild(el("line", { x1: M.l, x2: W - M.r, y1: y(v), y2: y(v), stroke: "var(--grid)", "stroke-width": 1 }));
-    const t = el("text", { x: M.l - 8, y: y(v) + 4, "text-anchor": "end" }); t.textContent = v === 0 ? "0" : (v / 1e6) + "M"; svg.appendChild(t);
+  var items = document.querySelectorAll(".reveal");
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });
+    }, { rootMargin: "0px 0px -8% 0px" });
+    items.forEach(function (el) { io.observe(el); });
+  } else {
+    items.forEach(function (el) { el.classList.add("in"); });
   }
-  [1995, 2000, 2005, 2010, 2015, 2020, 2025].forEach(yr => {
-    const t = el("text", { x: x(years.indexOf(yr)), y: H - 8, "text-anchor": "middle" }); t.textContent = yr === 1995 ? "≤1995" : yr; svg.appendChild(t);
-  });
 
-  // stacked areas (bottom = first series), separated by a 2px surface gap
-  let base = years.map(() => 0);
-  DATA.series.forEach((s, k) => {
-    const top = base.map((b, i) => b + s.values[i]);
-    let d = "M" + x(0) + "," + y(top[0]);
-    for (let i = 1; i < n; i++) d += "L" + x(i) + "," + y(top[i]);
-    for (let i = n - 1; i >= 0; i--) d += "L" + x(i) + "," + y(base[i]);
-    svg.appendChild(el("path", { d: d + "Z", fill: `var(${COLORS[k]})`, stroke: "var(--paper)", "stroke-width": 2, "stroke-linejoin": "round" }));
-    base = top;
-  });
-
-  // shade the "future" after the selected year
-  const future = el("rect", { y: M.t, height: ih, fill: "var(--paper)", opacity: .72 });
-  const cursor = el("line", { y1: M.t - 4, y2: M.t + ih, stroke: "var(--ink)", "stroke-width": 2 });
-  const knob = el("circle", { r: 5, fill: "var(--ink)", stroke: "var(--paper)", "stroke-width": 2 });
-  svg.append(future, cursor, knob);
-
-  // legend + table
-  const legend = document.getElementById("legend");
-  const legendVals = DATA.series.map((s, k) => {
-    const li = document.createElement("li");
-    li.innerHTML = `<i style="background:var(${COLORS[k]})"></i>${s.name} <b></b>`;
-    legend.appendChild(li); return li.querySelector("b");
-  });
-  const tbl = document.getElementById("asof-table");
-  tbl.innerHTML = "<thead><tr><th>As of</th>" + DATA.series.map(s => `<th>${s.name}</th>`).join("") + "<th>Total</th></tr></thead><tbody>" +
-    years.map((yr, i) => `<tr><td>${yr === 1995 ? "≤1995" : yr}</td>` + DATA.series.map(s => `<td>${s.values[i].toLocaleString()}</td>`).join("") + `<td>${totals[i].toLocaleString()}</td></tr>`).join("") + "</tbody>";
-
-  const range = document.getElementById("year");
-  const yrOut = document.getElementById("yr"), totOut = document.getElementById("tot");
-  function set(i) {
-    i = Math.max(0, Math.min(n - 1, i));
-    const cx = x(i);
-    future.setAttribute("x", cx); future.setAttribute("width", Math.max(0, W - M.r - cx));
-    cursor.setAttribute("x1", cx); cursor.setAttribute("x2", cx);
-    knob.setAttribute("cx", cx); knob.setAttribute("cy", y(totals[i]));
-    yrOut.textContent = years[i] === 1995 ? "≤ 1995" : years[i];
-    totOut.textContent = totals[i].toLocaleString();
-    DATA.series.forEach((s, k) => legendVals[k].textContent = fmt(s.values[i]));
-    range.value = years[i];
-  }
-  range.addEventListener("input", () => set(years.indexOf(+range.value)));
-  function fromPointer(ev) {
-    const r = svg.getBoundingClientRect();
-    const px = (ev.clientX - r.left) / r.width * W;
-    set(Math.round((px - M.l) / iw * (n - 1)));
-  }
-  let dragging = false;
-  svg.addEventListener("pointerdown", e => { dragging = true; svg.setPointerCapture(e.pointerId); fromPointer(e); });
-  svg.addEventListener("pointermove", e => { if (dragging) fromPointer(e); });
-  svg.addEventListener("pointerup", () => dragging = false);
-  set(years.indexOf(2015));
-})();
-
-// copy buttons
-document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", async () => {
-  const text = b.parentElement.querySelector("pre").innerText;
-  try { await navigator.clipboard.writeText(text); b.textContent = "copied"; } catch (e) { b.textContent = "select + copy"; }
-  setTimeout(() => b.textContent = "copy", 1500);
-}));
-
-// theme toggle (remembered per browser)
-(function () {
-  const root = document.documentElement, btn = document.getElementById("theme");
-  try { const t = localStorage.getItem("thbkg-theme"); if (t) root.dataset.theme = t; } catch (e) {}
-  btn.addEventListener("click", () => {
-    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-    root.dataset.theme = dark ? "light" : "dark";
-    try { localStorage.setItem("thbkg-theme", root.dataset.theme); } catch (e) {}
+  var btn = document.getElementById("copy");
+  btn.addEventListener("click", function () {
+    var text = document.getElementById("bibtex").innerText;
+    var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy BibTeX"; }, 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () { btn.textContent = "Select and copy"; });
   });
 })();
 </script>
