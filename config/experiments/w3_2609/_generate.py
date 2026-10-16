@@ -8,6 +8,9 @@ YAML (12 model families x 5 seeds) and changing ONLY:
 - advancement_train_csv / advancement_test_csv -> the 26.09_w3 label CSVs, set
   explicitly so the loader never falls back to the 26.03_w3 defaults (disease
   IDs differ between releases)
+- ta_parquet / primary_tas_json -> 26.09 disease->TA map and the canonical 13
+  TAs under their 26.09 names (7 EFO TA ids became MONDO; mapped 1:1 via
+  obsoleteTerms), instead of the 26.03 files under advancement_data/
 - experiment name and output_dir -> *_w3_2609_* under 26.09/runs/w3/
 
 Recipe (model, optimiser, lambdarank, seeds) is untouched.
@@ -31,7 +34,9 @@ def convert(text: str) -> str:
     text, n = re.subn(
         r"(\n  mappings_file: ).*",
         rf"\g<1>{MAPPINGS}\n  advancement_train_csv: {ADV_DIR}/train_dataset.csv"
-        rf"\n  advancement_test_csv: {ADV_DIR}/test_dataset.csv",
+        rf"\n  advancement_test_csv: {ADV_DIR}/test_dataset.csv"
+        rf"\n  ta_parquet: {ADV_DIR}/therapeutic_areas.parquet"
+        rf"\n  primary_tas_json: {ADV_DIR}/primary_therapeutic_areas.json",
         text,
     )
     assert n == 1, "mappings_file"

@@ -5,6 +5,8 @@ data:
   mappings_file: ${oc.env:THBKG_DATA_ROOT,/gpfs/scratch/bty414/opentarget_evidences}/26.09/progression/temporal_graph_datatype_mappings.pt
   advancement_train_csv: data/clinical_trial_advancement/26.09_w3/train_dataset.csv
   advancement_test_csv: data/clinical_trial_advancement/26.09_w3/test_dataset.csv
+  ta_parquet: data/clinical_trial_advancement/26.09_w3/therapeutic_areas.parquet
+  primary_tas_json: data/clinical_trial_advancement/26.09_w3/primary_therapeutic_areas.json
   undirected: true
   train_cutoff_year: 2012
   random_seed: 42
