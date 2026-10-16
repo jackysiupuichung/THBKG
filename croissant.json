@@ -37,8 +37,8 @@
   "@type": "sc:Dataset",
   "conformsTo": "http://mlcommons.org/croissant/1.0",
   "name": "THBKG",
-  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG): a biomedical knowledge graph where every edge is dated by the year its evidence first appeared, enabling leak-free as-of queries at any historical decision point. Built from Open Targets 26.03, Reactome, ChEMBL, and ClinicalTrials.gov. Ships a clinical-advancement benchmark in which each target-disease pair is scored only from evidence datable strictly before its Phase II transition year. Stats: 110,396 nodes (target, disease, molecule, Gene Ontology term, Reactome pathway); ~11.1M edges over nineteen relations (sixteen temporal, three static); 28,795 advancement labels split temporally into 21,602 train / 7,193 eval pairs (w3 window).",
-  "version": "26.03",
+  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG): a biomedical knowledge graph where every edge is dated by the year its evidence first appeared, enabling leak-free as-of queries at any historical decision point. Built from Open Targets 26.09, Gene Ontology, Reactome, IntAct, the Human Protein Atlas, and ClinicalTrials.gov. Ships a clinical-advancement benchmark in which each target-disease pair is scored only from evidence datable strictly before its Phase II transition year. Stats: 109,087 nodes (target, disease, molecule, Gene Ontology term, Reactome pathway); ~13.6M edges over nineteen relations (sixteen temporal, three static); 47,802 advancement labels split temporally into 34,740 train / 13,062 eval pairs (w3 window).",
+  "version": "26.09",
   "license": "https://creativecommons.org/licenses/by/4.0/",
   "url": "https://github.com/jackysiupuichung/THBKG",
   "sameAs": "https://doi.org/10.5281/zenodo.20795231",
@@ -62,7 +62,7 @@
       "@id": "github-repo",
       "name": "github-repo",
       "description": "THBKG source repository: construction pipeline, benchmark splits, and evaluation harness.",
-      "contentUrl": "https://github.com/jackysiupuichung/THBKG/tree/v26.03",
+      "contentUrl": "https://github.com/jackysiupuichung/THBKG/tree/v26.09",
       "encodingFormat": "git+https",
       "sha256": "main"
     },
@@ -70,9 +70,9 @@
       "@type": "cr:FileObject",
       "@id": "graph-pt",
       "name": "hetero-graph",
-      "description": "PyTorch-Geometric HeteroData object: the assembled temporal heterogeneous graph with node features and dated, feature-carrying edges (26.03). Evidence only \u2014 the advancement labels are distributed separately as CSVs and joined to the graph by node ID at train/eval time.",
+      "description": "PyTorch-Geometric HeteroData object: the assembled temporal heterogeneous graph with node features and dated, feature-carrying edges (26.09). Evidence only \u2014 the advancement labels are distributed separately as CSVs and joined to the graph by node ID at train/eval time.",
       "containedIn": {"@id": "github-repo"},
-      "contentUrl": "graph/hetero_graph_with_features_datatype_w3.pt",
+      "contentUrl": "graph/hetero_graph_with_features_datatype.pt",
       "encodingFormat": "application/octet-stream"
     },
     {
@@ -81,16 +81,16 @@
       "name": "train-split",
       "description": "Advancement labels for the training set (pairs entering Phase II 1995-2015).",
       "containedIn": {"@id": "github-repo"},
-      "contentUrl": "data/clinical_trial_advancement/26.03_w3/train_dataset.csv",
+      "contentUrl": "data/clinical_trial_advancement/26.09_w3/train_dataset.csv",
       "encodingFormat": "text/csv"
     },
     {
       "@type": "cr:FileObject",
       "@id": "eval-split",
       "name": "eval-split",
-      "description": "Advancement labels for the held-out evaluation set (pairs entering Phase II 2016-2021; w3 window). N=7,193, 9.29% positive.",
+      "description": "Advancement labels for the held-out evaluation set (pairs entering Phase II 2016-2021; w3 window). N=13,062, 7.9% positive.",
       "containedIn": {"@id": "github-repo"},
-      "contentUrl": "data/clinical_trial_advancement/26.03_w3/test_dataset.csv",
+      "contentUrl": "data/clinical_trial_advancement/26.09_w3/test_dataset.csv",
       "encodingFormat": "text/csv"
     }
   ],
@@ -114,7 +114,7 @@
           "@type": "cr:Field",
           "@id": "advancement_labels_train/disease_id",
           "name": "disease_id",
-          "description": "EFO disease identifier.",
+          "description": "Open Targets disease identifier (MONDO, EFO, HP or Orphanet).",
           "dataType": "sc:Text",
           "source": {"fileObject": {"@id": "train-split"}, "extract": {"column": "disease_id"}}
         },
@@ -130,7 +130,7 @@
           "@type": "cr:Field",
           "@id": "advancement_labels_train/outcome",
           "name": "outcome",
-          "description": "True if a Phase III trial for the same target-disease pair was registered within three years of Phase II entry, else False.",
+          "description": "True if the target-disease pair reached Phase III by a fixed horizon (2018 for train, 2024 for eval), else False. Eval entries stop at 2021, so every pair has at least three years of follow-up.",
           "dataType": "sc:Boolean",
           "source": {"fileObject": {"@id": "train-split"}, "extract": {"column": "outcome"}}
         }
@@ -140,7 +140,7 @@
       "@type": "cr:RecordSet",
       "@id": "advancement_labels_eval",
       "name": "advancement_labels_eval",
-      "description": "Held-out evaluation advancement labels (w3 window): one row per target-disease pair entering Phase II in 2016-2021. N=7,193, 9.29% positive.",
+      "description": "Held-out evaluation advancement labels (w3 window): one row per target-disease pair entering Phase II in 2016-2021. N=13,062, 7.9% positive.",
       "key": {"@id": "advancement_labels_eval/target_id"},
       "field": [
         {
@@ -155,7 +155,7 @@
           "@type": "cr:Field",
           "@id": "advancement_labels_eval/disease_id",
           "name": "disease_id",
-          "description": "EFO disease identifier.",
+          "description": "Open Targets disease identifier (MONDO, EFO, HP or Orphanet).",
           "dataType": "sc:Text",
           "source": {"fileObject": {"@id": "eval-split"}, "extract": {"column": "disease_id"}}
         },
@@ -171,7 +171,7 @@
           "@type": "cr:Field",
           "@id": "advancement_labels_eval/outcome",
           "name": "outcome",
-          "description": "True if a Phase III trial for the same target-disease pair was registered within three years of Phase II entry, else False.",
+          "description": "True if the target-disease pair reached Phase III by a fixed horizon (2018 for train, 2024 for eval), else False. Eval entries stop at 2021, so every pair has at least three years of follow-up.",
           "dataType": "sc:Boolean",
           "source": {"fileObject": {"@id": "eval-split"}, "extract": {"column": "outcome"}}
         }
