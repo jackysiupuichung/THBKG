@@ -19,7 +19,7 @@ THBKG source package required.
 Downloading the release from the Hub first:
 
     from huggingface_hub import snapshot_download
-    d = snapshot_download("jackysiupuichung/THBKG", repo_type="dataset")
+    d = snapshot_download("jspc00012567/THBKG", repo_type="dataset")
     data = load_graph(d)
 """
 from __future__ import annotations

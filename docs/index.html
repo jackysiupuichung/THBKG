@@ -245,7 +245,7 @@ footer { border-top: 1px solid var(--rule); padding: 32px 0 56px; font: 13px/1.7
       benchmark target prioritisation without leaking the future.
     </p>
     <div class="btns rise d4">
-      <a class="btn primary" href="https://huggingface.co/datasets/jackysiupuichung/THBKG">Dataset on Hugging Face →</a>
+      <a class="btn primary" href="https://huggingface.co/datasets/jspc00012567/THBKG">Dataset on Hugging Face →</a>
       <a class="btn" href="https://github.com/jackysiupuichung/THBKG">Code on GitHub</a>
       <a class="btn" href="https://doi.org/10.5281/zenodo.20795231">Zenodo DOI</a>
     </div>
@@ -376,7 +376,7 @@ footer { border-top: 1px solid var(--rule); padding: 32px 0 56px; font: 13px/1.7
 <pre><code><span class="k">from</span> huggingface_hub <span class="k">import</span> snapshot_download
 <span class="k">from</span> load_thbkg <span class="k">import</span> load_graph, load_labels, node_index  <span class="c"># shipped with the dataset</span>
 
-path  = snapshot_download(<span class="s">"jackysiupuichung/THBKG"</span>, repo_type=<span class="s">"dataset"</span>)
+path  = snapshot_download(<span class="s">"jspc00012567/THBKG"</span>, repo_type=<span class="s">"dataset"</span>)
 graph = load_graph(path)            <span class="c"># PyG HeteroData, training view</span>
 train = load_labels(path, <span class="s">"train"</span>)  <span class="c"># target_id, disease_id, transition_year, outcome</span>
 evals = load_labels(path, <span class="s">"eval"</span>)
@@ -396,7 +396,7 @@ year = <span class="s">2016</span>
 <section id="get">
   <div class="sec-head"><div class="sec-no">§ 05</div><h2>Get the data</h2></div>
   <div class="cards">
-    <a class="card" href="https://huggingface.co/datasets/jackysiupuichung/THBKG">
+    <a class="card" href="https://huggingface.co/datasets/jspc00012567/THBKG">
       <h3>Hugging Face</h3>
       <p>26.09 graph, labels and loader. Revision <code>v26.03</code> holds the previous build.</p>
       <span class="arrow">huggingface.co →</span>

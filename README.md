@@ -1,5 +1,5 @@
 [![Dataset: Zenodo](https://img.shields.io/badge/dataset-Zenodo%2010.5281%2Fzenodo.20795231-1682D4)](https://doi.org/10.5281/zenodo.20795231)
-[![HuggingFace Dataset](https://img.shields.io/badge/HuggingFace-Dataset-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/datasets/jackysiupuichung/THBKG)
+[![HuggingFace Dataset](https://img.shields.io/badge/HuggingFace-Dataset-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/datasets/jspc00012567/THBKG)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![PyTorch Geometric](https://img.shields.io/badge/PyG-CUDA%2011.8-EE4C2C)](https://pyg.org/)
@@ -20,14 +20,14 @@ description and statistics are in [croissant.json](croissant.json).
 ## Load the dataset
 
 The 26.09 graph and advancement labels are on
-[Hugging Face](https://huggingface.co/datasets/jackysiupuichung/THBKG)
+[Hugging Face](https://huggingface.co/datasets/jspc00012567/THBKG)
 (CC-BY-4.0) in a pickle-free format, with a standalone loader:
 
 ```python
 from huggingface_hub import snapshot_download
 from load_thbkg import load_graph, load_labels   # shipped with the dataset
 
-path  = snapshot_download("jackysiupuichung/THBKG", repo_type="dataset")
+path  = snapshot_download("jspc00012567/THBKG", repo_type="dataset")
 graph = load_graph(path)            # PyG HeteroData (training view)
 train = load_labels(path, "train")  # target_id, disease_id, transition_year, outcome
 ```

@@ -83,7 +83,7 @@ baseline.
 from huggingface_hub import snapshot_download
 from load_thbkg import load_graph, load_labels, node_index
 
-path  = snapshot_download("jackysiupuichung/THBKG", repo_type="dataset")
+path  = snapshot_download("jspc00012567/THBKG", repo_type="dataset")
 data  = load_graph(path)              # PyG HeteroData (reverse edges added, training view)
 train = load_labels(path, "train")    # DataFrame: target_id, disease_id, transition_year, outcome
 eval_ = load_labels(path, "eval")
@@ -96,7 +96,7 @@ The label parquets also load directly as a 🤗 `datasets` config:
 
 ```python
 from datasets import load_dataset
-ds = load_dataset("jackysiupuichung/THBKG", "advancement")   # splits: train, eval
+ds = load_dataset("jspc00012567/THBKG", "advancement")   # splits: train, eval
 ```
 
 ## Versions
@@ -105,7 +105,7 @@ This is the **26.09** build. The previous **26.03** build stays available at
 revision `v26.03`:
 
 ```python
-snapshot_download("jackysiupuichung/THBKG", repo_type="dataset", revision="v26.03")
+snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v26.03")
 ```
 
 Results are not directly comparable across builds: Open Targets replaced many
