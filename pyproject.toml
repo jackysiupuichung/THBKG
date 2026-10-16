@@ -33,6 +33,7 @@ dependencies = [
     "fire>=0.7.1",
     "transformers>=5.19.0",
     "rdkit>=2026.9.1",
+    "safetensors>=0.8.0",
 ]
 
 
