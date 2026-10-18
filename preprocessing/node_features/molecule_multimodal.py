@@ -9,7 +9,8 @@ molecule now gets one fixed-width vector made of four blocks:
 
 * ``morgan``  Morgan fingerprint (same generator and settings as
               molecule_structure.py). SMILES source, in order: Open Targets
-              canonicalSmiles, ChEMBL canonical_smiles, ChEMBL HELM via RDKit.
+              canonicalSmiles, ChEMBL canonical_smiles, then ChEMBL HELM via
+              RDKit for drugs with no protein sequence.
 * ``esm``     ESM-2 residue embeddings mean-pooled over every protein chain the
               drug has in ChEMBL (so a two-chain antibody averages heavy + light
               by residue count). Nucleic-acid chains are not embedded.
@@ -188,10 +189,14 @@ def build(args: argparse.Namespace) -> None:
         vec = np.zeros(dim, dtype=np.float32)
         ot_row = ot.loc[mid] if mid in ot.index else None
         cm = per_mol.loc[mid] if mid in per_mol.index else None
+        # HELM only stands in for drugs without a protein sequence (peptides with
+        # non-natural monomers). For a full antibody RDKit parses the HELM, but
+        # the fingerprint saturates: ~265 bits set and Tanimoto 0.97-1.0 between
+        # unrelated antibodies, i.e. no signal beyond drugType.
         fp, src = morgan_for(
             ot_row["canonicalSmiles"] if ot_row is not None else None,
             cm["chembl_smiles"] if cm is not None else None,
-            cm["helm"] if cm is not None else None,
+            cm["helm"] if cm is not None and mid not in esm_by_drug else None,
             args.fp_dim, args.radius,
         )
         if fp is not None:
