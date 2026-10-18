@@ -233,22 +233,13 @@ class NodeParser(BaseParser):
 
         if name == "targets" and "biotype" in df.columns:
             df = df[df["biotype"] == "protein_coding"]
-        
-        # Filter molecules for valid SMILES AND Small molecule type
-        if name == "molecule" and "canonicalSmiles" in df.columns:
-            valid_stats = len(df)
-            
-            # Keep only valid, non-empty SMILES
-            df = df[df["canonicalSmiles"].notna() & (df["canonicalSmiles"].str.strip() != "")]
-            
-            # Filter out 'None' strings (case-insensitive)
-            df = df[~df["canonicalSmiles"].str.lower().isin(["none", "null", "nan"])]
-            
-            # Also filter by drugType if available
-            if "drugType" in df.columns:
-                df = df[df["drugType"] == "Small molecule"]
-            
-            # print(f"  filtered molecules: {valid_stats} -> {len(df)} (Small molecule with valid SMILES)")
+
+        # Molecules of every drugType are kept. Up to v26.09 only small molecules
+        # with a SMILES string became nodes, which silently dropped ~1,150
+        # trialled drugs (mostly antibodies and proteins) and every edge touching
+        # them. Biologics are now featurised from their ChEMBL sequence
+        # (preprocessing/node_features/molecule_multimodal.py), so the SMILES
+        # requirement no longer applies.
 
         return df
 

@@ -360,8 +360,10 @@ def build_event_list(
                       'relation', 'datasourceId']
         datasource_group_cols = group_cols
 
-    # Pre-split clinical vs non-clinical once (was done every year before)
-    mask_clinical_full = dynamic_edges['relation'].str.contains('clinical_trial', case=False)
+    # Pre-split clinical vs non-clinical once (was done every year before).
+    # Trial relations take the MAX score, not a harmonic sum: target->disease
+    # clinical_trial_* buckets and the molecule->disease trialled_for edge.
+    mask_clinical_full = dynamic_edges['relation'].str.contains('clinical_trial|trialled_for', case=False)
     clinical_full = dynamic_edges[mask_clinical_full]
     other_full = dynamic_edges[~mask_clinical_full]
 

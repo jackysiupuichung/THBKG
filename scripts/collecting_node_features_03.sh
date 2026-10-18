@@ -36,12 +36,23 @@ echo "   Evidence: $EVIDENCE_DIR"
 echo "   Raw Feature Data: $FEATURE_DATA_DIR"
 echo "   Output: $FEATURE_OUTPUT_DIR"
 
+# Biologic sequences for multimodal molecule features. Fetch on a login node
+# first (compute nodes are offline):
+#   python preprocessing/node_features/fetch_chembl_biotherapeutics.py \
+#     --clinical-precedence-dir "${EVIDENCE_DIR}/sourceId=clinical_precedence" --output "$CHEMBL_CACHE"
+# Without the cache, molecules fall back to Morgan fingerprints only.
+CHEMBL_CACHE="${FEATURE_DATA_DIR}/chembl_biotherapeutics.parquet"
+CHEMBL_ARGS=()
+[ -f "$CHEMBL_CACHE" ] && CHEMBL_ARGS=(--chembl-cache "$CHEMBL_CACHE")
+export HF_HUB_OFFLINE=1
+
 python -m preprocessing.node_features.build_all_features \
   --mappings-file "$MAPPINGS_FILE" \
   --evidence-dir "$EVIDENCE_DIR" \
   --feature-data-dir "$FEATURE_DATA_DIR" \
   --output-dir "$FEATURE_OUTPUT_DIR" \
-  --temp-dir "$TEMP_NODE_DIR" 
+  --temp-dir "$TEMP_NODE_DIR" \
+  "${CHEMBL_ARGS[@]}"
   # --random-init
 
 echo ""

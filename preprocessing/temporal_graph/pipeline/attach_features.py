@@ -33,8 +33,11 @@ def load_feature_embeddings(feature_dir: Path, node_type: str):
     if node_type not in feature_files:
         print(f"   ⚠️  Unknown node type: {node_type}")
         return None
-    
+
     feature_path = feature_dir / feature_files[node_type]
+    # Multimodal molecule features (molecule_multimodal.py) supersede Morgan-only ones
+    if node_type == 'molecule' and (feature_dir / 'molecule_features.pt').exists():
+        feature_path = feature_dir / 'molecule_features.pt'
     
     if not feature_path.exists():
         print(f"   ⚠️  Feature file not found: {feature_path}")

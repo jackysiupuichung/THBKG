@@ -70,7 +70,8 @@ def is_clinical_trial_edge(edge_type: Tuple[str, str, str]) -> bool:
     Returns:
         True if edge is a clinical trial edge
     """
-    CLINICAL_TRIAL_KEYWORDS = ['clinical_trial']
+    # trialled_for is the molecule->disease trial edge (also covers rev_trialled_for)
+    CLINICAL_TRIAL_KEYWORDS = ['clinical_trial', 'trialled_for']
     return any(kw in edge_type[1] for kw in CLINICAL_TRIAL_KEYWORDS)
 
 

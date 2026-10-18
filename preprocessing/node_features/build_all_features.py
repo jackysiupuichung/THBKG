@@ -164,6 +164,11 @@ def main():
     parser.add_argument("--random-init", action="store_true", help="Use random initialization instead of computing features (fast testing mode)")
     parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension for random init (default: 128)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility (default: 42)")
+    parser.add_argument("--chembl-cache", default=None,
+                        help="ChEMBL structure cache (fetch_chembl_biotherapeutics.py). If given, molecules get "
+                             "multimodal features (molecule_multimodal.py) instead of Morgan fingerprints only")
+    parser.add_argument("--node-types", nargs="+", default=["target", "disease", "go", "reactome", "molecule"],
+                        help="Node types to build features for (default: all)")
     args = parser.parse_args()
     
     mappings_file = args.mappings_file
@@ -187,7 +192,9 @@ def main():
     
     # Extract node IDs from mappings
     node_files = extract_node_ids_from_mappings(mappings_file, temp_dir)
-    
+    node_files = {nt: f for nt, f in node_files.items() if nt in args.node_types}
+    print(f"   Building features for: {sorted(node_files)}")
+
     # 1. Target Features (Static + RNA) - ALIGNED TO GRAPH NODES
     print(f"\n{'='*60}")
     print("1. TARGET FEATURES")
@@ -267,7 +274,7 @@ def main():
             "go",
             args.seed + 2
         )
-    elif not args.random_init:
+    elif not args.random_init and 'go' in node_files:
         go_edges_file = static_edges_dir / "go_is_subtype_of_go_gene_ontology.parquet"
         if go_edges_file.exists():
             print(f"\n   🧬 Training GO autoencoder on full graph...")
@@ -305,7 +312,7 @@ def main():
             "reactome",
             args.seed + 3
         )
-    elif not args.random_init:
+    elif not args.random_init and 'reactome' in node_files:
         reactome_edges_file = static_edges_dir / "reactome_is_subpathway_of_reactome_reactome.parquet"
         if reactome_edges_file.exists():
             print(f"\n   🧬 Training Reactome autoencoder on full graph...")
@@ -332,13 +339,23 @@ def main():
         else:
             print(f"   ⚠️  Reactome edges not found: {reactome_edges_file}")
     
-    # 4. Molecule Features (Morgan Fingerprints) - ALIGNED TO GRAPH NODES
+    # 4. Molecule Features (Morgan, or multimodal with a ChEMBL cache) - ALIGNED TO GRAPH NODES
     print(f"\n{'='*60}")
     print("4. MOLECULE FEATURES")
     print(f"{'='*60}")
-    
+
     if 'molecule' in node_files:
-        if args.random_init:
+        if args.chembl_cache and not args.random_init:
+            molecule_args = [
+                "--drug-dir", f"{evidence_dir}/molecule",
+                "--parquet-glob", "*.parquet",
+                "--chembl-cache", args.chembl_cache,
+                "--output-dir", output_dir,
+                "--kg-ids-file", node_files['molecule'],
+            ]
+            print(f"✅ Using {node_files['molecule']} (multimodal: Morgan + ESM-2 + drugType)")
+            run_script("preprocessing/node_features/molecule_multimodal.py", molecule_args)
+        elif args.random_init:
             output_path = f"{output_dir}/molecule_morgan_fingerprints.pt"
             create_random_embeddings(
                 node_files['molecule'],

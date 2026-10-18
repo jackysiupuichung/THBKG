@@ -2,7 +2,7 @@
 # Used to re-emit clinical edges after Stage B mutation without re-running
 # every other datasource. See preprocessing/.../apply_trial_resolution.py.
 #
-# GATher-compatible inventory: no drug->disease (reachable as 2-hop via target).
+# Mirrors the clinical_precedence block of edge_schema_26.09.yaml.
 
 clinical_precedence:
   - input_dir: sourceId=clinical_precedence
@@ -16,3 +16,9 @@ clinical_precedence:
     targetId: diseaseId
     relation: trial_outcome_bucket
     props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
+
+  - input_dir: sourceId=clinical_precedence
+    sourceId: drugId
+    targetId: diseaseId
+    relation_name: trialled_for
+    props: [source_type=constant:molecule, target_type=constant:disease, datasourceId, score, year, id]
