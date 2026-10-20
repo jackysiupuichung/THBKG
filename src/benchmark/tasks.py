@@ -1,8 +1,9 @@
 """Label tables for the three THBKG benchmark tasks.
 
 All three tasks share one temporal protocol: a model ranks candidates for a
-decision year ``Y`` using only graph evidence dated strictly before ``Y``, and
-decision years are split the same way for every task.
+decision year ``Y`` using only graph evidence dated strictly before ``Y``. T1
+and T2 split decision years the same way (``SPLITS``); T3 keeps the released
+train/eval split of its label files.
 
 ========  ==========================================  =============================
 task      positive                                    candidate pool for (disease, Y)
@@ -22,6 +23,10 @@ by construction the year the masking rule hides: T1 uses the target->disease
 ``clinical_trial_*`` relations, T2 the molecule->disease ``trialled_for``
 relation. T3 labels are external and unchanged.
 
+T1 test slates are kept only when the disease gains more than 3 new targets
+that year (``MIN_POSITIVES``). Always build slates through ``task_slates`` so
+the split years and this filter are applied.
+
 Works directly on a release directory (graph.safetensors + metadata.json +
 mappings/), without PyG.
 """
@@ -34,13 +39,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Decision years, inclusive. The T3 eval split (Phase II entry 2016-2021) fixes
-# the test window; ending at 2021 also keeps every test year clear of the
-# trial-registration lag visible from 2022 on.
-SPLITS = {"train": (1996, 2015), "test": (2016, 2021)}
+from .slates import Slate, discovery_slates, repurposing_slates
+
+# Decision years for T1 and T2, inclusive. ``None`` = the latest year with
+# trial evidence in the labels (2025 for the 26.09 graph).
+SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, None)}
 # Trial evidence dated 1995 or earlier is collapsed onto 1995 by the event list,
 # so 1995 cannot be a decision year: a "first trial in 1995" means "by 1995".
 FIRST_GRAPH_YEAR = 1995
+
+# Minimum positives for a slate to count, per (task, split); default 1. With
+# 3 or fewer positives one hit moves recall@K by a third or more, so T1 test
+# keeps only slates with more than 3 new targets.
+MIN_POSITIVES = {("discovery", "test"): 4}
 
 T1_RELATION_PREFIX = "clinical_trial"
 T2_RELATION = "trialled_for"
@@ -111,6 +122,37 @@ def build_repurposing_labels(release_dir: str | Path) -> pd.DataFrame:
     return out.sort_values(["first_trial_year", "disease_id", "molecule_id"], ignore_index=True)
 
 
-def decision_years(split: str) -> list[int]:
+def last_label_year(labels: pd.DataFrame) -> int:
+    """Latest first-trial year in a T1/T2 label table: the end of the test split."""
+    return int(labels["first_trial_year"].max())
+
+
+def decision_years(split: str, last_year: int | None = None) -> list[int]:
+    """Decision years of a T1/T2 split. ``last_year`` resolves an open-ended split."""
     lo, hi = SPLITS[split]
+    if hi is None:
+        if last_year is None:
+            raise ValueError(f"split {split!r} runs to the latest label year; pass last_year")
+        hi = last_year
     return list(range(lo, hi + 1))
+
+
+def task_slates(task: str, split: str, labels: pd.DataFrame, *,
+                num_targets: int | None = None, years=None) -> list[Slate]:
+    """Slates for one task and split, with the split's years and slate filter applied.
+
+    ``years`` restricts to a subset of the split, e.g. one year at a time to
+    bound memory (a T1 slate holds ~19,600 candidates).
+    """
+    split_years = decision_years(split, last_label_year(labels))
+    years = split_years if years is None else [y for y in years if y in split_years]
+    if task == "discovery":
+        if num_targets is None:
+            raise ValueError("discovery slates need num_targets")
+        slates = discovery_slates(labels, years, num_targets)
+    elif task == "repurposing":
+        slates = repurposing_slates(labels, years)
+    else:
+        raise ValueError(f"unknown task {task!r}")
+    k = MIN_POSITIVES.get((task, split), 1)
+    return [s for s in slates if int(s.positive_mask.sum()) >= k]

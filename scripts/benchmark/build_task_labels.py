@@ -7,8 +7,9 @@ Writes
   labels/discovery.parquet    T1: target_id, disease_id, *_index, first_trial_year
   labels/repurposing.parquet  T2: molecule_id, disease_id, *_index, first_trial_year,
                               drug_first_trial_year
-  benchmark_tasks.json        splits, label counts and slate statistics per task and
-                              split, plus the closed-form random floor on test
+  benchmark_tasks.json        splits, slate filters, label counts and slate statistics
+                              per task and split, plus the closed-form random floor on
+                              val and test
 
 T3 (advancement) labels are the existing labels/train.parquet and eval.parquet;
 they are only summarised here.
@@ -24,18 +25,19 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.benchmark.slates import (  # noqa: E402
-    discovery_slates, expected_random, repurposing_slates, slate_stats, slate_summary,
-)
+from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
-    SPLITS, build_discovery_labels, build_repurposing_labels, decision_years,
+    MIN_POSITIVES, SPLITS, build_discovery_labels, build_repurposing_labels, decision_years,
+    last_label_year, task_slates,
 )
 
 
-def _per_year_stats(make, years) -> pd.DataFrame:
+def _split_stats(task, split, labels, n_targets) -> pd.DataFrame:
     """Build slates one year at a time and keep only their sizes: a full T1 split
     holds ~19,600 candidates per slate."""
-    frames = [slate_stats(make([y])) for y in years]
+    years = decision_years(split, last_label_year(labels))
+    frames = [slate_stats(task_slates(task, split, labels, num_targets=n_targets, years=[y]))
+              for y in years]
     return pd.concat(frames, ignore_index=True)
 
 
@@ -55,17 +57,18 @@ def main() -> None:
     print(f"labels/repurposing.parquet: {len(t2):,} (drug, disease) pairs, "
           f"{int((t2['first_trial_year'] > t2['drug_first_trial_year']).sum()):,} repurposing events")
 
-    summary = {"splits_decision_years": {k: list(v) for k, v in SPLITS.items()}, "tasks": {}}
-    makers = {
-        "discovery": lambda ys: discovery_slates(t1, ys, n_targets),
-        "repurposing": lambda ys: repurposing_slates(t2, ys),
+    last = last_label_year(t1)
+    summary = {
+        "splits_decision_years": {k: [lo, last if hi is None else hi] for k, (lo, hi) in SPLITS.items()},
+        "min_positives_per_slate": {f"{t}.{s}": k for (t, s), k in MIN_POSITIVES.items()},
+        "tasks": {},
     }
-    for task, make in makers.items():
+    for task, labels in (("discovery", t1), ("repurposing", t2)):
         summary["tasks"][task] = {}
         for split in SPLITS:
-            stats = _per_year_stats(make, decision_years(split))
+            stats = _split_stats(task, split, labels, n_targets)
             s = slate_summary(stats)
-            if split == "test" and not stats.empty:
+            if split != "train" and not stats.empty:
                 s["random_expected"] = expected_random(stats)
             summary["tasks"][task][split] = s
             print(f"{task:12s} {split:5s} slates={s['n_slates']:,} positives={s.get('n_positives', 0):,} "

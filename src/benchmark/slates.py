@@ -9,10 +9,10 @@ tie), so a constant score cannot look better than random by index order.
 Protocol carried over from ~/tempo_THBKG/thbkg/evaluate.py, generalised from
 targets to any candidate type.
 
-Usage::
+Usage (``task_slates`` in tasks.py applies the split years and slate filter)::
 
     labels = build_discovery_labels(release_dir)
-    slates = discovery_slates(labels, decision_years("test"), num_targets)
+    slates = task_slates("discovery", "test", labels, num_targets=num_targets)
     summary, per_slate = evaluate(slates, lambda s: model_scores(s.year, s.disease_index, s.candidates))
 """
 
