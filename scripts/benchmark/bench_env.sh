@@ -25,6 +25,10 @@ TEMP_NODE_DIR="${OUTPUT_BASE}/features/temp_nodes"
 FINAL_GRAPH_DIR="${OUTPUT_BASE}/graph"
 RELEASE_DIR="${OUTPUT_BASE}/hf_release/THBKG"
 CHEMBL_CACHE="${FEATURE_RAW_DIR}/chembl_biotherapeutics.parquet"
+# Trial resolution: ClinicalTrials.gov terminal dates fetched for 26.09 (copied
+# from that build), and the re-resolved clinical_precedence it produces.
+NCT_CACHE="${OUTPUT_BASE}/trial_resolution/nct_terminal_dates_${OT_VERSION}.parquet"
+RESOLVED_EVIDENCE_DIR="${OUTPUT_BASE}/evidence_resolved"
 # T3 labels with a 2026 outcome horizon: eval pairs enter Phase II 2016-2023,
 # each with at least 3 years to reach Phase III (label pipeline run with
 # ADV_MAX_EVIDENCE_YEAR=2026; the v26.09 release used 2024, i.e. up to 2021).
@@ -33,7 +37,7 @@ for f in "${ADV_DIR}/train_dataset.csv" "${ADV_DIR}/test_dataset.csv"; do
   [ -f "$f" ] || { echo "❌ missing T3 labels $f (scripts/advancement_prediction/export_w3_advancement_csvs.py)"; exit 1; }
 done
 
-export OT_VERSION REF_BASE OUTPUT_BASE INPUT_EVIDENCE_DIR RAW_EDGES_DIR RAW_NODES_DIR
+export OT_VERSION REF_BASE OUTPUT_BASE INPUT_EVIDENCE_DIR RAW_EDGES_DIR RAW_NODES_DIR RESOLVED_EVIDENCE_DIR NCT_CACHE
 export PYTHONUNBUFFERED=1
 export HF_HUB_OFFLINE=1  # compute nodes are offline; ESM-2 must already be in the HF cache
 
