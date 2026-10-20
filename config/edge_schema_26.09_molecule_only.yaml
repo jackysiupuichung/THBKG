@@ -1,9 +1,9 @@
-# Fast-path schema: only the clinical_precedence edges with a molecule endpoint.
+# Fast-path schema: only the clinical_precedence edge with a molecule endpoint.
 # Used by scripts/benchmark/bench_01_edges.sh to rebuild the graph with all drug
 # types as molecule nodes, while every other edge parquet (including the
 # target->disease trial buckets) is reused unchanged from the 26.09 build.
 #
-# Mirrors the molecule specs of edge_schema_26.09.yaml.
+# Mirrors the modulated_by spec of edge_schema_26.09.yaml.
 
 clinical_precedence:
   - input_dir: sourceId=clinical_precedence
@@ -11,9 +11,3 @@ clinical_precedence:
     targetId: targetId
     relation_name: modulated_by
     props: [source_type=constant:molecule, target_type=constant:target, datasourceId, score=constant:1.0, year, id]
-
-  - input_dir: sourceId=clinical_precedence
-    sourceId: drugId
-    targetId: diseaseId
-    relation_name: trialled_for
-    props: [source_type=constant:molecule, target_type=constant:disease, datasourceId, score, year, id]

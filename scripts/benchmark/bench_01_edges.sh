@@ -9,9 +9,9 @@
 
 # Raw edges + event lists for the benchmark graph.
 #
-# Only clinical_precedence edges with a molecule endpoint change (all drug types
-# are now nodes, and trialled_for is new), so every other raw edge parquet is
-# copied from the 26.09 build rather than re-parsed. That keeps the target-side
+# Only the clinical_precedence edge with a molecule endpoint (modulated_by)
+# changes, because all drug types are now nodes, so every other raw edge parquet
+# is copied from the 26.09 build rather than re-parsed. That keeps the target-side
 # evidence, including the target->disease trial buckets, byte-identical to the
 # release. The event lists are then rebuilt over the full edge set.
 #

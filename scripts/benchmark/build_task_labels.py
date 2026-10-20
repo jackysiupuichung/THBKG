@@ -1,12 +1,10 @@
 #!/usr/bin/env python
-"""Write the T1/T2 label tables into a release directory and summarise all tasks.
+"""Write the T1 label table into a release directory and summarise both tasks.
 
     python scripts/benchmark/build_task_labels.py --release-dir $OUT/hf_release/THBKG
 
 Writes
   labels/discovery.parquet    T1: target_id, disease_id, *_index, first_trial_year
-  labels/repurposing.parquet  T2: molecule_id, disease_id, *_index, first_trial_year,
-                              drug_first_trial_year
   benchmark_tasks.json        splits, slate filters, label counts and slate statistics
                               per task and split, plus the closed-form random floor on
                               val and test
@@ -27,7 +25,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
-    MIN_POSITIVES, SPLITS, build_discovery_labels, build_repurposing_labels, decision_years,
+    MIN_POSITIVES, SPLITS, build_discovery_labels, decision_years,
     last_label_year, task_slates,
 )
 
@@ -50,12 +48,8 @@ def main() -> None:
     n_targets = meta["node_types"]["target"]["num_nodes"]
 
     t1 = build_discovery_labels(rd)
-    t2 = build_repurposing_labels(rd)
     t1.to_parquet(rd / "labels" / "discovery.parquet", index=False)
-    t2.to_parquet(rd / "labels" / "repurposing.parquet", index=False)
     print(f"labels/discovery.parquet:   {len(t1):,} (target, disease) pairs")
-    print(f"labels/repurposing.parquet: {len(t2):,} (drug, disease) pairs, "
-          f"{int((t2['first_trial_year'] > t2['drug_first_trial_year']).sum()):,} repurposing events")
 
     last = last_label_year(t1)
     summary = {
@@ -63,7 +57,7 @@ def main() -> None:
         "min_positives_per_slate": {f"{t}.{s}": k for (t, s), k in MIN_POSITIVES.items()},
         "tasks": {},
     }
-    for task, labels in (("discovery", t1), ("repurposing", t2)):
+    for task, labels in (("discovery", t1),):
         summary["tasks"][task] = {}
         for split in SPLITS:
             stats = _split_stats(task, split, labels, n_targets)

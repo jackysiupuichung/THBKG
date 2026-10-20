@@ -8,7 +8,7 @@
 #SBATCH -t 1:0:0
 
 # Attach features, check the graph against the v26.09 release, export a
-# release directory, and write the T1/T2 benchmark labels into it.
+# release directory, and write the T1 benchmark labels into it.
 set -euo pipefail
 source scripts/benchmark/bench_env.sh
 
@@ -25,6 +25,8 @@ python scripts/benchmark/verify_bench_graph.py \
   --ref-graph "${REF_BASE}/graph/hetero_graph_with_features_datatype.pt" \
   --out "${OUTPUT_BASE}/verify_vs_26.09.json"
 
+# Export into a fresh directory so no file from an earlier build lingers.
+rm -rf "${RELEASE_DIR:?}"
 python scripts/hf_release/export_hf.py \
   --graph-file "${FINAL_GRAPH_DIR}/hetero_graph_with_features_datatype.pt" \
   --mappings-file "${EVENT_OUTPUT_DIR}/temporal_graph_datatype_mappings.pt" \

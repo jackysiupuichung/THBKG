@@ -1,4 +1,4 @@
-"""Slate construction and ranking metrics for the T1 and T2 benchmark tasks.
+"""Slate construction and ranking metrics for the T1 discovery task.
 
 The unit of evaluation is a *slate*: one ``(disease, decision year)`` ranking
 problem over the task's full candidate pool, with no negative sampling. Every
@@ -6,8 +6,7 @@ slate gets one vote in the macro average, so heavily trialled indications do
 not dominate. Ties are broken pessimistically (positives rank last within a
 tie), so a constant score cannot look better than random by index order.
 
-Protocol carried over from ~/tempo_THBKG/thbkg/evaluate.py, generalised from
-targets to any candidate type.
+Protocol carried over from ~/tempo_THBKG/thbkg/evaluate.py.
 
 Usage (``task_slates`` in tasks.py applies the split years and slate filter)::
 
@@ -34,7 +33,7 @@ class Slate:
     task: str
     year: int
     disease_index: int
-    candidates: np.ndarray     # [C] candidate node indices (targets for T1, molecules for T2)
+    candidates: np.ndarray     # [C] candidate target indices
     positive_mask: np.ndarray  # [C] bool
 
 
@@ -63,23 +62,6 @@ def discovery_slates(labels: pd.DataFrame, years: Iterable[int], num_targets: in
     """T1 slates: all targets minus those with a trial for the disease before ``Y``."""
     all_targets = np.arange(num_targets, dtype=np.int64)
     return _slates("discovery", labels, "target_index", years, lambda y: all_targets)
-
-
-def repurposing_slates(labels: pd.DataFrame, years: Iterable[int]) -> list[Slate]:
-    """T2 slates: drugs with any trial before ``Y`` and none for the disease before ``Y``.
-
-    Restricting the pool to drugs with trial history makes "drug seen before"
-    hold for negatives as well as positives; otherwise every first-in-human drug
-    would be a free negative that a model could rank last without learning
-    anything about the disease.
-    """
-    drug_first = labels.groupby("molecule_index")["drug_first_trial_year"].first()
-    ids, first = drug_first.index.to_numpy(np.int64), drug_first.to_numpy()
-
-    def universe(year: int) -> np.ndarray:
-        return np.sort(ids[first < year])
-
-    return _slates("repurposing", labels, "molecule_index", years, universe)
 
 
 def _dcg(gains: np.ndarray) -> float:

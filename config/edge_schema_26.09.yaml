@@ -41,8 +41,9 @@ cancer_biomarkers:
 #     props: [source_type=constant:target, target_type=constant:molecule, datasourceId, score=constant:1.0, year, id]
 
 clinical_precedence:
-  # drug->target (modulated_by) + target->disease (bucketed by clinical outcome)
-  # + drug->disease (trialled_for).
+  # GATher-compatible inventory: drug->target (modulated_by) + target->disease
+  # (bucketed by clinical outcome). drug->disease intentionally omitted; that
+  # signal is reachable as a 2-hop drug -> target -> disease.
   # trial_outcome_bucket is one of: clinical_trial_positive, _unmet_efficacy,
   # _adverse_effects, _Unknown/Operational, _ongoing.
   # See preprocessing/.../apply_trial_resolution.py.
@@ -57,17 +58,6 @@ clinical_precedence:
     targetId: diseaseId
     relation: trial_outcome_bucket
     props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
-
-  # Drug indication history, needed by the repurposing task. Dated exactly like
-  # the target->disease trial rows (resolvedTrialDate, i.e. trial start for the
-  # ongoing row), and MAX-aggregated like them (build_event_list.py). Not named
-  # clinical_trial_* on purpose: code that reads clinical_trial_* edges assumes a
-  # target<->disease orientation (src/eval/prospective.py, the T1 label builder).
-  - input_dir: sourceId=clinical_precedence
-    sourceId: drugId
-    targetId: diseaseId
-    relation_name: trialled_for
-    props: [source_type=constant:molecule, target_type=constant:disease, datasourceId, score, year, id]
 
 reactome:
   - input_dir: sourceId=reactome

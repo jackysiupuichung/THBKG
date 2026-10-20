@@ -2,21 +2,18 @@
 """Check the benchmark graph against the released v26.09 graph.
 
 The benchmark build changes only molecule-side content: all drug types become
-molecule nodes, and a molecule->disease ``trialled_for`` relation is added. So
-everything else must be bit-identical to the release, and the new content must
-be internally consistent. Fails (exit 1) on any hard check.
+molecule nodes, with multimodal features. So everything else must be
+bit-identical to the release. Fails (exit 1) on any hard check.
 
 Hard checks
   1. target/disease/go/reactome: same node ids in the same order, same features.
-  2. edge types: the release's types plus exactly (molecule, trialled_for, disease).
+  2. edge types: exactly the release's types.
   3. every edge type without a molecule endpoint: identical edge_index/attr/time.
   4. modulated_by restricted to the release's molecules equals the release's.
   5. release molecules keep their exact Morgan fingerprint (block 0) unless the
      release had mean-imputed them.
 Reported
-  - molecule coverage by input modality, trialled_for size and year range,
-    share of trialled_for pairs explained by a target->disease trial edge of
-    one of the drug's targets.
+  - molecule coverage by input modality.
 
 Heavy (loads two full graphs): run via scripts/benchmark/bench_04_assemble.sh.
 """
@@ -30,7 +27,6 @@ import numpy as np
 import pandas as pd
 import torch
 
-NEW_EDGE = ("molecule", "trialled_for", "disease")
 MOD_EDGE = ("molecule", "modulated_by", "target")
 
 
@@ -70,8 +66,8 @@ def main() -> int:
 
     # 2. edge types
     b_types, r_types = set(bench.edge_types), set(ref.edge_types)
-    check("edge_types.superset", r_types <= b_types, sorted(r_types - b_types) or None)
-    check("edge_types.only_new_is_trialled_for", b_types - r_types == {NEW_EDGE}, sorted(b_types - r_types))
+    check("edge_types.identical", b_types == r_types,
+          {"missing": sorted(r_types - b_types), "extra": sorted(b_types - r_types)} if b_types != r_types else None)
 
     # 3. edge types without a molecule endpoint: identical tensors
     same = [et for et in sorted(r_types) if "molecule" not in (et[0], et[2])]
@@ -114,25 +110,7 @@ def main() -> int:
         "feature_dim": int(bx.size(1)),
     }
 
-    # reported: trialled_for
-    dis = list(bench["disease"].node_id)
-    tf = _edges_df(bench[NEW_EDGE], b_mol, dis)
-    pairs = tf.groupby(["src", "dst"], as_index=False)["time"].min()
-    trial_pairs = set()
-    for et in bench.edge_types:
-        if et[0] == "target" and et[2] == "disease" and et[1].startswith("clinical_trial"):
-            ei = bench[et].edge_index.numpy()
-            trial_pairs.update(zip(np.asarray(tgt)[ei[0]], np.asarray(dis)[ei[1]]))
-    drug_targets = b_mod.groupby("src")["dst"].apply(set).to_dict()
-    explained = sum(any((t, d) in trial_pairs for t in drug_targets.get(m, ()))
-                    for m, d in zip(pairs["src"], pairs["dst"]))
-    report["trialled_for"] = {
-        "edges": len(tf), "pairs": len(pairs), "molecules": int(pairs["src"].nunique()),
-        "diseases": int(pairs["dst"].nunique()),
-        "first_year_range": [int(pairs["time"].min()), int(pairs["time"].max())],
-        "pairs_with_target_trial_edge": round(explained / len(pairs), 4),
-    }
-    print(json.dumps({k: report[k] for k in ("molecule_coverage", "trialled_for")}, indent=2))
+    print(json.dumps(report["molecule_coverage"], indent=2))
 
     report["failures"] = failures
     with open(args.out, "w") as f:
