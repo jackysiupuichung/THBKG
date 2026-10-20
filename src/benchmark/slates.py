@@ -4,7 +4,13 @@ The unit of evaluation is a *slate*: one ``(disease, decision year)`` ranking
 problem over the task's full candidate pool, with no negative sampling. Every
 slate gets one vote in the macro average, so heavily trialled indications do
 not dominate. Ties are broken pessimistically (positives rank last within a
-tie), so a constant score cannot look better than random by index order.
+tie, lowest grade first), so a constant score cannot look better than random by
+index order.
+
+Precision and recall treat every positive alike. NDCG uses graded relevance: a
+positive's gain is its ``grade`` label column (T1: max outcome phase, see
+tasks.py), so ranking a pair that went on to Phase 3 above one that stopped at
+Phase 1 scores higher. Without a ``grade`` column every positive has gain 1.
 
 Protocol carried over from ~/tempo_THBKG/thbkg/evaluate.py.
 
@@ -23,7 +29,7 @@ from typing import Callable, Iterable
 import numpy as np
 import pandas as pd
 
-KS = (10, 20, 50, 100, 200)
+KS = (100, 200, 500)
 
 
 @dataclass
@@ -35,12 +41,15 @@ class Slate:
     disease_index: int
     candidates: np.ndarray     # [C] candidate target indices
     positive_mask: np.ndarray  # [C] bool
+    gain: np.ndarray           # [C] float: the positive's grade, 0 for negatives
 
 
 def _slates(task: str, pairs: pd.DataFrame, cand_col: str, years: Iterable[int],
             universe_for_year: Callable[[int], np.ndarray]) -> list[Slate]:
-    """Shared builder: ``pairs`` has disease_index, ``cand_col``, first_trial_year."""
+    """Shared builder: ``pairs`` has disease_index, ``cand_col``, first_trial_year
+    and optionally ``grade``."""
     first = pairs["first_trial_year"].to_numpy()
+    has_grade = "grade" in pairs.columns
     out: list[Slate] = []
     for year in years:
         universe = universe_for_year(year)
@@ -52,9 +61,14 @@ def _slates(task: str, pairs: pd.DataFrame, cand_col: str, years: Iterable[int],
         for d, g in pos.groupby("disease_index"):
             excluded = prior_by_dis.get(d)
             cands = universe if excluded is None else universe[~np.isin(universe, excluded)]
-            pmask = np.isin(cands, g[cand_col].to_numpy())
+            pos_ids = g[cand_col].to_numpy()
+            pos_gain = g["grade"].to_numpy(np.float64) if has_grade else np.ones(len(g))
+            order = np.argsort(pos_ids)
+            at = np.searchsorted(pos_ids[order], cands).clip(max=len(order) - 1)
+            pmask = pos_ids[order][at] == cands
             if pmask.any():  # every positive outside the pool -> nothing to rank
-                out.append(Slate(task, int(year), int(d), cands, pmask))
+                gain = np.where(pmask, pos_gain[order][at], 0.0)
+                out.append(Slate(task, int(year), int(d), cands, pmask, gain))
     return out
 
 
@@ -68,15 +82,25 @@ def _dcg(gains: np.ndarray) -> float:
     return float((gains / np.log2(np.arange(gains.size) + 2.0)).sum())
 
 
-def slate_metrics(scores: np.ndarray, positive_mask: np.ndarray, ks=KS) -> dict:
-    """precision@K / recall@K / NDCG@K for one slate, with pessimistic ties."""
+def slate_metrics(scores: np.ndarray, positive_mask: np.ndarray, ks=KS, gains=None) -> dict:
+    """precision@K / recall@K / NDCG@K for one slate, with pessimistic ties.
+
+    ``gains`` (default: 1 per positive) are the graded relevances used by NDCG;
+    precision and recall only use ``positive_mask``.
+    """
     scores = np.asarray(scores, dtype=np.float64)
     positive_mask = np.asarray(positive_mask, dtype=bool)
     if scores.shape != positive_mask.shape:
         raise ValueError(f"scores {scores.shape} != candidates {positive_mask.shape}")
-    # lexsort: last key is primary -> score descending, then negatives before positives
-    order = np.lexsort((positive_mask.astype(np.int8), -scores))
+    gains = positive_mask.astype(np.float64) if gains is None else np.asarray(gains, dtype=np.float64)
+    if gains.shape != positive_mask.shape or ((gains > 0) != positive_mask).any():
+        raise ValueError("gains must be > 0 exactly on the positives")
+    # lexsort: last key is primary -> score descending, then lowest gain first
+    # (negatives, then low-grade positives) within a tie
+    order = np.lexsort((gains, -scores))
     ranked = positive_mask[order].astype(np.float64)
+    ranked_gain = gains[order]
+    ideal = np.sort(gains)[::-1]
     n_pos = int(positive_mask.sum())
 
     out = {}
@@ -85,7 +109,7 @@ def slate_metrics(scores: np.ndarray, positive_mask: np.ndarray, ks=KS) -> dict:
         hits = ranked[:ke].sum()
         out[f"precision@{k}"] = hits / ke
         out[f"recall@{k}"] = hits / n_pos
-        out[f"ndcg@{k}"] = _dcg(ranked[:ke]) / _dcg(np.ones(min(n_pos, ke)))
+        out[f"ndcg@{k}"] = _dcg(ranked_gain[:ke]) / _dcg(ideal[:ke])
     out["n_pos"] = n_pos
     out["n_cand"] = int(ranked.size)
     return out
@@ -107,7 +131,7 @@ def evaluate(slates: list[Slate], score_fn: Callable[[Slate], np.ndarray], ks=KS
     """Score every slate with ``score_fn`` (one score per ``slate.candidates``) and macro-average."""
     per_slate = []
     for s in slates:
-        m = slate_metrics(score_fn(s), s.positive_mask, ks)
+        m = slate_metrics(score_fn(s), s.positive_mask, ks, gains=s.gain)
         m.update(year=s.year, disease_index=s.disease_index)
         per_slate.append(m)
     return macro_average(per_slate, ks), per_slate

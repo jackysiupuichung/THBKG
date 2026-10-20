@@ -4,7 +4,8 @@
     python scripts/benchmark/build_task_labels.py --release-dir $OUT/hf_release/THBKG
 
 Writes
-  labels/discovery.parquet    T1: target_id, disease_id, *_index, first_trial_year
+  labels/discovery.parquet    T1: target_id, disease_id, *_index, first_trial_year,
+                              max_outcome_phase, grade
   benchmark_tasks.json        splits, slate filters, label counts and slate statistics
                               per task and split, plus the closed-form random floor on
                               val and test
@@ -30,13 +31,17 @@ from src.benchmark.tasks import (  # noqa: E402
 )
 
 
-def _split_stats(task, split, labels, n_targets) -> pd.DataFrame:
-    """Build slates one year at a time and keep only their sizes: a full T1 split
-    holds ~19,600 candidates per slate."""
+def _split_stats(task, split, labels, n_targets) -> tuple[pd.DataFrame, dict]:
+    """Build slates one year at a time and keep only their sizes (a full T1 split
+    holds ~19,600 candidates per slate), plus the grade counts of their positives."""
     years = decision_years(split, last_label_year(labels))
-    frames = [slate_stats(task_slates(task, split, labels, num_targets=n_targets, years=[y]))
-              for y in years]
-    return pd.concat(frames, ignore_index=True)
+    frames, grades = [], []
+    for y in years:
+        slates = task_slates(task, split, labels, num_targets=n_targets, years=[y])
+        frames.append(slate_stats(slates))
+        grades.extend(g for s in slates for g in s.gain[s.positive_mask].tolist())
+    counts = pd.Series(grades, dtype=float).value_counts().sort_index()
+    return pd.concat(frames, ignore_index=True), {str(k): int(v) for k, v in counts.items()}
 
 
 def main() -> None:
@@ -60,8 +65,9 @@ def main() -> None:
     for task, labels in (("discovery", t1),):
         summary["tasks"][task] = {}
         for split in SPLITS:
-            stats = _split_stats(task, split, labels, n_targets)
+            stats, grade_counts = _split_stats(task, split, labels, n_targets)
             s = slate_summary(stats)
+            s["positive_grades"] = grade_counts
             if split != "train" and not stats.empty:
                 s["random_expected"] = expected_random(stats)
             summary["tasks"][task][split] = s

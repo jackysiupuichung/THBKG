@@ -20,6 +20,13 @@ T1 labels are read off the graph's own target->disease ``clinical_trial_*``
 edges, so a label year is by construction the year the masking rule hides. T3
 labels are external and unchanged.
 
+T1 positives are graded for NDCG by their max outcome phase: the highest phase
+among the pair's finished trials (outcome edges) up to the end of the graph.
+Positives with no finished trial yet get ``MIN_POSITIVE_GRADE``. Precision and
+recall stay binary. The grade looks past the decision year, so use it only to
+score rankings; to train on it, pass ``horizon`` = the year before the split
+being evaluated.
+
 T1 test slates are kept only for diseases that gain more than 3 new targets
 over the whole test period (``MIN_DISEASE_POSITIVES``). Always build slates
 through ``task_slates`` so the split years and this filter are applied.
@@ -59,6 +66,19 @@ ADVANCEMENT_SPLITS = {"train": ("train", None, 2015), "val": ("eval", 2016, 2019
 
 T1_RELATION_PREFIX = "clinical_trial"
 
+# Outcome edges (dated when the trial ended) and the factor that undoes Open
+# Targets' halving of the score for trials stopped for safety or efficacy.
+OUTCOME_RELATIONS = {
+    "clinical_trial_positive": 1.0,
+    "clinical_trial_Unknown/Operational": 1.0,
+    "clinical_trial_unmet_efficacy": 2.0,
+    "clinical_trial_adverse_effects": 2.0,
+}
+# Phase weight (OT clinical-precedence score) -> grade on a phase scale.
+# Unknown phase and early Phase 1 share the lowest grade.
+PHASE_GRADE = {0.01: 0.5, 0.05: 0.5, 0.1: 1.0, 0.15: 1.5, 0.2: 2.0, 0.5: 2.5, 0.7: 3.0, 1.0: 4.0}
+MIN_POSITIVE_GRADE = 0.5  # positives whose trials have not finished yet
+
 
 def _release_meta(release_dir: Path) -> dict:
     return json.loads((release_dir / "metadata.json").read_text())
@@ -89,10 +109,47 @@ def _first_years(release_dir: Path, src: str, dst: str, keep) -> pd.DataFrame:
     return df.groupby(["src", "dst"], as_index=False)["year"].min()
 
 
+def max_outcome_phase(release_dir: str | Path, horizon: int | None = None) -> pd.DataFrame:
+    """Highest phase grade among each (target, disease) pair's finished trials.
+
+    Reads the outcome edges dated up to ``horizon`` (default: all). Returns
+    src (target index), dst (disease index), max_outcome_phase.
+    """
+    from safetensors import safe_open
+
+    release_dir = Path(release_dir)
+    meta = _release_meta(release_dir)
+    parts = []
+    with safe_open(str(release_dir / "graph.safetensors"), framework="np") as f:
+        for e in meta["edge_types"]:
+            factor = OUTCOME_RELATIONS.get(e["rel"])
+            if factor is None or (e["src"], e["dst"]) != ("target", "disease"):
+                continue
+            ei = f.get_tensor(e["tensors"]["edge_index"]["key"])
+            t = f.get_tensor(e["tensors"]["edge_time"]["key"])
+            w = f.get_tensor(e["tensors"]["edge_attr"]["key"])[:, 0].astype(np.float64)
+            keep = np.ones(len(t), dtype=bool) if horizon is None else t <= horizon
+            parts.append(pd.DataFrame({"src": ei[0][keep], "dst": ei[1][keep],
+                                       "w": np.round(w[keep] * factor, 3)}))
+    if len(parts) != len(OUTCOME_RELATIONS):
+        raise ValueError(f"expected {len(OUTCOME_RELATIONS)} outcome relations, found {len(parts)}")
+    df = pd.concat(parts, ignore_index=True)
+    unknown = sorted(set(df["w"]) - set(PHASE_GRADE))
+    if unknown:
+        raise ValueError(f"outcome scores with no phase grade: {unknown}")
+    df["max_outcome_phase"] = df["w"].map(PHASE_GRADE)
+    return df.groupby(["src", "dst"], as_index=False)["max_outcome_phase"].max()
+
+
 def build_discovery_labels(release_dir: str | Path) -> pd.DataFrame:
-    """T1: first trial year of every (target, disease) pair with any trial."""
+    """T1: first trial year of every (target, disease) pair with any trial, plus its grade.
+
+    ``max_outcome_phase`` is NaN while none of the pair's trials has finished;
+    ``grade`` fills those with ``MIN_POSITIVE_GRADE``.
+    """
     release_dir = Path(release_dir)
     df = _first_years(release_dir, "target", "disease", lambda r: r.startswith(T1_RELATION_PREFIX))
+    df = df.merge(max_outcome_phase(release_dir), on=["src", "dst"], how="left")
     tid, did = node_ids(release_dir, "target"), node_ids(release_dir, "disease")
     out = pd.DataFrame({
         "target_id": tid[df["src"]],
@@ -100,6 +157,8 @@ def build_discovery_labels(release_dir: str | Path) -> pd.DataFrame:
         "target_index": df["src"].astype(np.int64),
         "disease_index": df["dst"].astype(np.int64),
         "first_trial_year": df["year"].astype(np.int64),
+        "max_outcome_phase": df["max_outcome_phase"].astype(np.float64),
+        "grade": df["max_outcome_phase"].fillna(MIN_POSITIVE_GRADE).astype(np.float64),
     })
     return out.sort_values(["first_trial_year", "disease_id", "target_id"], ignore_index=True)
 
