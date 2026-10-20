@@ -25,7 +25,13 @@ TEMP_NODE_DIR="${OUTPUT_BASE}/features/temp_nodes"
 FINAL_GRAPH_DIR="${OUTPUT_BASE}/graph"
 RELEASE_DIR="${OUTPUT_BASE}/hf_release/THBKG"
 CHEMBL_CACHE="${FEATURE_RAW_DIR}/chembl_biotherapeutics.parquet"
-ADV_DIR="data/clinical_trial_advancement/${OT_VERSION}_w3"
+# T3 labels with a 2026 outcome horizon: eval pairs enter Phase II 2016-2023,
+# each with at least 3 years to reach Phase III (label pipeline run with
+# ADV_MAX_EVIDENCE_YEAR=2026; the v26.09 release used 2024, i.e. up to 2021).
+ADV_DIR="${ADV_DIR:-data/clinical_trial_advancement/${OT_VERSION}_w3_e2026}"
+for f in "${ADV_DIR}/train_dataset.csv" "${ADV_DIR}/test_dataset.csv"; do
+  [ -f "$f" ] || { echo "❌ missing T3 labels $f (scripts/advancement_prediction/export_w3_advancement_csvs.py)"; exit 1; }
+done
 
 export OT_VERSION REF_BASE OUTPUT_BASE INPUT_EVIDENCE_DIR RAW_EDGES_DIR RAW_NODES_DIR
 export PYTHONUNBUFFERED=1

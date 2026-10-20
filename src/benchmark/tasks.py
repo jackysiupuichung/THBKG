@@ -3,7 +3,8 @@
 Both tasks follow one target-disease pair through the clinic, under one
 temporal protocol: a model ranks candidates for a decision year ``Y`` using only
 graph evidence dated strictly before ``Y``. T1 splits decision years by
-``SPLITS``; T3 keeps the released train/eval split of its label files.
+``SPLITS``; T3 splits its labelled pairs by Phase II entry year
+(``ADVANCEMENT_SPLITS``) into the same train/val/test periods.
 
 ========  ==========================================  =============================
 task      positive                                    candidate pool for (disease, Y)
@@ -11,17 +12,17 @@ task      positive                                    candidate pool for (diseas
 T1        (target, disease) pair whose first trial    every target with no trial for
 discovery (any phase) starts in ``Y``                 that disease before ``Y``
 T3        Phase II entry in ``Y`` that reaches        the labelled pairs themselves
-advance-  Phase III by a fixed horizon                (labels/train|eval.parquet)
-ment
+advance-  Phase III by a fixed horizon, at least      (labels/train|eval.parquet)
+ment      3 years after the split's last entry year
 ========  ==========================================  =============================
 
 T1 labels are read off the graph's own target->disease ``clinical_trial_*``
 edges, so a label year is by construction the year the masking rule hides. T3
 labels are external and unchanged.
 
-T1 test slates are kept only when the disease gains more than 3 new targets
-that year (``MIN_POSITIVES``). Always build slates through ``task_slates`` so
-the split years and this filter are applied.
+T1 test slates are kept only for diseases that gain more than 3 new targets
+over the whole test period (``MIN_DISEASE_POSITIVES``). Always build slates
+through ``task_slates`` so the split years and this filter are applied.
 
 Works directly on a release directory (graph.safetensors + metadata.json +
 mappings/), without PyG.
@@ -44,10 +45,17 @@ SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, None)}
 # so 1995 cannot be a decision year: a "first trial in 1995" means "by 1995".
 FIRST_GRAPH_YEAR = 1995
 
-# Minimum positives for a slate to count, per (task, split); default 1. With
-# 3 or fewer positives one hit moves recall@K by a third or more, so T1 test
-# keeps only slates with more than 3 new targets.
-MIN_POSITIVES = {("discovery", "test"): 4}
+# Minimum positives a disease needs over a whole split for its slates to
+# count, per (task, split); default 1. T1 test keeps only diseases with more
+# than 3 new targets across the test period.
+MIN_DISEASE_POSITIVES = {("discovery", "test"): 4}
+
+# T3 splits by Phase II entry (transition) year: (label file, first, last), with
+# None = open. train is labels/train.parquet (outcome horizon = 2015 + window);
+# val and test divide labels/eval.parquet, whose outcome horizon is the last
+# evidence year, so its latest pairs enter Phase II window years before it.
+ADVANCEMENT_SPLITS = {"train": ("train", None, 2015), "val": ("eval", 2016, 2019),
+                      "test": ("eval", 2020, None)}
 
 T1_RELATION_PREFIX = "clinical_trial"
 
@@ -125,5 +133,25 @@ def task_slates(task: str, split: str, labels: pd.DataFrame, *,
     split_years = decision_years(split, last_label_year(labels))
     years = split_years if years is None else [y for y in years if y in split_years]
     slates = discovery_slates(labels, years, num_targets)
-    k = MIN_POSITIVES.get((task, split), 1)
-    return [s for s in slates if int(s.positive_mask.sum()) >= k]
+    k = MIN_DISEASE_POSITIVES.get((task, split), 1)
+    if k > 1:
+        # Counted over the whole split, not over ``years``, so a year-by-year
+        # build keeps the same slates. Every T1 positive is in its slate's pool.
+        in_split = labels["first_trial_year"].isin(split_years)
+        per_disease = labels.loc[in_split].groupby("disease_index").size()
+        keep = set(per_disease.index[per_disease >= k].tolist())
+        slates = [s for s in slates if s.disease_index in keep]
+    return slates
+
+
+def advancement_labels(release_dir: str | Path, split: str) -> pd.DataFrame:
+    """T3 labelled pairs of one split: target_id, disease_id, transition_year, outcome."""
+    file, lo, hi = ADVANCEMENT_SPLITS[split]
+    df = pd.read_parquet(Path(release_dir) / "labels" / f"{file}.parquet")
+    y = df["transition_year"]
+    keep = pd.Series(True, index=df.index)
+    if lo is not None:
+        keep &= y >= lo
+    if hi is not None:
+        keep &= y <= hi
+    return df[keep].reset_index(drop=True)

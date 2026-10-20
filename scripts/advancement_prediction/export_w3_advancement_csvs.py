@@ -7,6 +7,9 @@ test_dataset.csv   <- datasets_<OT_VERSION>_w<ADV_WINDOW>/evaluation_dataset.zar
 
 OT_VERSION (default 26.09) and ADV_WINDOW (default 3) come from the
 environment; output goes to this repo's data/clinical_trial_advancement/.
+For a run with a non-default outcome horizon, ADV_DATA_DIR points at that run's
+data root and ADV_OUT_SUFFIX tags the output directory, e.g.
+  ADV_DATA_DIR=.../data_e2026 ADV_OUT_SUFFIX=_e2026  ->  26.09_w3_e2026/
 """
 import os
 import xarray as xr
@@ -17,8 +20,10 @@ from pathlib import Path
 OT_VERSION = os.environ.get("OT_VERSION", "26.09")
 ADV_WINDOW = os.environ.get("ADV_WINDOW", "3")
 TAG = f"{OT_VERSION}_w{ADV_WINDOW}"
-SRC = Path(f"/gpfs/scratch/bty414/clinical_advancement_paper/data/datasets_{TAG}")
-OUT = Path(__file__).resolve().parents[2] / "data" / "clinical_trial_advancement" / TAG
+DATA = Path(os.environ.get("ADV_DATA_DIR", "/gpfs/scratch/bty414/clinical_advancement_paper/data"))
+SRC = DATA / f"datasets_{TAG}"
+OUT = (Path(__file__).resolve().parents[2] / "data" / "clinical_trial_advancement"
+       / f"{TAG}{os.environ.get('ADV_OUT_SUFFIX', '')}")
 OUT.mkdir(parents=True, exist_ok=True)
 
 

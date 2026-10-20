@@ -25,7 +25,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
-    MIN_POSITIVES, SPLITS, build_discovery_labels, decision_years,
+    ADVANCEMENT_SPLITS, MIN_DISEASE_POSITIVES, SPLITS, advancement_labels, build_discovery_labels, decision_years,
     last_label_year, task_slates,
 )
 
@@ -54,7 +54,7 @@ def main() -> None:
     last = last_label_year(t1)
     summary = {
         "splits_decision_years": {k: [lo, last if hi is None else hi] for k, (lo, hi) in SPLITS.items()},
-        "min_positives_per_slate": {f"{t}.{s}": k for (t, s), k in MIN_POSITIVES.items()},
+        "min_positives_per_disease": {f"{t}.{s}": k for (t, s), k in MIN_DISEASE_POSITIVES.items()},
         "tasks": {},
     }
     for task, labels in (("discovery", t1),):
@@ -69,10 +69,14 @@ def main() -> None:
                   f"mean_candidates={s.get('mean_candidates', 0):,.0f}")
 
     adv = {}
-    for split in ("train", "eval"):
-        df = pd.read_parquet(rd / "labels" / f"{split}.parquet")
-        adv[split] = {"pairs": len(df), "positive_rate": round(float(df["outcome"].astype(bool).mean()), 4),
+    for split, (file, _, _) in ADVANCEMENT_SPLITS.items():
+        df = advancement_labels(rd, split)
+        adv[split] = {"label_file": f"labels/{file}.parquet", "pairs": len(df),
+                      "positives": int(df["outcome"].astype(bool).sum()),
+                      "positive_rate": round(float(df["outcome"].astype(bool).mean()), 4),
                       "transition_years": [int(df["transition_year"].min()), int(df["transition_year"].max())]}
+        print(f"{'advancement':12s} {split:5s} pairs={len(df):,} positives={adv[split]['positives']:,} "
+              f"entry_years={adv[split]['transition_years']}")
     summary["tasks"]["advancement"] = adv
 
     (rd / "benchmark_tasks.json").write_text(json.dumps(summary, indent=2, default=lambda o: o.item()
