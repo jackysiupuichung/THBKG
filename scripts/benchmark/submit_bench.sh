@@ -9,13 +9,13 @@
 #   python -c "from huggingface_hub import snapshot_download; \
 #     snapshot_download('facebook/esm2_t33_650M_UR50D', allow_patterns=['*.json','*.txt','model.safetensors'])"
 #
-#   bash scripts/benchmark/submit_bench.sh          # all four stages
+#   bash scripts/benchmark/submit_bench.sh          # all five stages
 #   FROM=3 bash scripts/benchmark/submit_bench.sh   # resume at stage 3
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 FROM="${FROM:-1}"
-STAGES=(bench_01_edges bench_02_graph bench_03_features bench_04_assemble)
+STAGES=(bench_01_edges bench_02_graph bench_03_features bench_04_assemble bench_05_snapshots)
 dep=""
 for i in "${!STAGES[@]}"; do
   n=$((i + 1))

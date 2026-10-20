@@ -47,7 +47,7 @@ def _dtype_name(t: torch.Tensor) -> str:
 
 
 def export(graph_file, mappings_file, train_csv, test_csv, out_dir,
-           card_file, croissant_file):
+           card_file, croissant_file, score_only=False):
     out = Path(out_dir)
     (out / "mappings").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)
@@ -68,6 +68,9 @@ def export(graph_file, mappings_file, train_csv, test_csv, out_dir,
         # canonical DIRECTED graph; load_thbkg.load_graph(to_undirected=True)
         # reproduces the training-time view.
         "training_view_is_undirected": True,
+        # Columns of every edge_attr tensor. The build stores [score, novelty];
+        # score_only exports keep just the score.
+        "edge_attr_columns": ["score"] if score_only else ["score", "novelty"],
         "node_types": {},
         "edge_types": [],
         "node_type_mapping": mappings.get("node_type_mapping", {}) if isinstance(mappings, dict) else {},
@@ -112,6 +115,8 @@ def export(graph_file, mappings_file, train_csv, test_csv, out_dir,
             val = store[attr]
             if not torch.is_tensor(val):
                 continue
+            if attr == "edge_attr" and score_only:
+                val = val[:, :1]
             key = f"edge.{i}.{attr}"
             tensors[key] = val.detach().contiguous().clone()
             edge_meta["tensors"][attr] = {
@@ -161,9 +166,11 @@ def main():
     ap.add_argument("--out", required=True, help="output release directory")
     ap.add_argument("--card-file", default=str(_HERE / "README_dataset_card.md"))
     ap.add_argument("--croissant-file", default=str(_REPO_ROOT / "croissant.json"))
+    ap.add_argument("--score-only", action="store_true",
+                    help="export edge_attr as [score] only, dropping the novelty column")
     args = ap.parse_args()
     export(args.graph_file, args.mappings_file, args.train_csv, args.test_csv,
-           args.out, args.card_file, args.croissant_file)
+           args.out, args.card_file, args.croissant_file, score_only=args.score_only)
 
 
 if __name__ == "__main__":

@@ -89,8 +89,12 @@ def load_static_edges(static_dir: str) -> pd.DataFrame:
             if 'score' not in df.columns:
                 df['score'] = 1.0
 
-            # Static edges have no novelty signal — set to 1.0 (fully novel / always present)
-            df['edge_novelty'] = 1.0
+            # The graph reads edge_weight / edge_novelty, so set them here: a
+            # curated ontology edge is certain (weight = its score, 1.0) and never
+            # updated (novelty 0). Leaving only `score` let edge_weight fall to the
+            # 0.0 fill when concatenated with the dynamic events.
+            df['edge_weight'] = df['score'].astype(float)
+            df['edge_novelty'] = 0.0
                 
             # Ensure no temporal columns interfere (force them to be null or handled)
             # Static edges have NO edge_time

@@ -32,7 +32,12 @@ python scripts/hf_release/export_hf.py \
   --mappings-file "${EVENT_OUTPUT_DIR}/temporal_graph_datatype_mappings.pt" \
   --train-csv "${ADV_DIR}/train_dataset.csv" \
   --test-csv "${ADV_DIR}/test_dataset.csv" \
-  --out "$RELEASE_DIR"
+  --out "$RELEASE_DIR" \
+  --score-only
+
+# Continuous graph keeps raw scores; record each relation's theoretical maximum
+# so loaders can normalise without fitting anything to the data.
+python scripts/benchmark/write_edge_scales.py --release-dir "$RELEASE_DIR" --raw-edges-dir "$RAW_EDGES_DIR"
 
 # Upstream versions: the 26.09 sources plus the ChEMBL release the sequences came from.
 python - <<'PY'

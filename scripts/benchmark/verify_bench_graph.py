@@ -1,17 +1,20 @@
 #!/usr/bin/env python
 """Check the benchmark graph against the released v26.09 graph.
 
-The benchmark build changes two things: all drug types become molecule nodes,
-with multimodal features, and the start-dated clinical_trial_ongoing edge
-carries the trial's phase weight instead of Open Targets' score (which is halved
-for trials that later stopped for safety or efficacy). Everything else must be
-bit-identical to the release. Fails (exit 1) on any hard check.
+The benchmark build changes three things: all drug types become molecule nodes,
+with multimodal features; the start-dated clinical_trial_ongoing edge carries
+the trial's phase weight instead of Open Targets' score (which is halved for
+trials that later stopped for safety or efficacy); and static ontology edges
+carry (score 1, novelty 0) instead of the release's (0, 1) artefact. Everything
+else must be bit-identical to the release. Fails (exit 1) on any hard check.
 
 Hard checks
   1. target/disease/go/reactome: same node ids in the same order, same features.
   2. edge types: exactly the release's types.
-  3. every edge type without a molecule endpoint, except clinical_trial_ongoing:
-     identical edge_index/attr/time.
+  3. every edge type without a molecule endpoint, except clinical_trial_ongoing
+     and the static ontology types: identical edge_index/attr/time.
+  3b. static ontology types: identical edge_index/edge_time; edge_attr is
+     exactly (1, 0).
   4. clinical_trial_ongoing: same (target, disease) pairs with the same first
      edge_time (so first-trial labels are unchanged); the final score per pair
      never drops; novelty unchanged (always 0).
@@ -77,10 +80,21 @@ def main() -> int:
           {"missing": sorted(r_types - b_types), "extra": sorted(b_types - r_types)} if b_types != r_types else None)
 
     # 3. edge types without a molecule endpoint, except the rescored ongoing edge
-    same = [et for et in sorted(r_types) if "molecule" not in (et[0], et[2]) and et != ONGOING_EDGE]
+    # and the static ontology edges (checked in 3b)
+    static = {et for et in r_types if bool((ref[et].edge_time == torch.iinfo(torch.int64).min).all())}
+    same = [et for et in sorted(r_types)
+            if "molecule" not in (et[0], et[2]) and et != ONGOING_EDGE and et not in static]
     diff = [et for et in same
             if not all(torch.equal(bench[et][a], ref[et][a]) for a in ("edge_index", "edge_attr", "edge_time"))]
     check("edges.non_molecule_identical", not diff, f"{len(same)} types compared" if not diff else diff)
+
+    # 3b. static ontology edges: same edges, attributes fixed to (score 1, novelty 0)
+    for et in sorted(static & b_types):
+        same_struct = all(torch.equal(bench[et][a], ref[et][a]) for a in ("edge_index", "edge_time"))
+        a = bench[et].edge_attr
+        fixed = bool((a[:, 0] == 1).all() and (a[:, 1] == 0).all())
+        check(f"edges.static.{et[1]}.{et[0]}", same_struct and fixed,
+              f"same edges/times={same_struct}, attr (1,0)={fixed}")
 
     # 4. ongoing trial edge: same pairs and first years, scores only go up
     if ONGOING_EDGE in b_types and ONGOING_EDGE in r_types:
