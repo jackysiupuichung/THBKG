@@ -20,6 +20,7 @@ import pandas as pd
 import torch
 
 from src.advancement_core import ADV_ETYPE, predict_test
+from src.data.temporal_loader import strict_seed_time
 
 
 def _trial_etypes(data) -> list[tuple[str, str, str]]:
@@ -205,7 +206,10 @@ def run_prospective_eval(
 
     cat_edge_index = torch.cat([cp for _, _, cp in eligible], dim=1)
     n_total = cat_edge_index.shape[1]
-    cat_edge_times = torch.full((n_total,), cutoff_year + 1, dtype=torch.long)
+    # Decision year = cutoff + 1: the model sees evidence dated <= cutoff only
+    # (strict masking); seeding at cutoff + 1 let each positive's own first
+    # trial edge, dated cutoff + 1, into its subgraph.
+    cat_edge_times = strict_seed_time(torch.full((n_total,), cutoff_year + 1, dtype=torch.long))
     cat_dummy_labels = torch.zeros(n_total, dtype=torch.float)
 
     cat_scores, _ = predict_test(

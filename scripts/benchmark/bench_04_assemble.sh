@@ -57,4 +57,7 @@ mkdir -p "$RELEASE_DIR/features"
 cp -p "${FEATURE_OUTPUT_DIR}/molecule_esm2_full.safetensors" "${FEATURE_OUTPUT_DIR}/molecule_esm2_full_ids.parquet" \
       "${FEATURE_OUTPUT_DIR}/disease_embeddings.yaml" "$RELEASE_DIR/features/"
 
+# safetensors writes 0600 files; make the release readable to the group and others
+chmod -R a+rX "$RELEASE_DIR"
+
 echo "[$(date)] ✅ bench_04_assemble done -> ${RELEASE_DIR}"

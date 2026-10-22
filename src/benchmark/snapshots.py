@@ -24,6 +24,7 @@ fitted on training years only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -46,6 +47,29 @@ def _node_tensors(release_dir: str) -> dict:
             out[nt] = {"num_nodes": nm["num_nodes"],
                        **{a: f.get_tensor(spec["key"]) for a, spec in nm["tensors"].items()}}
     return out
+
+
+@lru_cache(maxsize=4)
+def _checked_index(release_dir: str, snap_dir: str) -> dict:
+    """index.json of a snapshot set, checked once per process against the release.
+
+    The snapshot keys are positional (edge.{i}.*), so the metadata's edge-type
+    order must match the one they were built with, and the continuous graph must
+    be the one they were built from.
+    """
+    rd, sd = Path(release_dir), Path(snap_dir)
+    index = json.loads((sd / "index.json").read_text())
+    meta = json.loads((rd / "metadata.json").read_text())
+    order = ["|".join((e["src"], e["rel"], e["dst"])) for e in meta["edge_types"]]
+    if "edge_types" in index and index["edge_types"] != order:
+        raise ValueError(f"{sd}: snapshot edge-type order differs from {rd / 'metadata.json'}")
+    h = hashlib.sha256()
+    with open(rd / "graph.safetensors", "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 24), b""):
+            h.update(chunk)
+    if index.get("source_graph_sha256") not in (None, h.hexdigest()):
+        raise ValueError(f"{sd} was built from a different graph.safetensors than {rd}")
+    return index
 
 
 def _scale(v: np.ndarray, vmax: float | None, normalise: str, et: tuple) -> np.ndarray:
@@ -83,13 +107,16 @@ def load_snapshot(release_dir, year: int, *, normalise: str = "max", recency: bo
     if not path.exists():
         raise FileNotFoundError(f"no snapshot for {year} in {snap_dir}")
     meta = json.loads((release_dir / "metadata.json").read_text())
+    index = _checked_index(str(release_dir), str(snap_dir))
+    if int(year) not in index["years"]:
+        raise ValueError(f"no snapshot for {year} in {snap_dir} (years {index['years'][0]}-{index['years'][-1]})")
 
     data = HeteroData()
     for nt, nd in _node_tensors(str(release_dir)).items():
         data[nt].num_nodes = nd["num_nodes"]
         for a, v in nd.items():
             if a != "num_nodes":
-                data[nt][a] = v
+                data[nt][a] = v.clone()  # the cache is shared across years
 
     with safe_open(str(path), framework="np") as f:
         for i, e in enumerate(meta["edge_types"]):

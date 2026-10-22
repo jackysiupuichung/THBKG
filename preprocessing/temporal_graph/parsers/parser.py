@@ -145,6 +145,9 @@ class BaseParser:
         all_data = {}
         # tracks raw row counts before serialise filtering, keyed by datasource name
         raw_counts = {}
+        # out_name -> columns to deduplicate on (spec key ``dedupe_on``), applied
+        # in serialise after the year is known, keeping the earliest row
+        dedupe = {}
 
         for name, spec in self.schema.items():
             print(f"📦 Processing schema entry: {name}")
@@ -183,6 +186,8 @@ class BaseParser:
                                     temp_spec = sub_spec.copy()
                                     temp_spec["relation_name"] = relation_val
                                     out_name = self.output_name(name, temp_spec, group_df)
+                                    if sub_spec.get("dedupe_on"):
+                                        dedupe[out_name] = list(sub_spec["dedupe_on"])
 
                                     if out_name in all_data:
                                         all_data[out_name] = pd.concat([all_data[out_name], group_df], ignore_index=True)
@@ -192,6 +197,8 @@ class BaseParser:
                             else:
                                 # Normal flow for non-ChEMBL edges
                                 out_name = self.output_name(name, sub_spec, df_sub)
+                                if isinstance(sub_spec, dict) and sub_spec.get("dedupe_on"):
+                                    dedupe[out_name] = list(sub_spec["dedupe_on"])
 
                                 if out_name in all_data:
                                     all_data[out_name] = pd.concat([all_data[out_name], df_sub], ignore_index=True)
@@ -200,17 +207,20 @@ class BaseParser:
                                 raw_counts[out_name] = raw_counts.get(out_name, 0) + len(df_sub)
 
                         except Exception as e:
-                            print(f"⚠️ Error applying spec for {sub_spec}: {e}")
-                            traceback.print_exc()
+                            # fatal: a swallowed error silently removes a relation
+                            raise RuntimeError(f"error applying spec {sub_spec} to {pq}") from e
+                except RuntimeError:
+                    raise
                 except Exception as e:
-                    print(f"⚠️ Error reading {pq}: {e}")
-                    break
+                    raise RuntimeError(f"error reading {pq}") from e
 
         # 🔹 Serialise once per unique output name, collect retained counts
         retained_counts = {}
         for out_name, df in all_data.items():
             out_path = os.path.join(self.output_dir, f"{out_name}.parquet")
+            self._dedupe_on = dedupe.get(out_name)
             retained_counts[out_name] = self.serialise(df, out_path)
+        self._dedupe_on = None
 
         # 🔹 Retention summary
         print("\n📊 Retention summary:")
@@ -576,6 +586,18 @@ class EdgeParser(BaseParser):
         # Drop rows missing required fields
         # -----------------------------------
         df = df.dropna(subset=required_cols)
+
+        # Spec-level dedupe (``dedupe_on``), now that every row has its year:
+        # keep the earliest row per key
+        dedupe_on = getattr(self, "_dedupe_on", None)
+        if dedupe_on:
+            missing = [c for c in dedupe_on if c not in df.columns]
+            if missing:
+                raise ValueError(f"dedupe_on columns {missing} not in {out_path} (add them to the spec props)")
+            n0 = len(df)
+            df = df.sort_values("year", kind="stable").drop_duplicates(dedupe_on, keep="first")
+            print(f"🔁 {os.path.basename(out_path)}: deduplicated on {dedupe_on}, {n0:,} → {len(df):,} rows "
+                  f"(earliest year kept)")
         
         # # -----------------------------------
         # # For static edges → completely remove year column

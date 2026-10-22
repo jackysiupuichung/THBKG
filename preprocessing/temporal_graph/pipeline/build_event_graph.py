@@ -57,6 +57,13 @@ def load_edges(edge_dir: str, cutoff_year: int = None) -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True)
 
 
+# edge_time of undated (static) edges. Explicit, rather than the NaN-to-int64
+# cast of earlier builds (INT64_MIN, platform dependent); readers treat any
+# negative edge_time as static, so older graphs still read correctly. It passes
+# every temporal mask (seed times are years).
+STATIC_EDGE_TIME = -1
+
+
 def load_static_edges(static_dir: str) -> pd.DataFrame:
     """
     Load static edges from directory.
@@ -97,15 +104,15 @@ def load_static_edges(static_dir: str) -> pd.DataFrame:
             df['edge_novelty'] = 0.0
                 
             # Ensure no temporal columns interfere (force them to be null or handled)
-            # Static edges have NO edge_time
-            if 'edge_time' in df.columns:
-                df = df.drop(columns=['edge_time'])
+            # Static edges have no date: STATIC_EDGE_TIME
+            df['edge_time'] = STATIC_EDGE_TIME
                 
             dfs.append(df)
             print(f"   Loaded {len(df):,} edges from {Path(parquet_file).name}")
             
         except Exception as e:
-            print(f"❌ Error loading {parquet_file}: {e}")
+            # fatal: skipping a file would silently remove a relation
+            raise RuntimeError(f"error loading {parquet_file}") from e
             
     if not dfs:
         return pd.DataFrame()
@@ -250,12 +257,19 @@ def build_hetero_graph(
     # Group by edge type based on mode
     if edge_type_mode == 'relation_datasource':
         # Group by relation AND datasource
-        edge_groups = edges.groupby(['source_type', 'relation', 'target_type', 'datasourceId'])
+        # datatype-level events carry no datasourceId: grouping would drop them
+        if edges['datasourceId'].isna().any():
+            raise ValueError("edge_type_mode='relation_datasource' needs a datasourceId on every edge "
+                             "(datatype-level events have none); use relation_only")
+        edge_groups = edges.groupby(['source_type', 'relation', 'target_type', 'datasourceId'], dropna=False)
         group_keys = ['source_type', 'relation', 'target_type', 'datasourceId']
     else:
         # Group by relation ONLY (aggregate across datasources)
-        edge_groups = edges.groupby(['source_type', 'relation', 'target_type'])
+        edge_groups = edges.groupby(['source_type', 'relation', 'target_type'], dropna=False)
         group_keys = ['source_type', 'relation', 'target_type']
+    n_grouped = sum(len(g) for _, g in edge_groups)
+    if n_grouped != len(edges):
+        raise ValueError(f"edge grouping kept {n_grouped:,} of {len(edges):,} edges")
     
     edge_type_mapping = {}
     edge_type_idx = 0

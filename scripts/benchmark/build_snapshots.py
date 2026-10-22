@@ -46,7 +46,6 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "preprocessing" / "temporal_graph" / "pipeline"))
 from build_event_list import NOVELTY_SCALE, NOVELTY_SHIFT, NOVELTY_WINDOW  # noqa: E402
 
-STATIC_T = np.iinfo(np.int64).min
 NEVER = np.iinfo(np.int64).max
 DECAY = (1.0 / (1.0 + np.exp(NOVELTY_SCALE * (np.arange(NOVELTY_WINDOW + 1) - NOVELTY_SHIFT)))).astype(np.float64)
 
@@ -55,8 +54,9 @@ class Relation:
     """One edge type's rows, sorted by (pair, year), with per-row increments."""
 
     def __init__(self, ei: np.ndarray, t: np.ndarray, s: np.ndarray):
-        self.static = bool((t == STATIC_T).all())
-        if not self.static and (t == STATIC_T).any():
+        # static (undated) edges: edge_time < 0 (-1; INT64_MIN in graphs built before the fix)
+        self.static = bool((t < 0).all())
+        if not self.static and (t < 0).any():
             raise ValueError("edge type mixes static and dated rows")
         if self.static:
             self.src, self.dst, self.s = ei[0], ei[1], s.astype(np.float32)
@@ -191,6 +191,7 @@ def main() -> None:
             "edge_time": "year of that row; -1 for static edges",
         },
         "keys": "edge.{i}.{edge_index,score,recency,edge_time}, i = metadata.json edge_types order",
+        "edge_types": ["|".join((e["src"], e["rel"], e["dst"])) for e in meta["edge_types"]],
         "source_graph_sha256": hashlib.sha256((rd / "graph.safetensors").read_bytes()).hexdigest(),
         "edges_per_year": {},
     }

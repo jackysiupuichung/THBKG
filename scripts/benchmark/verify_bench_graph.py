@@ -1,12 +1,15 @@
 #!/usr/bin/env python
 """Check the benchmark graph against the released v26.09 graph.
 
-The benchmark build changes three things: all drug types become molecule nodes,
-with multimodal features; the start-dated clinical_trial_ongoing edge carries
-the trial's phase weight instead of Open Targets' score (which is halved for
-trials that later stopped for safety or efficacy); and static ontology edges
-carry (score 1, novelty 0) instead of the release's (0, 1) artefact. Everything
-else must be bit-identical to the release. Fails (exit 1) on any hard check.
+Relative to the release, the benchmark build: makes all drug types molecule
+nodes with per-modality features; rescores the start-dated clinical_trial_ongoing
+edge with the trial's phase weight; gives static ontology edges (score 1,
+novelty 0) and edge_time -1; computes each year's top-50 evidence from that
+year's rows only; recovers PubMed-dated GO / IntAct rows lost in 26.09; stores
+IntAct pairs once in (min, max) order without self-loops; counts each
+(drug, target, trial) once in modulated_by; and re-encodes disease, GO and
+Reactome features. The checks below pin down what must NOT change. Fails
+(exit 1) on any hard check.
 
 Hard checks
   1. target/disease/go/reactome: same node ids in the same order; target
@@ -20,12 +23,15 @@ Hard checks
      recovered PubMed-dated GO / IntAct rows only add evidence; anything else
      is a bug. (Up to 0.1% violations allowed for the two PubMed-dated
      relations, where PubMed itself may have re-dated a record.)
+     interacts_with is compared on (min, max) pairs without self-loops, the
+     release's two directions taking their higher score.
   3b. static ontology types: identical edge_index/edge_time; edge_attr is
      exactly (1, 0).
   4. clinical_trial_ongoing: same (target, disease) pairs with the same first
      edge_time (so first-trial labels are unchanged); the final score per pair
      never drops; novelty unchanged (always 0).
-  5. modulated_by on the release's molecules: evidence only grows, as in 3.
+  5. modulated_by on the release's molecules: no pair goes missing at any check
+     year (scores may fall: the release counted each trial up to twice).
   6. release molecules keep their exact Morgan fingerprint (block 0) unless the
      release had mean-imputed them.
 Reported
@@ -51,14 +57,23 @@ CHECK_YEARS = (1996, 2000, 2005, 2010, 2016, 2020, 2025, 2026)
 PUBMED_DATED = {"has_function_in", "interacts_with"}
 
 
-def _scores_before(src, dst, t, w, year) -> pd.Series:
-    """Score of each pair's latest row dated < year, indexed by (src, dst)."""
+def _scores_before(src, dst, t, w, year, symmetric=False) -> pd.Series:
+    """Score of each pair's latest row dated < year, indexed by (src, dst).
+
+    symmetric: drop self-loops and index by (min, max), taking the higher score
+    when both directions are present.
+    """
     m = t < year
     df = pd.DataFrame({"s": src[m], "d": dst[m], "t": t[m], "w": w[m]}).sort_values(["s", "d", "t"])
-    return df.groupby(["s", "d"], sort=False).tail(1).set_index(["s", "d"])["w"]
+    last = df.groupby(["s", "d"], sort=False).tail(1)
+    if symmetric:
+        last = last[last.s != last.d]
+        lo, hi = np.minimum(last.s, last.d), np.maximum(last.s, last.d)
+        last = pd.DataFrame({"s": lo, "d": hi, "w": last.w.to_numpy()}).groupby(["s", "d"]).w.max().reset_index()
+    return last.set_index(["s", "d"])["w"]
 
 
-def evidence_only_grows(b_store, r_store, r_src_to_b=None) -> dict:
+def evidence_only_grows(b_store, r_store, r_src_to_b=None, symmetric=False) -> dict:
     """Per check year: release pairs missing from the bench graph, and with a lower score."""
     def cols(store, src_map=None):
         ei = store.edge_index.numpy().astype(np.int64)
@@ -67,8 +82,8 @@ def evidence_only_grows(b_store, r_store, r_src_to_b=None) -> dict:
     rb, rr = cols(b_store), cols(r_store, r_src_to_b)
     out = {"pairs": 0, "missing": 0, "lower": 0, "earlier_in_bench": 0}
     for y in CHECK_YEARS:
-        r = _scores_before(*rr, y)
-        b = _scores_before(*rb, y)
+        r = _scores_before(*rr, y, symmetric=symmetric)
+        b = _scores_before(*rb, y, symmetric=symmetric)
         j = b.reindex(r.index)
         out["pairs"] += len(r)
         out["missing"] += int(j.isna().sum())
@@ -90,7 +105,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bench-graph", required=True)
     ap.add_argument("--ref-graph", required=True)
-    ap.add_argument("--fp-dim", type=int, default=1024)
     ap.add_argument("--out", required=True, help="JSON report path")
     args = ap.parse_args()
 
@@ -126,12 +140,12 @@ def main() -> int:
 
     # 3. edge types without a molecule endpoint, except the rescored ongoing edge
     # and the static ontology edges (checked in 3b)
-    static = {et for et in r_types if bool((ref[et].edge_time == torch.iinfo(torch.int64).min).all())}
+    static = {et for et in r_types if bool((ref[et].edge_time < 0).all())}  # INT64_MIN in the release
     dated = [et for et in sorted(r_types & b_types)
              if "molecule" not in (et[0], et[2]) and et not in static]
     report["evidence_only_grows"] = {}
     for et in dated:
-        g = evidence_only_grows(bench[et], ref[et])
+        g = evidence_only_grows(bench[et], ref[et], symmetric=(et[0] == et[2]))
         report["evidence_only_grows"]["|".join(et)] = g
         bad = g["missing"] + g["lower"]
         limit = 0.001 * g["pairs"] if et[1] in PUBMED_DATED else 0
@@ -141,7 +155,8 @@ def main() -> int:
 
     # 3b. static ontology edges: same edges, attributes fixed to (score 1, novelty 0)
     for et in sorted(static & b_types):
-        same_struct = all(torch.equal(bench[et][a], ref[et][a]) for a in ("edge_index", "edge_time"))
+        same_struct = (torch.equal(bench[et].edge_index, ref[et].edge_index)
+                       and bool((bench[et].edge_time == -1).all()))  # explicit static edge_time
         a = bench[et].edge_attr
         fixed = bool((a[:, 0] == 1).all() and (a[:, 1] == 0).all())
         check(f"edges.static.{et[1]}.{et[0]}", same_struct and fixed,
@@ -185,9 +200,9 @@ def main() -> int:
     r_to_b = np.array([b_index[m] for m in r_mol], dtype=np.int64)
     g = evidence_only_grows(bench[MOD_EDGE], ref[MOD_EDGE], r_src_to_b=r_to_b)
     report["evidence_only_grows"]["|".join(MOD_EDGE)] = g
-    check("edges.grows.modulated_by", g["missing"] + g["lower"] == 0,
-          f"missing {g['missing']:,}, lower {g['lower']:,} of {g['pairs']:,} release pair-years; "
-          f"bench molecules {len(b_mol):,} vs release {len(r_mol):,}")
+    check("edges.modulated_by.no_pair_missing", g["missing"] == 0,
+          f"missing {g['missing']:,} of {g['pairs']:,} release pair-years; lower score {g['lower']:,} "
+          f"(expected: trials no longer counted twice); bench molecules {len(b_mol):,} vs release {len(r_mol):,}")
 
     # 6. Morgan block for release molecules
     b_idx = {m: i for i, m in enumerate(b_mol)}

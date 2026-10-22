@@ -45,9 +45,13 @@ import pandas as pd
 
 from .slates import Slate, discovery_slates
 
-# Decision years for T1, inclusive. ``None`` = the latest year with trial
-# evidence in the labels (2025 for the 26.09 graph).
-SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, None)}
+# Last decision year: the graph's last evidence year (config/event_graph_config.yaml
+# time_range.last_year). Pinned rather than read off the labels, so a graph
+# extended into a partial year cannot silently add that year to the test split;
+# last_label_year() checks the labels agree.
+LAST_DECISION_YEAR = 2025
+# Decision years for T1, inclusive.
+SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, LAST_DECISION_YEAR)}
 # Trial evidence dated 1995 or earlier is collapsed onto 1995 by the event list,
 # so 1995 cannot be a decision year: a "first trial in 1995" means "by 1995".
 FIRST_GRAPH_YEAR = 1995
@@ -164,8 +168,12 @@ def build_discovery_labels(release_dir: str | Path) -> pd.DataFrame:
 
 
 def last_label_year(labels: pd.DataFrame) -> int:
-    """Latest first-trial year in a T1 label table: the end of the test split."""
-    return int(labels["first_trial_year"].max())
+    """End of the test split, checked against the latest first-trial year in the labels."""
+    latest = int(labels["first_trial_year"].max())
+    if latest != LAST_DECISION_YEAR:
+        raise ValueError(f"labels run to {latest} but LAST_DECISION_YEAR is {LAST_DECISION_YEAR}: "
+                         "update it together with the graph's time range")
+    return LAST_DECISION_YEAR
 
 
 def decision_years(split: str, last_year: int | None = None) -> list[int]:

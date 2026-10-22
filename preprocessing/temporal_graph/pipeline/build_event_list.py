@@ -294,7 +294,8 @@ def load_all_edges(directory, sample_ratio=None):
                     df = df.sample(frac=sample_ratio, random_state=42)
                 dfs.append(df)
         except Exception as e:
-            print(f"⚠️ Error reading {pq}: {e}")
+            # fatal: skipping a file would silently remove a relation
+            raise RuntimeError(f"error reading {pq}") from e
     
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 

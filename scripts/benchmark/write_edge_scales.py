@@ -90,7 +90,7 @@ def main() -> None:
         for e in meta["edge_types"]:
             key = f"{e['src']}|{e['rel']}|{e['dst']}"
             t = f.get_tensor(e["tensors"]["edge_time"]["key"])
-            static = bool((t == np.iinfo(np.int64).min).all())
+            static = bool((t < 0).all())  # undated edges: -1 (INT64_MIN before the fix)
             if static:
                 kind, smax, sources = "static", 1.0, []
             elif e["rel"].startswith("clinical_trial"):

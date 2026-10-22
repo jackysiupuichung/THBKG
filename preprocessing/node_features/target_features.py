@@ -139,7 +139,11 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
             for _, row in prio_df.iterrows():
                 target_id = str(row['targetId'])
                 # Extract ONLY the specified target_prioritisation_features
-                feat_cols = [c for c in target_prioritisation_features if c in prio_df.columns]
+                missing_cols = [c for c in target_prioritisation_features if c not in prio_df.columns]
+                if missing_cols:
+                    # a dropped column would shift every later column of the feature vector
+                    raise ValueError(f"target_prioritisation is missing columns {missing_cols}")
+                feat_cols = list(target_prioritisation_features)
                 feat_vals = row[feat_cols].values.astype(float)  # Convert to float first
                 prio_feats[target_id] = torch.tensor(feat_vals, dtype=torch.float)
             print(f"   Loaded {len(prio_feats)} targets from prioritisation")
@@ -172,7 +176,9 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
         
     print(f"   Combining: Prio ({dim_prio}) + RNA ({dim_rna}) -> Total ({dim_prio + dim_rna})")
     
-    # Filter to requested target IDs
+    # Filter to requested target IDs (default: every target with any feature)
+    if target_ids is None:
+        target_ids = sorted(set(prio_feats) | set(rna_feats))
     target_set = set(target_ids)
     all_keys = target_set
     print(f"\n📊 Filtering to {len(target_set):,} requested target IDs")

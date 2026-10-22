@@ -100,7 +100,9 @@ def load_event_graph(
     Args:
         filepath: Path to temporal graph file (.pt)
         to_undirected: Whether to add reverse edges for message passing
-        normalize_features: Whether to apply StandardScaler to node features
+        normalize_features: row-normalise every node type's x to sum 1
+            (PyG NormalizeFeatures). Off by default and wrong for signed
+            features (embeddings); not a StandardScaler.
         undirected_mode: "typed" (default, ``to_undirected_typed``) or "legacy",
             PyG's ``ToUndirected()`` as used before 2026-10-22, which sums the
             attributes and edge_time of duplicate interacts_with edges. Only
@@ -679,6 +681,10 @@ def format_literature_links(
 
 ADV_ETYPE = ("target", "advancement", "disease")
 REV_ADV_ETYPE = ("disease", "rev_advancement", "target")
+# Legacy split (published 26.03 / v26.09 runs): train <= 2015, test >= 2016.
+# The benchmark split lives in src/benchmark/tasks.ADVANCEMENT_SPLITS; select
+# it with split="benchmark" (config data.split) so training and the benchmark
+# share one definition.
 TRAIN_YEAR_MAX = 2015   # transition years from train_dataset.csv
 TEST_YEAR_MIN = 2016    # transition years from test_dataset.csv
 
@@ -922,7 +928,7 @@ def _advancement_edge_time(obj):
 
 
 def split_advancement_edges(labels, cutoff_year=2010, val_min_year=None, val_max_year=None,
-                            random_val_frac=None, random_seed=42):
+                            random_val_frac=None, random_seed=42, split="legacy"):
     """Chronological split of advancement supervision edges. Default
     (cutoff_year=2010) matches the canonical setup: train = edge_time ≤ 2010,
     val = 2011..2015, test = ≥ 2016.
@@ -941,10 +947,33 @@ def split_advancement_edges(labels, cutoff_year=2010, val_min_year=None, val_max
     val. NOTE: random val measures interpolation, not forecasting, so it is an
     optimistic selection proxy and may correlate less with the temporal test.
 
+    ``split="benchmark"`` uses the benchmark's T3 split instead
+    (src/benchmark/tasks.ADVANCEMENT_SPLITS: train <= 2015, val 2016-2019,
+    test >= 2020 by Phase II entry year); the val-window and random-val options
+    then do not apply.
+
     Returns: train_mask, val_mask, test_mask, cutoff_year
     """
     import torch
     edge_time = _advancement_edge_time(labels)
+
+    if split == "benchmark":
+        if random_val_frac is not None or val_min_year is not None or val_max_year is not None:
+            raise ValueError("split='benchmark' fixes train/val/test; drop random_val_frac / val_min_year / val_max_year")
+        from src.benchmark.tasks import ADVANCEMENT_SPLITS
+
+        def window(name):
+            _, lo, hi = ADVANCEMENT_SPLITS[name]
+            m = torch.ones_like(edge_time, dtype=torch.bool)
+            if lo is not None:
+                m &= edge_time >= lo
+            if hi is not None:
+                m &= edge_time <= hi
+            return m
+        train_mask, val_mask, test_mask = window("train"), window("val"), window("test")
+        return train_mask, val_mask, test_mask, int(edge_time[train_mask].max())
+    if split != "legacy":
+        raise ValueError(f"unknown split {split!r}")
 
     train_year_mask = edge_time <= TRAIN_YEAR_MAX
     test_year_mask = edge_time >= TEST_YEAR_MIN
@@ -968,6 +997,10 @@ def split_advancement_edges(labels, cutoff_year=2010, val_min_year=None, val_max
     if val_min_year is not None or val_max_year is not None:
         lo = int(val_min_year) if val_min_year is not None else (cutoff_year + 1)
         hi = int(val_max_year) if val_max_year is not None else TRAIN_YEAR_MAX
+        # the window must sit between train and test, or selection sees test
+        # labels / train labels
+        if not (cutoff_year < lo <= hi <= TRAIN_YEAR_MAX):
+            raise ValueError(f"val window {lo}-{hi} must lie in ({cutoff_year}, {TRAIN_YEAR_MAX}]")
         val_mask = (edge_time >= lo) & (edge_time <= hi)
     else:
         val_mask = train_year_mask & (edge_time > cutoff_year)
@@ -1009,7 +1042,12 @@ def build_context_graph(data, collapse: bool = False):
             context[edge_type][key] = val
 
     if collapse:
-        context = to_time_agnostic(context)
+        # to_time_agnostic keeps each pair's LATEST time over the whole timeline,
+        # so collapsing before temporal sampling hides every pair updated at or
+        # after the decision year. Collapse after sampling instead (the models'
+        # latest_edge_only does this per batch).
+        raise ValueError("build_context_graph(collapse=True) collapses before temporal masking; "
+                         "use the model's latest_edge_only instead")
 
     return context
 

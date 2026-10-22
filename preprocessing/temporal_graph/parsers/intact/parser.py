@@ -68,6 +68,14 @@ class IntActParser(EdgeParser):
                 results.append(interaction)
 
         df = pd.DataFrame(results)
+        # Interaction is symmetric: drop self-loops and store each pair as
+        # (smaller id, larger id), so evidence listed in either direction
+        # aggregates into one pair instead of two separately scored ones.
+        n0 = len(df)
+        df = df[df["sourceId"] != df["targetId"]].copy()
+        swap = df["sourceId"] > df["targetId"]
+        df.loc[swap, ["sourceId", "targetId"]] = df.loc[swap, ["targetId", "sourceId"]].to_numpy()
+        print(f"   IntAct: dropped {n0 - len(df):,} self-loops; reordered {int(swap.sum()):,} rows to (min, max)")
         df = self.validate(df, None, "intact")
         
         # Determine output name dynamically

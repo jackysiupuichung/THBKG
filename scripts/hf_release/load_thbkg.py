@@ -16,8 +16,9 @@ package required.
 
     from load_thbkg import load_graph, load_snapshot, snapshot_years, load_labels, node_index
 
-    data  = load_graph("path/to/release")                         # continuous, PyG HeteroData
-    snap  = load_snapshot("path/to/release", 2016)                # discontinuous, decision year 2016
+    data  = load_graph("path/to/release")                         # continuous, PyG HeteroData, raw scores
+    snap  = load_snapshot("path/to/release", 2016)                # discontinuous, decision year 2016, raw
+    snap  = load_snapshot("path/to/release", 2016, normalise="max")   # scores scaled to [0, 1] per relation
     train = load_labels("path/to/release", "train")               # pandas DataFrame
     eval_ = load_labels("path/to/release", "eval")
 
@@ -33,6 +34,7 @@ Downloading the release from the Hub first:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -46,6 +48,52 @@ from safetensors.torch import load_file
 # parent->child).
 SYMMETRIC_RELATIONS = frozenset({"interacts_with"})
 LOG_K = 100.0
+NORMALISATIONS = ("none", "max", "log")
+
+
+def _scale(v, vmax, normalise, et):
+    """Score / recency scaling: "none" (raw), "max" (/ score_max, a constant of
+    the scoring formula, so every relation lies in [0, 1]) or "log"."""
+    if normalise not in NORMALISATIONS:
+        raise ValueError(f"normalise must be one of {NORMALISATIONS}")
+    if normalise == "none":
+        return v
+    if not vmax:
+        raise ValueError(f"no score_max for {et} in metadata.json")
+    x = v / vmax
+    return x if normalise == "max" else np.log1p(LOG_K * x) / np.log1p(LOG_K)
+
+
+def _node_tensors(release_dir: Path, meta: dict) -> dict:
+    """Node tensors only, without reading the edge tensors of graph.safetensors."""
+    from safetensors import safe_open
+    keys = {spec["key"] for nm in meta["node_types"].values() for spec in nm["tensors"].values()}
+    with safe_open(str(release_dir / "graph.safetensors"), framework="pt") as f:
+        return {k: f.get_tensor(k) for k in keys}
+
+
+def _check_snapshot_index(release_dir: Path, meta: dict, year: int) -> None:
+    """The snapshots must match this release's edge-type order and graph file."""
+    index = json.loads((release_dir / "snapshots" / "index.json").read_text())
+    if int(year) not in index["years"]:
+        raise FileNotFoundError(f"no snapshot for {year}; available: {index['years'][0]}-{index['years'][-1]}")
+    order = ["|".join((e["src"], e["rel"], e["dst"])) for e in meta["edge_types"]]
+    if "edge_types" in index and index["edge_types"] != order:
+        raise ValueError("snapshot edge-type order differs from metadata.json")
+    want = index.get("source_graph_sha256")
+    if want is not None:
+        key = str(release_dir.resolve())
+        if key not in _VERIFIED_GRAPHS:
+            h = hashlib.sha256()
+            with open(release_dir / "graph.safetensors", "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 24), b""):
+                    h.update(chunk)
+            _VERIFIED_GRAPHS[key] = h.hexdigest()
+        if _VERIFIED_GRAPHS[key] != want:
+            raise ValueError("snapshots were built from a different graph.safetensors")
+
+
+_VERIFIED_GRAPHS: dict = {}
 
 
 def _to_undirected_typed(data, dedupe_on_time: bool):
@@ -106,7 +154,8 @@ def _undirected_keep_ids(data, dedupe_on_time: bool):
     return data
 
 
-def load_graph(release_dir, to_undirected: bool = True, with_node_ids: bool = True):
+def load_graph(release_dir, to_undirected: bool = True, with_node_ids: bool = False,
+               normalise: str = "none"):
     """Rebuild the continuous HeteroData graph from a release directory.
 
     Args:
@@ -116,7 +165,11 @@ def load_graph(release_dir, to_undirected: bool = True, with_node_ids: bool = Tr
             undirected within its type, every other relation gets a rev_ type.
             Set False for the raw directed graph as stored.
         with_node_ids: attach the original string IDs as ``data[ntype].node_id``
-            (read from mappings/<ntype>.parquet if present).
+            (read from mappings/<ntype>.parquet). Off by default: a Python list
+            on a node store makes PyG's neighbour samplers fail; use
+            ``node_index`` to map IDs instead.
+        normalise: "none" (raw scores, the default), "max" or "log", applied to
+            the score column of edge_attr as in ``load_snapshot``.
     """
     from torch_geometric.data import HeteroData
 
@@ -130,6 +183,10 @@ def load_graph(release_dir, to_undirected: bool = True, with_node_ids: bool = Tr
         et = (emeta["src"], emeta["rel"], emeta["dst"])
         for attr, spec in emeta["tensors"].items():
             data[et][attr] = tensors[spec["key"]]
+        if normalise != "none" and "edge_attr" in emeta["tensors"]:
+            a = data[et].edge_attr.clone()
+            a[:, 0] = torch.from_numpy(_scale(a[:, 0].numpy(), emeta.get("score_max"), normalise, et))
+            data[et].edge_attr = a
 
     return _undirected_keep_ids(data, dedupe_on_time=True) if to_undirected else data
 
@@ -139,7 +196,7 @@ def snapshot_years(release_dir) -> list[int]:
     return json.loads((Path(release_dir) / "snapshots" / "index.json").read_text())["years"]
 
 
-def load_snapshot(release_dir, year: int, normalise: str = "max", recency: bool = True,
+def load_snapshot(release_dir, year: int, normalise: str = "none", recency: bool = True,
                   to_undirected: bool = True, with_node_ids: bool = False):
     """Load the discontinuous graph at decision year ``year``.
 
@@ -148,40 +205,29 @@ def load_snapshot(release_dir, year: int, normalise: str = "max", recency: bool 
     state (-1 for static ontology edges).
 
     Args:
-        normalise: "none" (raw), "max" (divide by the edge type's ``score_max``
-            from metadata.json, a constant of the scoring formula, so every edge
-            type lies in [0, 1]) or "log" (log1p(100 x) / log1p(100) of the
-            max-normalised value).
+        normalise: "none" (raw, the default, as stored), "max" (divide by the
+            edge type's ``score_max`` from metadata.json, a constant of the
+            scoring formula, so every edge type lies in [0, 1]) or "log"
+            (log1p(100 x) / log1p(100) of the max-normalised value).
         to_undirected: as in ``load_graph``, with one row per pair.
     """
     from safetensors.numpy import load_file as load_np
     from torch_geometric.data import HeteroData
 
-    if normalise not in ("none", "max", "log"):
-        raise ValueError("normalise must be 'none', 'max' or 'log'")
+    if normalise not in NORMALISATIONS:
+        raise ValueError(f"normalise must be one of {NORMALISATIONS}")
     release_dir = Path(release_dir)
     meta = json.loads((release_dir / "metadata.json").read_text())
-    path = release_dir / "snapshots" / f"{int(year)}.safetensors"
-    if not path.exists():
-        raise FileNotFoundError(f"no snapshot for {year}; available: {snapshot_years(release_dir)}")
-    snap = load_np(str(path))
-    node_tensors = load_file(str(release_dir / "graph.safetensors"))
-
-    def scale(v, vmax, et):
-        if normalise == "none":
-            return v
-        if not vmax:
-            raise ValueError(f"no score_max for {et} in metadata.json")
-        x = v / vmax
-        return x if normalise == "max" else np.log1p(LOG_K * x) / np.log1p(LOG_K)
+    _check_snapshot_index(release_dir, meta, year)
+    snap = load_np(str(release_dir / "snapshots" / f"{int(year)}.safetensors"))
 
     data = HeteroData()
-    _node_store(data, release_dir, meta, node_tensors, with_node_ids)
+    _node_store(data, release_dir, meta, _node_tensors(release_dir, meta), with_node_ids)
     for i, e in enumerate(meta["edge_types"]):
         et = (e["src"], e["rel"], e["dst"])
-        cols = [scale(snap[f"edge.{i}.score"], e.get("score_max"), et)]
+        cols = [_scale(snap[f"edge.{i}.score"], e.get("score_max"), normalise, et)]
         if recency:
-            cols.append(scale(snap[f"edge.{i}.recency"], e.get("score_max"), et))
+            cols.append(_scale(snap[f"edge.{i}.recency"], e.get("score_max"), normalise, et))
         data[et].edge_index = torch.from_numpy(snap[f"edge.{i}.edge_index"].astype(np.int64))
         data[et].edge_attr = torch.from_numpy(np.stack(cols, axis=1).astype(np.float32))
         data[et].edge_time = torch.from_numpy(snap[f"edge.{i}.edge_time"].astype(np.int64))

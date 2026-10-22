@@ -418,6 +418,7 @@ def main(cfg):
         val_max_year=_data_cfg.get("val_max_year", None),
         random_val_frac=_data_cfg.get("random_val_frac", None),
         random_seed=int(_data_cfg.get("random_seed", cfg.get("seed", 42))),
+        split=_data_cfg.get("split", "legacy"),
     )
     print(f"  Cutoff year: {cutoff_year}")
     if _data_cfg.get("random_val_frac") is not None:
@@ -852,6 +853,7 @@ def main(cfg):
     pred_df = pd.DataFrame({
         "target_id":  src_ids,
         "disease_id": dst_ids,
+        "transition_year": edge_time[test_mask].cpu().numpy().astype(int),
         "score":      test_scores,
         "label":      test_labels.astype(int),
     })

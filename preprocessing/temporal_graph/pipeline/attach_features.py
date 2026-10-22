@@ -97,51 +97,28 @@ def attach_features_to_graph(data, feature_dir: Path):
         # Load embeddings
         embeddings = load_feature_embeddings(feature_dir, node_type)
         
+        # Fatal rather than x=None / zero rows: a silent gap here trains models
+        # on a node type without features
         if embeddings is None:
-            print(f"      ❌ No features available for {node_type}")
-            data[node_type].x = None
-            continue
-        
-        # Get node IDs from graph (assumes node IDs are stored in data[node_type].node_id)
+            raise FileNotFoundError(f"no feature file for node type {node_type!r} in {feature_dir}")
         if not hasattr(data[node_type], 'node_id'):
-            print(f"      ⚠️  No node_id attribute found for {node_type}")
-            print(f"      Available attributes: {data[node_type].keys()}")
-            data[node_type].x = None
-            continue
+            raise ValueError(f"{node_type!r} has no node_id to align features with")
         
         node_ids = data[node_type].node_id
         num_nodes = len(node_ids)
         
         # Build feature matrix
-        feature_list = []
-        missing_count = 0
-        
-        for node_id in node_ids:
-            if node_id in embeddings:
-                feature_list.append(embeddings[node_id])
-            else:
-                # Use zero vector for missing nodes
-                if len(feature_list) > 0:
-                    feature_list.append(torch.zeros_like(feature_list[0]))
-                else:
-                    # If first node is missing, we need to know the dimension
-                    # Get dimension from first available embedding
-                    sample_emb = next(iter(embeddings.values()))
-                    feature_list.append(torch.zeros_like(sample_emb))
-                missing_count += 1
-        
-        if len(feature_list) == 0:
-            print(f"      ❌ No features could be loaded")
-            data[node_type].x = None
-            continue
+        missing = [nid for nid in node_ids if nid not in embeddings]
+        if missing:
+            raise ValueError(f"{len(missing):,} of {num_nodes:,} {node_type} nodes have no features "
+                             f"(e.g. {missing[:3]}); rebuild the feature file")
+        feature_list = [embeddings[nid] for nid in node_ids]
         
         # Stack into tensor
         feature_matrix = torch.stack(feature_list)
         data[node_type].x = feature_matrix
         
         print(f"      ✅ Attached features: {feature_matrix.shape}")
-        if missing_count > 0:
-            print(f"      ⚠️  Missing embeddings: {missing_count}/{num_nodes} ({missing_count/num_nodes*100:.1f}%)")
     
     return data
 

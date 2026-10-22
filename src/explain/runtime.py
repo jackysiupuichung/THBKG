@@ -30,6 +30,7 @@ from src.data.temporal_loader import (
     load_event_graph,
     resolve_advancement_labels,
     split_advancement_edges,
+    strict_seed_time,
 )
 from src.models.utils import build_model
 from src.models.node_input import node_inputs
@@ -126,14 +127,14 @@ class ExplainRuntime:
         if latest_edge_only:
             model.encoder.latest_edge_only = False
 
-        # STRICT_BEFORE=1 shifts the label time down by one year so the loader's
-        # `edge_time <= edge_label_time` becomes `edge_time < transition_year`
-        # (the strict future-link-prediction window). SIMULATION ONLY on a model
-        # trained under <= — it previews how the explanation subgraph/paths change
-        # when same-year edges are masked out, NOT a retrained model.
+        # Explanations use the same strict `< transition_year` masking as
+        # training (strict_seed_time). LOOSE_MASKING=1 reproduces the `<=`
+        # window, only for explaining models trained before commit 0be5cbd.
         import os as _os
-        _shift = 1 if _os.environ.get("STRICT_BEFORE") else 0
-        test_times = edge_time[test_mask] - _shift
+        if _os.environ.get("LOOSE_MASKING"):
+            test_times = edge_time[test_mask]
+        else:
+            test_times = strict_seed_time(edge_time[test_mask])
 
         return cls(
             cfg=cfg, model=model, context=context, device=device,

@@ -44,6 +44,7 @@ for f in "$REF_BASE"/evidences/edges/*.parquet; do
   esac
   cp -p "$f" "$RAW_EDGES_DIR/"; n=$((n + 1))
 done
+rm -f "$STATIC_EDGES_DIR"/*.parquet
 cp -p "$REF_BASE"/evidences/static_edges/*.parquet "$STATIC_EDGES_DIR/"
 echo "Copied ${n} edge files and $(ls "$STATIC_EDGES_DIR" | wc -l) static edge files from ${REF_BASE}"
 

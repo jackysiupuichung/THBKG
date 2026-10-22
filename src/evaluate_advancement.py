@@ -297,10 +297,21 @@ def _inject_predictions(evaluation_dataset: xr.Dataset, inject: list[dict]) -> x
         path, model_name = entry["path"], entry["model_name"]
         logger.info(f"Injecting {model_name} from {path}")
         preds  = pd.read_parquet(path)
+        # One prediction per evaluation pair, no gaps: a missing pair used to be
+        # scored 0.0 silently, and a duplicated pair made .get return a Series.
+        keys = list(zip(target_ids, disease_ids))
+        if len(set(keys)) != len(keys):
+            raise ValueError("evaluation dataset has duplicate (target, disease) pairs")
+        dup = preds.duplicated(["target_id", "disease_id"])
+        if dup.any():
+            raise ValueError(f"{path}: {int(dup.sum())} duplicate (target, disease) predictions")
         lookup = preds.set_index(["target_id", "disease_id"])["score"]
-        scores = np.array([lookup.get((t, d), 0.0) for t, d in zip(target_ids, disease_ids)])
-        n_missing = (scores == 0.0).sum()
-        logger.info(f"  scores: [{scores.min():.3f}, {scores.max():.3f}], missing: {n_missing}/{len(scores)}")
+        missing = [k for k in keys if k not in lookup.index]
+        if missing:
+            raise ValueError(f"{path}: no prediction for {len(missing):,} of {len(keys):,} evaluation pairs "
+                             f"(e.g. {missing[:3]}); were the model's test years the evaluation years?")
+        scores = lookup.reindex(pd.MultiIndex.from_tuples(keys)).to_numpy(dtype=float)
+        logger.info(f"  scores: [{scores.min():.3f}, {scores.max():.3f}] for {len(scores):,} pairs")
 
         pred_values = np.stack([1 - scores, scores], axis=1)[:, np.newaxis, :]
         da = xr.DataArray(

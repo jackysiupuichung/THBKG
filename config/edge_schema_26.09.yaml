@@ -51,7 +51,11 @@ clinical_precedence:
     sourceId: drugId
     targetId: targetId
     relation_name: modulated_by
-    props: [source_type=constant:molecule, target_type=constant:target, datasourceId, score=constant:1.0, year, id]
+    # The trial-resolved file holds each trial twice (start-dated ongoing row,
+    # end-dated outcome row) and once per mapped disease: count each
+    # (drug, target, trial) once, at its earliest date.
+    dedupe_on: [sourceId, targetId, clinicalReportId]
+    props: [source_type=constant:molecule, target_type=constant:target, datasourceId, score=constant:1.0, year, id, clinicalReportId]
 
   - input_dir: sourceId=clinical_precedence
     sourceId: targetId

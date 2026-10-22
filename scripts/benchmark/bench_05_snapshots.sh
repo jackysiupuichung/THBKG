@@ -29,4 +29,7 @@ for et in d.edge_types:
 print("✅ 2016 snapshot loads; max-normalised edge_attr within [0, 1]; no edge dated >= 2016")
 PY
 
+# safetensors writes 0600 files; make the release readable to the group and others
+chmod -R a+rX "$RELEASE_DIR"
+
 echo "[$(date)] ✅ bench_05_snapshots done -> ${RELEASE_DIR}/snapshots"
