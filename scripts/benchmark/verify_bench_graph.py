@@ -8,8 +8,8 @@ novelty 0) and edge_time -1; computes each year's top-50 evidence from that
 year's rows only; recovers PubMed-dated GO / IntAct rows lost in 26.09; stores
 IntAct pairs once in (min, max) order without self-loops; counts each
 (drug, target, trial) once in modulated_by; drops rows scoring 0; dates
-literature by publicationDate; and re-encodes disease, GO and Reactome
-features. The checks below pin down what must NOT change. Fails
+literature by publicationDate; emits no outcome edge for trials of UNKNOWN
+status; and re-encodes disease, GO and Reactome features. The checks below pin down what must NOT change. Fails
 (exit 1) on any hard check.
 
 Hard checks
@@ -28,6 +28,8 @@ Hard checks
      dropped). literature is compared one year later in the bench graph
      (bench before Y+1 vs release before Y), with the same 0.1% allowance:
      its publicationDate falls a year after publicationYear in 179k rows.
+     clinical_trial_Unknown/Operational is reported, not checked: trials of
+     UNKNOWN status no longer emit it.
      interacts_with is compared on (min, max) pairs without self-loops, the
      release's two directions taking their higher score.
   3b. static ontology types: identical edge_index/edge_time; edge_attr is
@@ -62,6 +64,8 @@ CHECK_YEARS = (1996, 2000, 2005, 2010, 2016, 2020, 2025, 2026)
 PUBMED_DATED = {"has_function_in", "interacts_with"}
 # Re-dated relations: years the bench graph may lag the release by
 REDATED_LAG = {"literature": 1}
+# Relations that lose release edges by design: reported only
+REPORT_ONLY = {"clinical_trial_Unknown/Operational"}
 
 
 def _scores_before(src, dst, t, w, year, symmetric=False) -> pd.Series:
@@ -163,6 +167,10 @@ def main() -> int:
         report["evidence_only_grows"]["|".join(et)] = g
         bad = g["missing"] + g["lower"]
         limit = 0.001 * g["pairs"] if et[1] in PUBMED_DATED or lag else 0
+        if et[1] in REPORT_ONLY:
+            print(f"INFO  edges.grows.{et[1]}  missing {g['missing']:,}, lower {g['lower']:,} "
+                  f"of {g['pairs']:,} release pair-years (not checked)")
+            continue
         check(f"edges.grows.{et[1]}", bad <= limit,
               f"missing {g['missing']:,}, lower {g['lower']:,} of {g['pairs']:,} release pair-years"
               + (f" (bench read {lag} year later)" if lag else "")

@@ -13,14 +13,17 @@ Dual-edge mode: every NCT-shaped row becomes 1 OR 2 output rows.
     terminal_date, clipped to >= studyStartDate)
 
 Outcome bucket rules:
+  - overall_status UNKNOWN                       -> no outcome row: the registry
+      never reported how the trial ended, and its terminal date would be the
+      last registry update, often before the planned completion
   - stop_reason has 'Safety'/'sideeffect'        -> adverse_effects
   - stop_reason has 'Negative'                   -> unmet_efficacy
   - stop_reason present, no safety/negative      -> Unknown/Operational
   - no stop_reason and overall_status
       COMPLETED / APPROVED_FOR_MARKETING         -> positive
   - no stop_reason and overall_status
-      TERMINATED / WITHDRAWN / NO_LONGER_AVAILABLE / SUSPENDED / UNKNOWN
-      / other                                    -> Unknown/Operational
+      TERMINATED / WITHDRAWN / NO_LONGER_AVAILABLE / SUSPENDED / other
+                                                 -> Unknown/Operational
   - no stop_reason and overall_status
       RECRUITING / ACTIVE_NOT_RECRUITING /
       NOT_YET_RECRUITING / ENROLLING_BY_INVITATION
@@ -105,16 +108,19 @@ def _failure_subbucket(reasons) -> str:
 
 
 def outcome_bucket(row) -> str | None:
-    """Return the outcome bucket if the trial has resolved, else None (still ongoing)."""
-    if _has_stop_reason(row["trialStopReasonCategories"]):
-        return _failure_subbucket(row["trialStopReasonCategories"])
+    """Return the outcome bucket if the trial has resolved, else None (still
+    ongoing, or UNKNOWN status: no reported outcome)."""
     s = (row.get("overall_status") or "")
     s = s.upper() if isinstance(s, str) else ""
+    if s == "UNKNOWN":
+        return None
+    if _has_stop_reason(row["trialStopReasonCategories"]):
+        return _failure_subbucket(row["trialStopReasonCategories"])
     if s in POSITIVE_STATUSES:
         return BUCKET_POS
     if s in ONGOING_STATUSES:
         return None
-    # Anything else (TERMINATED/WITHDRAWN/NO_LONGER_AVAILABLE/SUSPENDED/UNKNOWN/other):
+    # Anything else (TERMINATED/WITHDRAWN/NO_LONGER_AVAILABLE/SUSPENDED/other):
     # treat as a resolved-but-uninformative outcome.
     return BUCKET_OPS
 
