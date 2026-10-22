@@ -208,6 +208,7 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
     integrated_dict = {}
     missing_prio = 0
     missing_rna = 0
+    imputed_rows = []  # per target: which values are the column mean
     
     for key in all_keys:
         # Get Prio (or Mean)
@@ -215,11 +216,13 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
             v_prio = prio_feats[key]
             # Replace NaN with column-wise mean (already computed in mean_prio)
             nan_mask = torch.isnan(v_prio)
+            prio_imputed = nan_mask.tolist()
             if nan_mask.any():
                 v_prio = v_prio.clone()  # Don't modify original
                 v_prio[nan_mask] = mean_prio[nan_mask]
         else:
             v_prio = mean_prio
+            prio_imputed = [True] * dim_prio
             missing_prio += 1
             
         # Get RNA (or Mean)
@@ -227,15 +230,18 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
             v_rna = rna_feats[key]
             # Replace NaN with column-wise mean (already computed in mean_rna)
             nan_mask = torch.isnan(v_rna)
+            rna_imputed = bool(nan_mask.any())
             if nan_mask.any():
                 v_rna = v_rna.clone()  # Don't modify original
                 v_rna[nan_mask] = mean_rna[nan_mask]
         else:
             v_rna = mean_rna
+            rna_imputed = True
             missing_rna += 1
         
         combined = torch.cat([v_prio, v_rna])
         integrated_dict[key] = combined
+        imputed_rows.append([key, *prio_imputed, rna_imputed])
     
     # Compute per-column statistics for Prio features ONLY
     if prio_feats:
@@ -275,6 +281,18 @@ def build_integrated_features(base_dir: Path, output_path: str, target_ids: list
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(integrated_dict, output_path)
     print(f"   ✅ Saved {len(integrated_dict)} integrated vectors to {output_path}")
+
+    # Imputation indicators: True where the vector holds the column mean, per
+    # prioritisation column, and for the RNA block as a whole (a gene is in the
+    # expression table or not; zeros inside the table are measured, not imputed).
+    imputed = pd.DataFrame(imputed_rows, columns=["target_id", *target_prioritisation_features, "rna_expression"])
+    imputed = imputed.sort_values("target_id").reset_index(drop=True)
+    imputed_path = Path(output_path).with_name("target_features_imputed.parquet")
+    imputed.to_parquet(imputed_path, index=False)
+    flags = imputed.drop(columns="target_id")
+    print(f"   Imputed values per column: {flags.sum().to_dict()}; "
+          f"{int(flags.all(axis=1).sum())} targets fully imputed")
+    print(f"   ✅ Saved imputation indicators to {imputed_path}")
 
 if __name__ == "__main__":
     import argparse

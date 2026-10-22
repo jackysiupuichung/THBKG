@@ -29,8 +29,16 @@ PUBMED_TIMEOUT = 120
 
 
 REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "relation", "datasourceId", "score", "year"]
-# First four are legacy columns (pre-26.03); last two are the unified date columns in 26.03+
-YEAR_PRIORITY = ["resolvedTrialDate", "curationYear", "studyYear", "publicationYear", "studyStartDate", "publicationDate", "evidenceDate"]
+# Columns tried in order; the first non-null one dates the row. curationYear,
+# studyYear and publicationYear are legacy (pre-26.03) columns. Europe PMC still
+# carries publicationYear, the journal issue year; its publicationDate (first
+# publication, online or print) goes first: it marks when the paper was out, and
+# where the two are 2+ years apart PubMed mostly sides with the date.
+YEAR_PRIORITY = ["resolvedTrialDate", "curationYear", "studyYear", "studyStartDate", "publicationDate",
+                 "publicationYear", "evidenceDate"]
+# Year of the Open Targets release (26.09). Later years are planned trial dates,
+# placeholders (2099) or typos (2124), and are treated as missing.
+MAX_EVIDENCE_YEAR = 2026
 
 
 def _load_pubmed_cache():
@@ -581,6 +589,13 @@ class EdgeParser(BaseParser):
         if missing_cols:
             print(f"⚠️ Skipping save for {out_path}, missing columns: {missing_cols}")
             return 0
+
+        if not self.static:
+            future = pd.to_numeric(df["year"], errors="coerce") > MAX_EVIDENCE_YEAR
+            if future.any():
+                df.loc[future, "year"] = np.nan
+                print(f"   {os.path.basename(out_path)}: {int(future.sum()):,} rows dated after "
+                      f"{MAX_EVIDENCE_YEAR} treated as undated")
 
         # -----------------------------------
         # Drop rows missing required fields

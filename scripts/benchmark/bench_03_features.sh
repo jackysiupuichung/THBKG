@@ -10,8 +10,11 @@
 
 # Node features for the benchmark graph.
 #
-# The target node set is unchanged from 26.09, so its processed features are
-# copied (guarded: aborts if any node set differs from the release). Rebuilt here:
+# The target node set is unchanged from 26.09 (guarded: aborts if any node set
+# differs from the release). Rebuilt here:
+#   - targets: from the 26.09 raw inputs, to record which values are
+#     mean-imputed (target_features_imputed.parquet); the vectors must match
+#     the release's;
 #   - GO / Reactome: autoencoders retrained with a learnable input per node (the
 #     release fed torch.eye(N, 128), leaving 90% of GO terms with zero input);
 #   - molecules: per-modality tensors (Morgan, ESM-2 reduced to 64 by PCA,
@@ -38,9 +41,23 @@ for level in ("datatype", "datasource"):
 PY
 
 mkdir -p "$FEATURE_OUTPUT_DIR"
-for f in integrated_target_features.pt; do
-  cp -p "${REF_BASE}/features/processed/${f}" "$FEATURE_OUTPUT_DIR/"
-done
+python -m preprocessing.node_features.build_all_features \
+  --mappings-file "${EVENT_OUTPUT_DIR}/temporal_graph_datatype_mappings.pt" \
+  --evidence-dir "$INPUT_EVIDENCE_DIR" \
+  --feature-data-dir "${REF_BASE}/features/raw" \
+  --output-dir "$FEATURE_OUTPUT_DIR" \
+  --temp-dir "$TEMP_NODE_DIR" \
+  --node-types target
+
+python -u - <<'PY'
+import os, torch
+ref = torch.load(f"{os.environ['REF_BASE']}/features/processed/integrated_target_features.pt")
+new = torch.load(f"{os.environ['FEATURE_OUTPUT_DIR']}/integrated_target_features.pt")
+assert ref.keys() == new.keys(), "target feature IDs differ from 26.09"
+bad = [k for k in ref if not torch.allclose(ref[k], new[k], atol=1e-5)]
+assert not bad, f"{len(bad)} target vectors differ from 26.09, e.g. {bad[:3]}"
+print(f"target features: {len(new):,} vectors match 26.09")
+PY
 
 python -m preprocessing.node_features.build_all_features \
   --mappings-file "${EVENT_OUTPUT_DIR}/temporal_graph_datatype_mappings.pt" \
