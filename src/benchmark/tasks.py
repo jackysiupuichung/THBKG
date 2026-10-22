@@ -45,10 +45,12 @@ import pandas as pd
 
 from .slates import Slate, discovery_slates
 
-# Last decision year: the graph's last evidence year (config/event_graph_config.yaml
-# time_range.last_year). Pinned rather than read off the labels, so a graph
-# extended into a partial year cannot silently add that year to the test split;
-# last_label_year() checks the labels agree.
+# The graph's last evidence year (config/event_graph_config.yaml
+# time_range.last_year): evidence runs to the 26.09 release, September 2026.
+LAST_GRAPH_YEAR = 2026
+# Last decision year: the last full year. Pinned rather than read off the labels,
+# so the partial year never enters the test split; last_label_year() checks the
+# labels run to LAST_GRAPH_YEAR.
 LAST_DECISION_YEAR = 2025
 # Decision years for T1, inclusive.
 SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, LAST_DECISION_YEAR)}
@@ -169,10 +171,11 @@ def build_discovery_labels(release_dir: str | Path) -> pd.DataFrame:
 
 
 def last_label_year(labels: pd.DataFrame) -> int:
-    """End of the test split, checked against the latest first-trial year in the labels."""
+    """End of the test split (LAST_DECISION_YEAR), once the labels are checked to
+    run to the graph's last year."""
     latest = int(labels["first_trial_year"].max())
-    if latest != LAST_DECISION_YEAR:
-        raise ValueError(f"labels run to {latest} but LAST_DECISION_YEAR is {LAST_DECISION_YEAR}: "
+    if latest != LAST_GRAPH_YEAR:
+        raise ValueError(f"labels run to {latest} but LAST_GRAPH_YEAR is {LAST_GRAPH_YEAR}: "
                          "update it together with the graph's time range")
     return LAST_DECISION_YEAR
 

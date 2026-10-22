@@ -36,9 +36,11 @@ REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "rel
 # where the two are 2+ years apart PubMed mostly sides with the date.
 YEAR_PRIORITY = ["resolvedTrialDate", "curationYear", "studyYear", "studyStartDate", "publicationDate",
                  "publicationYear", "evidenceDate"]
-# Year of the Open Targets release (26.09). Later years are planned trial dates,
-# placeholders (2099) or typos (2124), and are treated as missing.
-MAX_EVIDENCE_YEAR = 2026
+# Evidence runs to the Open Targets 26.09 release (September 2026). Later dates
+# are planned trial dates, placeholders (2099) or typos (2124), and are treated
+# as missing; year-only columns are checked against its year.
+EVIDENCE_CUTOFF = pd.Timestamp("2026-09-30")
+MAX_EVIDENCE_YEAR = EVIDENCE_CUTOFF.year
 
 
 def _load_pubmed_cache():
@@ -395,9 +397,9 @@ class EdgeParser(BaseParser):
                 if col in row and pd.notnull(row[col]):
                     if col in DATE_COLS:
                         try:
-                            yr = pd.to_datetime(row[col], errors="coerce").year
-                            if pd.notnull(yr):
-                                edge["year"] = yr
+                            d = pd.to_datetime(row[col], errors="coerce")
+                            if pd.notnull(d):
+                                edge["year"] = d.year if d <= EVIDENCE_CUTOFF else np.nan
                                 return edge
                         except Exception:
                             continue

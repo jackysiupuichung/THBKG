@@ -15,5 +15,7 @@ time_range:
   # decision's recency; most pre-1985 rows are IMPC, dated by the oldest
   # paper in their literature list.
   first_year: 1985
-  last_year: 2025
+  # Evidence runs to the 26.09 release (September 2026), so 2026 is a partial
+  # year: not a decision year (src/benchmark/tasks.py LAST_DECISION_YEAR).
+  last_year: 2026
 
