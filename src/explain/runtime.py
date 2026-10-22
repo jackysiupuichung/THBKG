@@ -32,6 +32,7 @@ from src.data.temporal_loader import (
     split_advancement_edges,
 )
 from src.models.utils import build_model
+from src.models.node_input import node_inputs
 
 EdgeType = Tuple[str, str, str]
 
@@ -302,7 +303,7 @@ class ExplainRuntime:
         if edge_feat_dict is None:
             edge_feat_dict = build_edge_feat_dict(batch, self.edge_feat_cols)
         return self.model(
-            batch.x_dict, edge_index_dict,
+            node_inputs(batch), edge_index_dict,
             batch[ADV_ETYPE].edge_label_index,
             src_type="target", dst_type="disease",
             edge_time_dict=edge_time_dict,

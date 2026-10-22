@@ -2,19 +2,25 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import GATv2Conv, HeteroConv, Linear
 from .decoder import Decoder
+from .node_input import make_input_projection
 
 class GATv2(nn.Module):
     """
     Static GATv2 model wrapped in HeteroConv.
     """
-    def __init__(self, hidden_dim, out_dim, num_heads, num_layers=2, metadata=None, dropout=0.1, edge_feat_dim=0):
+    def __init__(self, hidden_dim, out_dim, num_heads, num_layers=2, metadata=None, dropout=0.1, edge_feat_dim=0,
+                 in_channels=None):
         super().__init__()
         self.node_types, self.edge_types = metadata
         self.edge_feat_dim = edge_feat_dim
 
         # Per-node-type input projection (like HGT)
+        # (in_channels only matters for modality node types; others stay lazy)
+        specs = in_channels or {}
         self.lin_dict = nn.ModuleDict({
-            nt: Linear(-1, hidden_dim) for nt in self.node_types
+            nt: (make_input_projection(specs[nt], hidden_dim) if isinstance(specs.get(nt), dict)
+                 else Linear(-1, hidden_dim))
+            for nt in self.node_types
         })
 
         self.convs = nn.ModuleList()

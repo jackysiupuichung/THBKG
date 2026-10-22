@@ -1,29 +1,31 @@
 #!/usr/bin/env python3
-"""Multimodal molecule features covering every drug type.
+"""Molecule input features for every drug type, one tensor per modality.
 
-Morgan fingerprints only exist for molecules with a SMILES string, which left
-antibodies, proteins and oligonucleotides without a structural input. Each
-molecule now gets one fixed-width vector made of four blocks:
+Morgan fingerprints only exist for molecules with a structure RDKit can parse,
+which leaves antibodies, proteins and oligonucleotides out. Each molecule node
+therefore gets per-modality tensors, row-aligned with the node ids and never
+concatenated:
 
-    [ morgan (fp_dim) | esm (esm_dim) | drugType one-hot | has_morgan, has_esm ]
+* ``x_morgan`` [N, 1024]  Morgan fingerprint (same generator and settings as
+                          molecule_structure.py). Structure source, in order: Open
+                          Targets canonicalSmiles, ChEMBL canonical_smiles, ChEMBL
+                          HELM via RDKit for drugs with no protein sequence.
+* ``x_esm``    [N, 64]    ESM-2 residue embeddings, mean-pooled over every protein
+                          chain the drug has in ChEMBL (a two-chain antibody
+                          averages heavy + light by residue count), then reduced
+                          by PCA over the biologics. Nucleic-acid chains are not
+                          embedded. The full 1,280-d vectors go to a side file.
+* ``has_morgan``, ``has_esm`` [N] bool: which nodes have each modality (rows of
+                          nodes without it are zero and never reach the model).
+* ``drug_type`` [N] long: Open Targets drugType index (DRUG_TYPES).
 
-* ``morgan``  Morgan fingerprint (same generator and settings as
-              molecule_structure.py). SMILES source, in order: Open Targets
-              canonicalSmiles, ChEMBL canonical_smiles, then ChEMBL HELM via
-              RDKit for drugs with no protein sequence.
-* ``esm``     ESM-2 residue embeddings mean-pooled over every protein chain the
-              drug has in ChEMBL (so a two-chain antibody averages heavy + light
-              by residue count). Nucleic-acid chains are not embedded.
-* one-hot     Open Targets drugType, plus an ``Other`` slot.
-* flags       which structural blocks are present.
+Models project each modality with its own layer into one shared hidden space and
+add a learned drug-type embedding (src/models/node_input.py); drugs with no
+structure (cells, plasma products, ~14% of trialled drugs) get the drug-type
+embedding alone.
 
-Blocks that do not apply are zero, so a per-type linear input layer over this
-vector acts as one projector per modality plus a learned drug-type embedding.
-Drugs with neither input (cells, plasma products, ~13% of trialled drugs) are
-distinguished only by drugType and by their edges.
-
-Writes ``molecule_features.pt`` ({chembl_id: float tensor}) and
-``molecule_features.yaml`` (block layout + coverage). GPU recommended for ESM;
+Writes ``molecule_modalities.pt``, ``molecule_esm2_full.safetensors`` (+ ``_ids.parquet``)
+and ``molecule_features.yaml`` (shapes, PCA and coverage). GPU recommended for ESM;
 run via scripts/collecting_node_features_03.sh or scripts/benchmark/.
 """
 
@@ -177,16 +179,15 @@ def build(args: argparse.Namespace) -> None:
         for mid, g in prot.groupby("molecule_chembl_id"):
             w = g["_n"].to_numpy(dtype=np.float64)
             esm_by_drug[mid] = (np.stack(g["_vec"].to_list()) * w[:, None]).sum(0) / w.sum()
-    esm_dim = len(next(iter(esm_by_drug.values()))) if esm_by_drug else args.esm_dim
-
-    # --- assemble
-    n_types = len(DRUG_TYPES)
-    dim = args.fp_dim + esm_dim + n_types + 2
-    o_esm, o_type, o_flag = args.fp_dim, args.fp_dim + esm_dim, args.fp_dim + esm_dim + n_types
-    features, morgan_src = {}, {}
+    # --- per-molecule inputs, kept per modality (never concatenated)
+    n = len(kg_ids)
+    x_morgan = np.zeros((n, args.fp_dim), dtype=np.float32)
+    has_morgan = np.zeros(n, dtype=bool)
+    has_esm = np.array([mid in esm_by_drug for mid in kg_ids], dtype=bool)
+    drug_type = np.zeros(n, dtype=np.int64)
+    morgan_src: dict[str, int] = {}
     type_counts: dict[str, dict[str, int]] = {}
-    for mid in kg_ids:
-        vec = np.zeros(dim, dtype=np.float32)
+    for r, mid in enumerate(kg_ids):
         ot_row = ot.loc[mid] if mid in ot.index else None
         cm = per_mol.loc[mid] if mid in per_mol.index else None
         # HELM only stands in for drugs without a protein sequence (peptides with
@@ -200,46 +201,75 @@ def build(args: argparse.Namespace) -> None:
             args.fp_dim, args.radius,
         )
         if fp is not None:
-            vec[: args.fp_dim] = fp
-            vec[o_flag] = 1.0
+            x_morgan[r], has_morgan[r] = fp, True
             morgan_src[src] = morgan_src.get(src, 0) + 1
-        if mid in esm_by_drug:
-            vec[o_esm:o_type] = esm_by_drug[mid]
-            vec[o_flag + 1] = 1.0
         dtype = ot_row["drugType"] if ot_row is not None and _valid_str(ot_row["drugType"]) else "Unknown"
-        slot = DRUG_TYPES.index(dtype) if dtype in DRUG_TYPES else DRUG_TYPES.index("Other")
-        vec[o_type + slot] = 1.0
-        features[mid] = torch.from_numpy(vec)
-
-        c = type_counts.setdefault(DRUG_TYPES[slot], {"n": 0, "morgan": 0, "esm": 0, "neither": 0})
+        drug_type[r] = DRUG_TYPES.index(dtype) if dtype in DRUG_TYPES else DRUG_TYPES.index("Other")
+        c = type_counts.setdefault(DRUG_TYPES[drug_type[r]], {"n": 0, "morgan": 0, "esm": 0, "neither": 0})
         c["n"] += 1
-        c["morgan"] += int(fp is not None)
-        c["esm"] += int(mid in esm_by_drug)
-        c["neither"] += int(fp is None and mid not in esm_by_drug)
+        c["morgan"] += int(has_morgan[r])
+        c["esm"] += int(has_esm[r])
+        c["neither"] += int(not has_morgan[r] and not has_esm[r])
+
+    # ESM-2: 1,280 dense, highly correlated values per biologic (8 principal
+    # components carry 90% of their variance; raw antibody vectors have median
+    # cosine 0.997). Reduce to the top components of a PCA over the biologics
+    # (sequences only: no labels or dates), without per-component whitening, which
+    # amplifies the low-variance tail; one global scale makes the values O(1).
+    esm_full = (np.stack([esm_by_drug[m] for m, h in zip(kg_ids, has_esm) if h]).astype(np.float64)
+                if has_esm.any() else np.zeros((0, args.esm_dim)))
+    k = min(args.esm_pca_dim, max(len(esm_full) - 1, 1))
+    x_esm = np.zeros((n, k), dtype=np.float32)
+    pca_meta = {"components": 0}
+    if len(esm_full) > 1:
+        mu = esm_full.mean(0)
+        _, sv, vt = np.linalg.svd(esm_full - mu, full_matrices=False)
+        proj = (esm_full - mu) @ vt[:k].T
+        scale = float(proj.std())
+        x_esm[has_esm] = (proj / scale).astype(np.float32)
+        var = sv ** 2 / (sv ** 2).sum()
+        pca_meta = {"components": k, "fit_on": int(len(esm_full)), "variance_kept": round(float(var[:k].sum()), 4),
+                    "global_scale": scale, "whitened": False}
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    torch.save(features, out / "molecule_features.pt")
+    stale = out / "molecule_features.pt"  # concatenated format of earlier builds
+    if stale.exists():
+        stale.unlink()
+    torch.save({
+        "node_id": list(kg_ids),
+        "x_morgan": torch.from_numpy(x_morgan),
+        "x_esm": torch.from_numpy(x_esm),
+        "has_morgan": torch.from_numpy(has_morgan),
+        "has_esm": torch.from_numpy(has_esm),
+        "drug_type": torch.from_numpy(drug_type),
+    }, out / "molecule_modalities.pt")
+    # full-width ESM-2 embeddings (pickle-free), for the release side file and other reductions
+    from safetensors.numpy import save_file
+    save_file({"esm2": np.ascontiguousarray(esm_full.astype(np.float32))}, str(out / "molecule_esm2_full.safetensors"),
+              metadata={"model": args.esm_model, "pooling": "residue mean over all protein chains"})
+    pd.DataFrame({"node_id": [m for m, h in zip(kg_ids, has_esm) if h]}).to_parquet(
+        out / "molecule_esm2_full_ids.parquet", index=False)
 
     meta = {
-        "dim": dim,
-        "blocks": {
-            "morgan": [0, args.fp_dim],
-            "esm": [o_esm, o_type],
-            "drug_type_onehot": [o_type, o_flag],
-            "flags_has_morgan_has_esm": [o_flag, dim],
-        },
+        "format": "per-modality tensors, row-aligned with node_id (no concatenation)",
+        "tensors": {"x_morgan": [n, args.fp_dim], "x_esm": [n, k], "has_morgan": [n], "has_esm": [n],
+                    "drug_type": [n]},
         "drug_types": DRUG_TYPES,
-        "morgan": {"radius": args.radius, "fp_dim": args.fp_dim, "source_counts": morgan_src},
+        "morgan": {"radius": args.radius, "fp_dim": args.fp_dim, "n": int(has_morgan.sum()),
+                   "source_counts": morgan_src},
         "esm": {"model": args.esm_model, "pooling": "residue mean over all protein chains",
-                "n_drugs": len(esm_by_drug), "n_chains": int(len(prot))},
+                "n": int(has_esm.sum()), "n_chains": int(len(prot)), "pca": pca_meta,
+                "full_width_files": ["molecule_esm2_full.safetensors", "molecule_esm2_full_ids.parquet"]},
         "chembl_cache": str(args.chembl_cache),
-        "num_molecules": len(features),
+        "num_molecules": n,
         "coverage_by_drug_type": type_counts,
     }
     (out / "molecule_features.yaml").write_text(yaml.safe_dump(meta, sort_keys=False))
 
-    print(f"\n✅ {len(features):,} molecules x {dim} -> {out / 'molecule_features.pt'}")
+    print(f"\n✅ {n:,} molecules -> {out / 'molecule_modalities.pt'}: x_morgan [{n}, {args.fp_dim}] "
+          f"({int(has_morgan.sum()):,} present), x_esm [{n}, {k}] ({int(has_esm.sum()):,} present, "
+          f"PCA keeps {pca_meta.get('variance_kept', 0):.1%})")
     print(f"   {'drugType':26s} {'n':>5s} {'morgan':>7s} {'esm':>5s} {'neither':>8s}")
     for t, c in sorted(type_counts.items(), key=lambda kv: -kv[1]["n"]):
         print(f"   {t:26s} {c['n']:5d} {c['morgan']:7d} {c['esm']:5d} {c['neither']:8d}")
@@ -256,6 +286,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--radius", type=int, default=2)
     ap.add_argument("--esm-model", default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--esm-dim", type=int, default=1280, help="only used if no drug has a sequence")
+    ap.add_argument("--esm-pca-dim", type=int, default=64, help="principal components kept of the ESM-2 embeddings")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--batch-size", type=int, default=8)
     return ap.parse_args()

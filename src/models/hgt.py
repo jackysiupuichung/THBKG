@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .hgt_conv_rte import HGTConv
+from .node_input import ModalityEncoder
 from torch_geometric.nn import Linear
 from typing import Dict, List, Tuple, Optional
 from .decoder import Decoder, build_decoder
@@ -140,7 +141,11 @@ class HGT(nn.Module):
         # Input projection layer
         self.lin_dict = nn.ModuleDict()
         for node_type, in_dim in in_channels.items():
-            self.lin_dict[node_type] = Linear(in_dim, hidden_dim)
+            if isinstance(in_dim, dict):  # modality node type (node_input.py)
+                self.lin_dict[node_type] = ModalityEncoder(
+                    in_dim["modalities"], hidden_dim, in_dim.get("num_categories", 0))
+            else:
+                self.lin_dict[node_type] = Linear(in_dim, hidden_dim)
         
         # HGT convolution layers
         self.convs = nn.ModuleList()

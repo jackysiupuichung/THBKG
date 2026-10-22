@@ -35,9 +35,6 @@ def load_feature_embeddings(feature_dir: Path, node_type: str):
         return None
 
     feature_path = feature_dir / feature_files[node_type]
-    # Multimodal molecule features (molecule_multimodal.py) supersede Morgan-only ones
-    if node_type == 'molecule' and (feature_dir / 'molecule_features.pt').exists():
-        feature_path = feature_dir / 'molecule_features.pt'
     
     if not feature_path.exists():
         print(f"   ⚠️  Feature file not found: {feature_path}")
@@ -48,6 +45,31 @@ def load_feature_embeddings(feature_dir: Path, node_type: str):
     print(f"      Loaded {len(embeddings):,} embeddings")
     
     return embeddings
+
+
+def attach_modalities(store, path: Path) -> None:
+    """Attach per-modality tensors (molecule_multimodal.py) to a node store, by node_id.
+
+    Sets x_<modality>, has_<modality> and drug_type, row-aligned with the store's
+    node_id list; no ``x`` (models project each modality separately, see
+    src/models/node_input.py). Every graph node must be covered.
+    """
+    mod = torch.load(path, weights_only=False)
+    row = {nid: i for i, nid in enumerate(mod["node_id"])}
+    missing = [nid for nid in store.node_id if nid not in row]
+    if missing:
+        raise ValueError(f"{len(missing)} graph nodes missing from {path.name}, e.g. {missing[:3]}")
+    idx = torch.tensor([row[nid] for nid in store.node_id], dtype=torch.long)
+    # explicit: without ``x`` PyG would infer the count from edge indices, and
+    # samplers would then not slice the modality tensors as node attributes
+    store.num_nodes = len(store.node_id)
+    for key, val in mod.items():
+        if torch.is_tensor(val):
+            store[key] = val[idx]
+    if "x" in store:
+        del store.x
+    shapes = ", ".join(f"{k} {list(v.shape)}" for k, v in mod.items() if torch.is_tensor(v))
+    print(f"      ✅ Attached modalities: {shapes}")
 
 
 def attach_features_to_graph(data, feature_dir: Path):
@@ -65,7 +87,13 @@ def attach_features_to_graph(data, feature_dir: Path):
     
     for node_type in data.node_types:
         print(f"\n   Processing {node_type}...")
-        
+
+        # Per-modality molecule features (molecule_multimodal.py) supersede the
+        # Morgan-only matrix when present
+        if node_type == 'molecule' and (feature_dir / 'molecule_modalities.pt').exists():
+            attach_modalities(data[node_type], feature_dir / 'molecule_modalities.pt')
+            continue
+
         # Load embeddings
         embeddings = load_feature_embeddings(feature_dir, node_type)
         
@@ -166,8 +194,12 @@ def main():
     print("FEATURE SUMMARY")
     print(f"{'='*60}")
     for node_type in data.node_types:
-        if data[node_type].x is not None:
-            print(f"   {node_type:15s}: {str(data[node_type].x.shape):20s} ✅")
+        store = data[node_type]
+        if 'x' in store and store.x is not None:
+            print(f"   {node_type:15s}: {str(store.x.shape):20s} ✅")
+        elif any(k.startswith('x_') for k in store.keys()):
+            print(f"   {node_type:15s}: " + ", ".join(f"{k} {list(store[k].shape)}" for k in store.keys()
+                                                     if k.startswith('x_')) + " ✅")
         else:
             print(f"   {node_type:15s}: {'None':20s} ❌")
     print(f"{'='*60}\n")

@@ -9,6 +9,8 @@ from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
+
+from .node_input import make_input_projection
 from torch_geometric.nn import RGCNConv
 
 from .decoder import Decoder
@@ -43,7 +45,9 @@ class RGCN(nn.Module):
 
         # Per-type input projection to shared hidden_dim (so we can concatenate).
         self.lin_dict = nn.ModuleDict({
-            nt: nn.Linear(in_channels[nt], hidden_dim) for nt in self.node_types
+            nt: (make_input_projection(in_channels[nt], hidden_dim) if isinstance(in_channels[nt], dict)
+                 else nn.Linear(in_channels[nt], hidden_dim))
+            for nt in self.node_types
         })
 
         if num_bases is None:

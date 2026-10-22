@@ -9,7 +9,9 @@ carry (score 1, novelty 0) instead of the release's (0, 1) artefact. Everything
 else must be bit-identical to the release. Fails (exit 1) on any hard check.
 
 Hard checks
-  1. target/disease/go/reactome: same node ids in the same order, same features.
+  1. target/disease/go/reactome: same node ids in the same order; target/go/
+     reactome features identical; disease features re-encoded at full width
+     (768, finite), so only their shape and coverage are checked.
   2. edge types: exactly the release's types.
   3. every edge type without a molecule endpoint, except clinical_trial_ongoing
      and the static ontology types: identical edge_index/attr/time.
@@ -72,7 +74,14 @@ def main() -> int:
         same_ids = list(bench[nt].node_id) == list(ref[nt].node_id)
         check(f"nodes.{nt}.ids", same_ids, f"bench={bench[nt].num_nodes:,} ref={ref[nt].num_nodes:,}")
         if same_ids:
-            check(f"nodes.{nt}.x", torch.equal(bench[nt].x, ref[nt].x))
+            if nt == "disease":  # re-encoded: name + description, full width, masked pooling
+                bxd = bench[nt].x
+                ok = bxd.dim() == 2 and bxd.size(0) == ref[nt].num_nodes and bool(torch.isfinite(bxd).all())
+                n_distinct = int(torch.unique(bxd.round(decimals=4), dim=0).size(0))
+                check("nodes.disease.x_reencoded", ok and bxd.size(1) == 768,
+                      f"shape {list(bxd.shape)}, distinct rows {n_distinct:,} of {bxd.size(0):,}")
+            else:
+                check(f"nodes.{nt}.x", torch.equal(bench[nt].x, ref[nt].x))
 
     # 2. edge types
     b_types, r_types = set(bench.edge_types), set(ref.edge_types)
@@ -136,23 +145,30 @@ def main() -> int:
 
     # 6. Morgan block for release molecules
     b_idx = {m: i for i, m in enumerate(b_mol)}
-    bx, rx = bench["molecule"].x, ref["molecule"].x
+    bm, rx = bench["molecule"], ref["molecule"].x
+    check("features.molecule.per_modality", "x" not in bm and all(k in bm for k in (
+        "x_morgan", "x_esm", "has_morgan", "has_esm", "drug_type")),
+        sorted(k for k in bm.keys() if k != "node_id"))
     rows = torch.tensor([b_idx[m] for m in r_mol])
-    match = (bx[rows, : args.fp_dim] == rx).all(dim=1)
+    match = (bm.x_morgan[rows] == rx).all(dim=1)
     imputed = ~((rx == 0) | (rx == 1)).all(dim=1)  # the release mean-imputed unparsable SMILES
     unexplained = int((~match & ~imputed).sum())
     check("features.molecule.release_morgan_preserved", unexplained == 0,
           f"match={int(match.sum()):,} release_imputed={int(imputed.sum()):,} unexplained={unexplained}")
 
-    # reported: modality coverage (last two columns are has_morgan, has_esm)
-    flags = bx[:, -2:].bool()
+    # a modality's rows are zero exactly where it is absent
+    zero_ok = all(bool((bm[f"x_{m}"][~bm[f"has_{m}"]] == 0).all()) for m in ("morgan", "esm"))
+    check("features.molecule.absent_rows_zero", zero_ok)
+
+    # reported: modality coverage
+    hm, he = bm.has_morgan.bool(), bm.has_esm.bool()
     report["molecule_coverage"] = {
         "n": len(b_mol),
-        "morgan_only": int((flags[:, 0] & ~flags[:, 1]).sum()),
-        "esm_only": int((~flags[:, 0] & flags[:, 1]).sum()),
-        "both": int((flags[:, 0] & flags[:, 1]).sum()),
-        "neither": int((~flags[:, 0] & ~flags[:, 1]).sum()),
-        "feature_dim": int(bx.size(1)),
+        "morgan_only": int((hm & ~he).sum()),
+        "esm_only": int((~hm & he).sum()),
+        "both": int((hm & he).sum()),
+        "neither": int((~hm & ~he).sum()),
+        "x_morgan": list(bm.x_morgan.shape), "x_esm": list(bm.x_esm.shape),
     }
 
     print(json.dumps(report["molecule_coverage"], indent=2))

@@ -64,6 +64,7 @@ from src.data.temporal_loader import (
     to_time_agnostic,
 )
 from src.models.utils import build_model
+from src.models.node_input import node_inputs
 
 
 def focal_loss(logits, labels, pos_weight=None, gamma=2.0):
@@ -85,7 +86,7 @@ def run_epoch(model, loader, optimizer, device, train=True, edge_feat_cols=(0, 1
             batch = batch.to(device)
             edge_time_dict = _build_edge_time_dict(batch, ADV_ETYPE)
             out = model(
-                batch.x_dict,
+                node_inputs(batch),
                 batch.edge_index_dict,
                 batch[ADV_ETYPE].edge_label_index,
                 src_type="target",
@@ -241,7 +242,7 @@ def evaluate(model, loader, device, edge_feat_cols=(0, 1), pos_weight=None, foca
         batch = batch.to(device)
         edge_time_dict = _build_edge_time_dict(batch, ADV_ETYPE)
         out = model(
-            batch.x_dict,
+            node_inputs(batch),
             batch.edge_index_dict,
             batch[ADV_ETYPE].edge_label_index,
             src_type="target",
@@ -302,7 +303,7 @@ def predict_test(model, context, edge_index, edge_labels, edge_times, num_neighb
         batch = batch.to(device)
         edge_time_dict = _build_edge_time_dict(batch, ADV_ETYPE)
         out = model(
-            batch.x_dict, batch.edge_index_dict,
+            node_inputs(batch), batch.edge_index_dict,
             batch[ADV_ETYPE].edge_label_index,
             src_type="target", dst_type="disease",
             edge_time_dict=edge_time_dict,

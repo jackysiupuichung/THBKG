@@ -11,6 +11,7 @@ from .gat_v2 import GATv2
 from .gat_v3 import GATv3
 from .rgcn import RGCN
 from .compgcn import CompGCN
+from .node_input import input_spec
 
 
 
@@ -75,8 +76,9 @@ def build_model(
     # Extract input dimensions for each node type
     in_channels = {}
     for nt in node_types:
-        if hasattr(data[nt], 'x') and data[nt].x is not None:
-            in_channels[nt] = data[nt].x.size(1)
+        spec = input_spec(data[nt])  # int width of x, or a modality spec (node_input.py)
+        if spec is not None:
+            in_channels[nt] = spec
         else:
             # Fallback or specific handling for nodes without features
             # Usually strict error or defaulting is better. 
@@ -119,6 +121,7 @@ def build_model(
             metadata=metadata,
             dropout=dropout,
             edge_feat_dim=edge_feat_dim,
+            in_channels=in_channels,
         )
     elif model_name == 'gatv3':
         model = GATv3(
@@ -127,7 +130,8 @@ def build_model(
             num_heads=num_heads,
             num_layers=num_layers,
             metadata=metadata,
-            dropout=dropout
+            dropout=dropout,
+            in_channels=in_channels,
         )
     elif model_name == 'rgcn':
         model = RGCN(

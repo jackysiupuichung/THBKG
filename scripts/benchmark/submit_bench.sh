@@ -16,7 +16,7 @@ cd "$(dirname "$0")/../.."
 
 FROM="${FROM:-1}"
 STAGES=(bench_01_edges bench_02_graph bench_03_features bench_04_assemble bench_05_snapshots)
-dep=""
+dep="${AFTER:-}"  # AFTER=<jobid>: make the first submitted stage wait for that job
 for i in "${!STAGES[@]}"; do
   n=$((i + 1))
   [ "$n" -lt "$FROM" ] && continue

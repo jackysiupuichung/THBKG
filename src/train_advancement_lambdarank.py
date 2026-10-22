@@ -38,6 +38,7 @@ from src.advancement_core import (
 from src.losses.lambdaLoss_allrank import lambdaLoss
 from src.benchmark.metrics import ndcg_at_k, ndcg_ta_mean_at_k, rs_ta_mean_at_k, rs_ta_median_at_k, _rs_ta_values_at_k
 from src.models.utils import build_model
+from src.models.node_input import node_inputs
 
 
 def _build_grouped_slates(logits, labels, ta_groups_per_item, primary_tas, padded_value=-1.0):
@@ -252,7 +253,7 @@ def run_epoch_lambdarank(model, loader, optimizer, device, edge_feat_cols, loss_
             batch = batch.to(device)
             edge_time_dict = _build_edge_time_dict(batch, ADV_ETYPE)
             out = model(
-                batch.x_dict,
+                node_inputs(batch),
                 batch.edge_index_dict,
                 batch[ADV_ETYPE].edge_label_index,
                 src_type="target",
@@ -296,7 +297,7 @@ def evaluate_lambdarank(
         batch = batch.to(device)
         edge_time_dict = _build_edge_time_dict(batch, ADV_ETYPE)
         out = model(
-            batch.x_dict,
+            node_inputs(batch),
             batch.edge_index_dict,
             batch[ADV_ETYPE].edge_label_index,
             src_type="target",

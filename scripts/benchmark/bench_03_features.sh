@@ -10,11 +10,15 @@
 
 # Node features for the benchmark graph.
 #
-# target/disease/go/reactome node sets are unchanged from 26.09, so their
-# processed features are copied (the GO/Reactome autoencoders are not
-# re-trained, which would change them). The copy is guarded: it aborts if any
-# of those node sets differs from the release. Molecules get the new
-# multimodal features (Morgan + ESM-2 + drugType).
+# target/go/reactome node sets are unchanged from 26.09, so their processed
+# features are copied (the GO/Reactome autoencoders are not re-trained, which
+# would change them). The copy is guarded: it aborts if any of those node sets
+# differs from the release. Rebuilt here:
+#   - molecules: per-modality tensors (Morgan, ESM-2 reduced to 64 by PCA,
+#     drug type, presence masks), see molecule_multimodal.py;
+#   - diseases: PubMedBERT over "<name>. <description>" at full width (768),
+#     padding excluded from the mean (the release kept the first 256 dims,
+#     averaged padding in, and embedded missing descriptions as "None").
 #
 # Needs, prepared on a login node (compute nodes are offline):
 #   $CHEMBL_CACHE   from preprocessing/node_features/fetch_chembl_biotherapeutics.py
@@ -34,7 +38,7 @@ for level in ("datatype", "datasource"):
 PY
 
 mkdir -p "$FEATURE_OUTPUT_DIR"
-for f in integrated_target_features.pt disease_embeddings.pt disease_embeddings.yaml \
+for f in integrated_target_features.pt \
          go_embeddings.pt go_embeddings_full.pt reactome_embeddings.pt reactome_embeddings_full.pt; do
   cp -p "${REF_BASE}/features/processed/${f}" "$FEATURE_OUTPUT_DIR/"
 done
@@ -46,6 +50,6 @@ python -m preprocessing.node_features.build_all_features \
   --output-dir "$FEATURE_OUTPUT_DIR" \
   --temp-dir "$TEMP_NODE_DIR" \
   --chembl-cache "$CHEMBL_CACHE" \
-  --node-types molecule
+  --node-types molecule disease
 
 echo "[$(date)] ✅ bench_03_features done"
