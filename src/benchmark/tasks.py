@@ -52,9 +52,10 @@ from .slates import Slate, discovery_slates
 LAST_DECISION_YEAR = 2025
 # Decision years for T1, inclusive.
 SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, LAST_DECISION_YEAR)}
-# Trial evidence dated 1995 or earlier is collapsed onto 1995 by the event list,
-# so 1995 cannot be a decision year: a "first trial in 1995" means "by 1995".
-FIRST_GRAPH_YEAR = 1995
+# Evidence dated 1985 or earlier is collapsed onto 1985 by the event list
+# (config time_range.first_year), so 1985 cannot be a decision year: a "first
+# trial in 1985" means "by 1985".
+FIRST_GRAPH_YEAR = 1985
 
 # Minimum positives a disease needs over a whole split for its slates to
 # count, per (task, split); default 1. T1 test keeps only diseases with more

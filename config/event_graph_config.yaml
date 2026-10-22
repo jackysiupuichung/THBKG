@@ -9,7 +9,11 @@
 
 time_range:
   # Represents the years for which we will generate cumulative scores
-  # All evidence prior to these years is also considered
-  first_year: 1995
+  # All evidence prior to these years is also considered: rows dated before
+  # first_year are counted in first_year. 1985 is before the recency window
+  # (6 years) of the first decision year (1995), so folding never affects a
+  # decision's recency; most pre-1985 rows are IMPC, dated by the oldest
+  # paper in their literature list.
+  first_year: 1985
   last_year: 2025
 
