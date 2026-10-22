@@ -27,6 +27,11 @@ recall stay binary. The grade looks past the decision year, so use it only to
 score rankings; to train on it, pass ``horizon`` = the year before the split
 being evaluated.
 
+T1 test positives need a first trial at Phase 1 or later
+(``MIN_FIRST_TRIAL_PHASE``); pairs whose first trials are all early Phase 1 or
+of unknown phase are left out of the test slates, neither positive nor
+negative. Train and validation keep them as positives.
+
 T1 test slates are kept only for diseases that gain more than 3 new targets
 over the whole test period (``MIN_DISEASE_POSITIVES``). Always build slates
 through ``task_slates`` so the split years and this filter are applied.
@@ -63,6 +68,12 @@ FIRST_GRAPH_YEAR = 1985
 # count, per (task, split); default 1. T1 test keeps only diseases with more
 # than 3 new targets across the test period.
 MIN_DISEASE_POSITIVES = {("discovery", "test"): 4}
+
+# Minimum phase weight of a pair's first trials (the strongest trial dated in
+# its first-trial year) for it to count as a positive, per (task, split);
+# default: any trial. 0.1 = Phase 1; below it are early Phase 1 (0.05) and
+# unknown phase (0.01).
+MIN_FIRST_TRIAL_PHASE = {("discovery", "test"): 0.1}
 
 # T3 splits by Phase II entry (transition) year: (label file, first, last), with
 # None = open. train is labels/train.parquet (outcome horizon = 2015 + window);
@@ -148,14 +159,48 @@ def max_outcome_phase(release_dir: str | Path, horizon: int | None = None) -> pd
     return df.groupby(["src", "dst"], as_index=False)["max_outcome_phase"].max()
 
 
+def first_trial_phase(release_dir: str | Path) -> pd.DataFrame:
+    """Phase weight of each (target, disease) pair's strongest trial in its first-trial year.
+
+    Reads every target->disease ``clinical_trial_*`` edge, undoing Open Targets'
+    halving on the failure outcomes. Returns src, dst, year, first_trial_phase.
+    """
+    from safetensors import safe_open
+
+    release_dir = Path(release_dir)
+    meta = _release_meta(release_dir)
+    parts = []
+    with safe_open(str(release_dir / "graph.safetensors"), framework="np") as f:
+        for e in meta["edge_types"]:
+            if (e["src"], e["dst"]) != ("target", "disease") or not e["rel"].startswith(T1_RELATION_PREFIX):
+                continue
+            ei = f.get_tensor(e["tensors"]["edge_index"]["key"])
+            t = f.get_tensor(e["tensors"]["edge_time"]["key"])
+            w = f.get_tensor(e["tensors"]["edge_attr"]["key"])[:, 0].astype(np.float64)
+            parts.append(pd.DataFrame({"src": ei[0], "dst": ei[1], "year": t,
+                                       "w": np.round(w * OUTCOME_RELATIONS.get(e["rel"], 1.0), 3)}))
+    df = pd.concat(parts, ignore_index=True)
+    unknown = sorted(set(df["w"]) - set(PHASE_GRADE))
+    if unknown:
+        raise ValueError(f"trial scores with no phase weight: {unknown}")
+    first = df.groupby(["src", "dst"])["year"].transform("min")
+    return (df[df["year"] == first].groupby(["src", "dst"], as_index=False)
+            .agg(year=("year", "first"), first_trial_phase=("w", "max")))
+
+
 def build_discovery_labels(release_dir: str | Path) -> pd.DataFrame:
     """T1: first trial year of every (target, disease) pair with any trial, plus its grade.
 
-    ``max_outcome_phase`` is NaN while none of the pair's trials has finished;
-    ``grade`` fills those with ``MIN_POSITIVE_GRADE``.
+    ``first_trial_phase`` is the phase weight of the pair's strongest trial in
+    that year. ``max_outcome_phase`` is NaN while none of the pair's trials has
+    finished; ``grade`` fills those with ``MIN_POSITIVE_GRADE``.
     """
     release_dir = Path(release_dir)
     df = _first_years(release_dir, "target", "disease", lambda r: r.startswith(T1_RELATION_PREFIX))
+    phase = first_trial_phase(release_dir)
+    df = df.merge(phase, on=["src", "dst", "year"], how="left", validate="one_to_one")
+    if df["first_trial_phase"].isna().any():
+        raise ValueError("pairs without a first-trial phase")
     df = df.merge(max_outcome_phase(release_dir), on=["src", "dst"], how="left")
     tid, did = node_ids(release_dir, "target"), node_ids(release_dir, "disease")
     out = pd.DataFrame({
@@ -164,6 +209,7 @@ def build_discovery_labels(release_dir: str | Path) -> pd.DataFrame:
         "target_index": df["src"].astype(np.int64),
         "disease_index": df["dst"].astype(np.int64),
         "first_trial_year": df["year"].astype(np.int64),
+        "first_trial_phase": df["first_trial_phase"].astype(np.float64),
         "max_outcome_phase": df["max_outcome_phase"].astype(np.float64),
         "grade": df["max_outcome_phase"].fillna(MIN_POSITIVE_GRADE).astype(np.float64),
     })
@@ -203,12 +249,17 @@ def task_slates(task: str, split: str, labels: pd.DataFrame, *,
         raise ValueError("discovery slates need num_targets")
     split_years = decision_years(split, last_label_year(labels))
     years = split_years if years is None else [y for y in years if y in split_years]
+    min_phase = MIN_FIRST_TRIAL_PHASE.get((task, split))
+    if min_phase is not None:
+        labels = labels.assign(rankable=labels["first_trial_phase"] >= min_phase)
     slates = discovery_slates(labels, years, num_targets)
     k = MIN_DISEASE_POSITIVES.get((task, split), 1)
     if k > 1:
         # Counted over the whole split, not over ``years``, so a year-by-year
         # build keeps the same slates. Every T1 positive is in its slate's pool.
         in_split = labels["first_trial_year"].isin(split_years)
+        if "rankable" in labels.columns:
+            in_split &= labels["rankable"]
         per_disease = labels.loc[in_split].groupby("disease_index").size()
         keep = set(per_disease.index[per_disease >= k].tolist())
         slates = [s for s in slates if s.disease_index in keep]

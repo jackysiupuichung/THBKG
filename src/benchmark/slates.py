@@ -47,16 +47,19 @@ class Slate:
 def _slates(task: str, pairs: pd.DataFrame, cand_col: str, years: Iterable[int],
             universe_for_year: Callable[[int], np.ndarray]) -> list[Slate]:
     """Shared builder: ``pairs`` has disease_index, ``cand_col``, first_trial_year
-    and optionally ``grade``."""
+    and optionally ``grade`` and ``rankable``: a pair with rankable False is
+    left out of its year's slate, neither positive nor candidate."""
     first = pairs["first_trial_year"].to_numpy()
     has_grade = "grade" in pairs.columns
+    rankable = pairs["rankable"].to_numpy(bool) if "rankable" in pairs.columns else np.ones(len(pairs), bool)
     out: list[Slate] = []
     for year in years:
         universe = universe_for_year(year)
-        pos = pairs[first == year]
+        pos = pairs[(first == year) & rankable]
         if pos.empty or universe.size == 0:
             continue
-        prior = pairs[first < year]
+        # earlier pairs, and this year's unrankable ones, leave the pool
+        prior = pairs[(first < year) | ((first == year) & ~rankable)]
         prior_by_dis = prior.groupby("disease_index")[cand_col].apply(np.asarray).to_dict()
         for d, g in pos.groupby("disease_index"):
             excluded = prior_by_dis.get(d)

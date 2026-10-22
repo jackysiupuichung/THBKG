@@ -26,7 +26,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
-    ADVANCEMENT_SPLITS, MIN_DISEASE_POSITIVES, SPLITS, advancement_labels, build_discovery_labels, decision_years,
+    ADVANCEMENT_SPLITS, MIN_DISEASE_POSITIVES, MIN_FIRST_TRIAL_PHASE, SPLITS, advancement_labels, build_discovery_labels, decision_years,
     last_label_year, task_slates,
 )
 
@@ -60,6 +60,7 @@ def main() -> None:
     summary = {
         "splits_decision_years": {k: [lo, last if hi is None else hi] for k, (lo, hi) in SPLITS.items()},
         "min_positives_per_disease": {f"{t}.{s}": k for (t, s), k in MIN_DISEASE_POSITIVES.items()},
+        "min_first_trial_phase": {f"{t}.{s}": v for (t, s), v in MIN_FIRST_TRIAL_PHASE.items()},
         "tasks": {},
     }
     for task, labels in (("discovery", t1),):
