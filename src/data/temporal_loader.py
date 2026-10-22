@@ -1014,6 +1014,18 @@ def build_context_graph(data, collapse: bool = False):
     return context
 
 
+def strict_seed_time(label_time):
+    """Seed time for PyG temporal sampling under strict ``< transition_year`` masking.
+
+    LinkNeighborLoader keeps context edges with ``edge_time <= edge_label_time``;
+    seeding at ``transition_year - 1`` hides every edge dated in the transition
+    year itself, including the pair's own Phase II trial edge (commit 0be5cbd).
+    Every loader that samples around labelled pairs must use this, so training,
+    tuning and evaluation see the same graph.
+    """
+    return label_time - 1
+
+
 def build_edge_time_dict(batch, exclude_etype=ADV_ETYPE):
     """Build edge_time_dict for RTE, covering all context edge types.
 

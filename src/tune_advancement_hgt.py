@@ -43,7 +43,7 @@ import wandb
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.data.temporal_loader import load_event_graph
+from src.data.temporal_loader import load_event_graph, strict_seed_time
 from src.models.utils import build_model
 from torch_geometric.loader import LinkNeighborLoader
 
@@ -162,7 +162,7 @@ def run_trial(cfg: DictConfig, device: torch.device,
         data=context, num_neighbors=num_neighbors,
         edge_label_index=(ADV_ETYPE, edge_index[:, train_idx]),
         edge_label=edge_attr[train_idx, 0],
-        edge_label_time=edge_time[train_idx],
+        edge_label_time=strict_seed_time(edge_time)[train_idx],
         time_attr="edge_time", temporal_strategy="last",
         batch_size=batch_size, shuffle=True,
     )
@@ -170,7 +170,7 @@ def run_trial(cfg: DictConfig, device: torch.device,
         data=context, num_neighbors=num_neighbors,
         edge_label_index=(ADV_ETYPE, edge_index[:, val_idx]),
         edge_label=edge_attr[val_idx, 0],
-        edge_label_time=edge_time[val_idx],
+        edge_label_time=strict_seed_time(edge_time)[val_idx],
         time_attr="edge_time", temporal_strategy="last",
         batch_size=batch_size, shuffle=False,
     )

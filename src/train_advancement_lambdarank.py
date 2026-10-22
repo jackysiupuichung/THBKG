@@ -398,7 +398,7 @@ def main(cfg):
         device = torch.device("cpu")
     print(f"Device: {device}")
 
-    from src.data.temporal_loader import load_event_graph, build_num_neighbors
+    from src.data.temporal_loader import load_event_graph, build_num_neighbors, strict_seed_time
     to_undirected = bool(cfg.data.get("undirected", False))
     print(f"Loading graph from {cfg.data.graph_file} (undirected={to_undirected})")
     data = load_event_graph(cfg.data.graph_file, to_undirected=to_undirected)
@@ -435,11 +435,8 @@ def main(cfg):
 
     # Temporal masking for FUTURE-link prediction: the advancement edge_time is
     # the transition (outcome) year; a pair must be scored on evidence strictly
-    # BEFORE that year. PyG's LinkNeighborLoader keeps context edges with
-    # edge_time <= edge_label_time (inclusive of the transition year), so we
-    # pass (edge_time - 1) as the label time to get strict `<` — the standard
-    # temporal-LP convention (t < target_time). See memory: masking_strict_before.
-    seed_time = edge_time - 1
+    # BEFORE that year (strict `<`, the standard temporal-LP convention).
+    seed_time = strict_seed_time(edge_time)
 
     train_labels_all = edge_attr[train_mask, 0]
     n_pos = train_labels_all.sum().item()

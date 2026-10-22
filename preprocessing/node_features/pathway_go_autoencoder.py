@@ -8,9 +8,15 @@ These embeddings can then be used as static node features for targets by aggrega
 their associated GO/pathway embeddings.
 
 Architecture:
+    - Input: a learnable embedding per node (the ontology has no node features)
     - Encoder: GCN layers to encode nodes based on hierarchy
     - Decoder: Inner product decoder (built into GAE)
     - Loss: Binary cross-entropy for link prediction
+
+Earlier builds used ``torch.eye(num_nodes, hidden_dim)`` as input, which gives
+only the first ``hidden_dim`` nodes a non-zero row: 90% of GO terms and 81% of
+Reactome pathways then had all-zero inputs and embeddings determined by their
+local degree alone.
 """
 
 import os
@@ -32,12 +38,15 @@ class PathwayEncoder(torch.nn.Module):
     """
     GCN-based encoder for pathway/GO embeddings.
     """
-    def __init__(self, in_dim, hidden_dim, out_dim):
+    def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
         super().__init__()
+        # one learnable input vector per node (equivalent to a full one-hot input)
+        self.node_emb = torch.nn.Embedding(num_nodes, in_dim)
         self.conv1 = GCNConv(in_dim, hidden_dim)
         self.conv2 = GCNConv(hidden_dim, out_dim)
 
-    def forward(self, x, edge_index):
+    def forward(self, edge_index):
+        x = self.node_emb.weight
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = self.conv2(x, edge_index)
@@ -97,6 +106,7 @@ def train_autoencoder(
     num_epochs: int = 100,
     lr: float = 0.001,
     device: str = 'cuda',
+    seed: int = 42,
 ) -> torch.Tensor:
     """
     Train graph autoencoder to learn node embeddings.
@@ -118,12 +128,12 @@ def train_autoencoder(
     print(f"   Hidden dim: {hidden_dim}")
     print(f"   Embedding dim: {embedding_dim}")
     
-    # Initialize node features (identity matrix or random)
-    data.x = torch.eye(data.num_nodes, hidden_dim)  # One-hot-like initialization
+    torch.manual_seed(seed)
     data = data.to(device)
-    
-    # Create encoder
+
+    # Create encoder (learnable per-node input, see module docstring)
     encoder = PathwayEncoder(
+        num_nodes=data.num_nodes,
         in_dim=hidden_dim,
         hidden_dim=hidden_dim,
         out_dim=embedding_dim
@@ -142,7 +152,7 @@ def train_autoencoder(
         optimizer.zero_grad()
         
         # Encode
-        z = model.encode(data.x, data.edge_index)
+        z = model.encode(data.edge_index)
         
         # Compute loss (recon_loss handles both positive and negative sampling)
         loss = model.recon_loss(z, data.edge_index)
@@ -159,7 +169,7 @@ def train_autoencoder(
     # Extract final embeddings
     model.eval()
     with torch.no_grad():
-        embeddings = model.encode(data.x, data.edge_index).cpu()
+        embeddings = model.encode(data.edge_index).cpu()
     
     print(f"   ✅ Training complete! Learned embeddings: {embeddings.shape}")
     
@@ -203,6 +213,7 @@ def main():
     parser.add_argument("--embedding-dim", type=int, default=64)
     parser.add_argument("--num-epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--make-undirected", action="store_true", default=True,
                         help="Make graph undirected")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -227,6 +238,7 @@ def main():
         num_epochs=args.num_epochs,
         lr=args.lr,
         device=args.device,
+        seed=args.seed,
     )
     
     # Save embeddings

@@ -10,10 +10,10 @@
 
 # Node features for the benchmark graph.
 #
-# target/go/reactome node sets are unchanged from 26.09, so their processed
-# features are copied (the GO/Reactome autoencoders are not re-trained, which
-# would change them). The copy is guarded: it aborts if any of those node sets
-# differs from the release. Rebuilt here:
+# The target node set is unchanged from 26.09, so its processed features are
+# copied (guarded: aborts if any node set differs from the release). Rebuilt here:
+#   - GO / Reactome: autoencoders retrained with a learnable input per node (the
+#     release fed torch.eye(N, 128), leaving 90% of GO terms with zero input);
 #   - molecules: per-modality tensors (Morgan, ESM-2 reduced to 64 by PCA,
 #     drug type, presence masks), see molecule_multimodal.py;
 #   - diseases: PubMedBERT over "<name>. <description>" at full width (768),
@@ -38,8 +38,7 @@ for level in ("datatype", "datasource"):
 PY
 
 mkdir -p "$FEATURE_OUTPUT_DIR"
-for f in integrated_target_features.pt \
-         go_embeddings.pt go_embeddings_full.pt reactome_embeddings.pt reactome_embeddings_full.pt; do
+for f in integrated_target_features.pt; do
   cp -p "${REF_BASE}/features/processed/${f}" "$FEATURE_OUTPUT_DIR/"
 done
 
@@ -50,6 +49,6 @@ python -m preprocessing.node_features.build_all_features \
   --output-dir "$FEATURE_OUTPUT_DIR" \
   --temp-dir "$TEMP_NODE_DIR" \
   --chembl-cache "$CHEMBL_CACHE" \
-  --node-types molecule disease
+  --node-types molecule disease go reactome
 
 echo "[$(date)] ✅ bench_03_features done"

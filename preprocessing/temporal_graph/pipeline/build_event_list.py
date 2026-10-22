@@ -102,6 +102,43 @@ def compute_novelty_series(year_scores: np.ndarray,
     return novelty
 
 
+def running_top_k(group_id: np.ndarray, year: np.ndarray, score: np.ndarray,
+                  years, k: int = 50):
+    """Yield ``(year, row_indices)``: each group's top-k rows among those dated <= year.
+
+    The harmonic sum of year Y uses a group's top k among the rows dated <= Y.
+    Rows that drop out of that set can only fall further behind as later rows
+    arrive, so the top k at Y is the top k of (top k at Y-1) plus the rows dated
+    Y. Carrying it forward gives every year exactly its own top k, at the cost of
+    one sort of at most k rows per group per year. Rows dated before the first
+    year count from the first year on; rows after the last year are never used.
+
+    A single top k chosen over all years (the earlier implementation) is not the
+    same: later high-scoring rows push out early rows that belong in an early
+    year's top k, under-estimating early scores and delaying first appearances.
+    """
+    years = list(years)
+    bucket = np.maximum(year, years[0])
+    in_range = bucket <= years[-1]
+    rows = np.nonzero(in_range)[0]
+    order = np.argsort(bucket[rows], kind="stable")
+    rows, b = rows[order], bucket[rows][order]
+    starts = np.searchsorted(b, years, side="left")
+    ends = np.searchsorted(b, years, side="right")
+    kept = np.empty(0, dtype=np.int64)
+    for y, lo, hi in zip(years, starts, ends):
+        if hi > lo:
+            cand = np.concatenate([kept, rows[lo:hi]])
+            o = np.lexsort((-score[cand], group_id[cand]))  # group, then score descending
+            cand = cand[o]
+            g = group_id[cand]
+            first = np.r_[True, g[1:] != g[:-1]]
+            pos = np.arange(cand.size)
+            rank = pos - np.maximum.accumulate(np.where(first, pos, 0))
+            kept = cand[rank < k]
+        yield y, kept
+
+
 def compute_novelty_per_datasource(dynamic_edges: pd.DataFrame,
                                     start_year: int, end_year: int) -> pd.DataFrame:
     """
@@ -365,18 +402,15 @@ def build_event_list(
     clinical_full = dynamic_edges[mask_clinical_full]
     other_full = dynamic_edges[~mask_clinical_full]
 
-    # Prune non-clinical to top-50-by-score per datasource_group: harmonic_sum only uses top 50,
-    # so any evidence outside the top 50 of its group can never contribute regardless of year.
-    if not other_full.empty:
-        n_before = len(other_full)
-        other_full = other_full.sort_values(
-            datasource_group_cols + ['score'],
-            ascending=[True] * len(datasource_group_cols) + [False],
-            kind='stable',
-        )
-        rank_ds = other_full.groupby(datasource_group_cols, sort=False).cumcount() + 1
-        other_full = other_full[rank_ds <= 50].copy()
-        print(f"   Pruned non-clinical evidences to top-50 per group: {n_before:,} → {len(other_full):,}")
+    # Non-clinical evidence: each year's harmonic sum uses each datasource
+    # group's top 50 among the rows dated <= that year, carried forward year by
+    # year (running_top_k), so no row is chosen using later evidence.
+    other_full = other_full.reset_index(drop=True)
+    ds_group_id = (other_full.groupby(datasource_group_cols, sort=False, dropna=False).ngroup().to_numpy()
+                   if not other_full.empty else np.empty(0, dtype=np.int64))
+    top_k_by_year = running_top_k(ds_group_id, other_full['year'].to_numpy(),
+                                  other_full['score'].to_numpy(dtype=float),
+                                  range(start_year, end_year + 1), k=50)
 
     # Store all year-score combinations
     all_events = []
@@ -384,7 +418,8 @@ def build_event_list(
     # For each year, calculate cumulative harmonic sum
     for year in tqdm(range(start_year, end_year + 1), desc="Processing years"):
         clinical_edges = clinical_full[clinical_full['year'] <= year]
-        other_edges = other_full[other_full['year'] <= year]
+        _, kept_rows = next(top_k_by_year)
+        other_edges = other_full.iloc[kept_rows]
 
         if clinical_edges.empty and other_edges.empty:
             continue

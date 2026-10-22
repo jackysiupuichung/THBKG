@@ -13,7 +13,18 @@ from .edge_extractor import extract_edge_props
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# PMID -> publication year (str), or None when PubMed has the PMID but no year.
+# Request failures are never cached: a PMID is only stored once PubMed answered for it.
 PUBMED_CACHE = {}
+# Optional on-disk cache (parquet: pmid, year), loaded on first use and updated
+# after every fetch, so a rebuild reuses earlier answers and records them.
+PUBMED_CACHE_FILE = os.environ.get("PUBMED_YEAR_CACHE")
+_PUBMED_CACHE_LOADED = False
+
+EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+EFETCH_BATCH_SIZE = 200
+PUBMED_RETRIES = 6
+PUBMED_TIMEOUT = 120
 
 
 
@@ -22,57 +33,88 @@ REQUIRED_EDGE_COLS = ["sourceId", "targetId", "source_type", "target_type", "rel
 YEAR_PRIORITY = ["resolvedTrialDate", "curationYear", "studyYear", "publicationYear", "studyStartDate", "publicationDate", "evidenceDate"]
 
 
+def _load_pubmed_cache():
+    global _PUBMED_CACHE_LOADED
+    if _PUBMED_CACHE_LOADED:
+        return
+    _PUBMED_CACHE_LOADED = True
+    if PUBMED_CACHE_FILE and os.path.exists(PUBMED_CACHE_FILE):
+        df = pd.read_parquet(PUBMED_CACHE_FILE)
+        for pmid, year in zip(df["pmid"].astype(str), df["year"]):
+            PUBMED_CACHE[pmid] = None if pd.isna(year) else str(year)
+        print(f"📚 PubMed year cache: {len(df):,} PMIDs from {PUBMED_CACHE_FILE}")
+
+
+def _save_pubmed_cache():
+    if not PUBMED_CACHE_FILE:
+        return
+    os.makedirs(os.path.dirname(os.path.abspath(PUBMED_CACHE_FILE)), exist_ok=True)
+    tmp = PUBMED_CACHE_FILE + ".tmp"
+    pd.DataFrame({"pmid": list(PUBMED_CACHE.keys()), "year": list(PUBMED_CACHE.values())}).to_parquet(tmp, index=False)
+    os.replace(tmp, PUBMED_CACHE_FILE)
+
+
+def _parse_efetch_years(xml_bytes) -> dict:
+    """{pmid: year or None} for every article in an efetch response (journal or book)."""
+    root = ET.fromstring(xml_bytes)
+    out = {}
+    for article in list(root.iter("PubmedArticle")) + list(root.iter("PubmedBookArticle")):
+        pmid = article.findtext(".//PMID")
+        if not pmid:
+            continue
+        year = article.findtext(".//PubDate/Year")
+        if year is None:
+            medline = article.findtext(".//PubDate/MedlineDate")
+            match = re.search(r"(\d{4})", medline or "")
+            year = match.group(1) if match else None
+        out[pmid.strip()] = year
+    return out
+
+
+def _efetch_batch(batch) -> dict:
+    """Years for one batch of PMIDs, retried with backoff; raises if PubMed keeps failing."""
+    last_err = None
+    for attempt in range(PUBMED_RETRIES):
+        try:
+            res = requests.post(EFETCH_URL, data={"db": "pubmed", "id": ",".join(batch), "retmode": "xml"},
+                                timeout=PUBMED_TIMEOUT, verify=False)
+            res.raise_for_status()
+            return _parse_efetch_years(res.content)
+        except Exception as e:  # HTTP errors, timeouts, truncated or malformed XML
+            last_err = e
+            wait = min(60, 2 ** attempt)
+            print(f"   ⚠️ PubMed efetch failed ({type(e).__name__}: {e}); retry {attempt + 1}/{PUBMED_RETRIES} in {wait}s")
+            time.sleep(wait)
+    raise RuntimeError(f"PubMed efetch failed {PUBMED_RETRIES} times for a batch of {len(batch)} PMIDs: {last_err}")
+
+
 def fetch_pubmed_years(pubmed_ids):
     """
-    Fetch publication years for a list of PubMed IDs using NCBI E-utils.
-    Results are cached in the global PUBMED_CACHE.
+    Fetch publication years for PubMed IDs using NCBI E-utils (efetch).
+
+    Results go into PUBMED_CACHE (and PUBMED_YEAR_CACHE on disk, if set). A PMID
+    PubMed answered for without a year, or that PubMed does not return at all
+    (withdrawn / invalid), is cached as None. A request that keeps failing raises
+    instead of being cached: the 26.09 build cached one failed 10,000-PMID
+    request as "no year", which silently dropped 105,422 IntAct and 48,582 GO
+    rows.
     """
-    ids_to_fetch = [pid for pid in pubmed_ids if pid not in PUBMED_CACHE]
+    _load_pubmed_cache()
+    ids_to_fetch = sorted({str(pid) for pid in pubmed_ids} - PUBMED_CACHE.keys())
     if not ids_to_fetch:
         return PUBMED_CACHE
-    
-    EPOST_CHUNK_SIZE = 10000
-    EFETCH_BATCH_SIZE = 500
-    
-    for i in range(0, len(ids_to_fetch), EPOST_CHUNK_SIZE):
-        chunk = ids_to_fetch[i : i + EPOST_CHUNK_SIZE]
-        print(f"📡 Uploading {len(chunk)} PMIDs to NCBI epost...")
-        try:
-            epost_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/epost.fcgi"
-            epost_res = requests.post(epost_url, data={"db": "pubmed", "id": ",".join(chunk)}, verify=False)
-            epost_res.raise_for_status()
-            root = ET.fromstring(epost_res.text)
-            webenv = root.findtext("WebEnv")
-            query_key = root.findtext("QueryKey")
-            
-            for j in range(0, len(chunk), EFETCH_BATCH_SIZE):
-                # print(f"📡 Fetching batch {j//EFETCH_BATCH_SIZE + 1} for PMIDs...")
-                efetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-                params = {"db": "pubmed", "query_key": query_key, "WebEnv": webenv, "retstart": j, "retmax": EFETCH_BATCH_SIZE, "retmode": "xml"}
-                efetch_res = requests.get(efetch_url, params=params, verify=False)
-                efetch_res.raise_for_status()
-                
-                fetch_root = ET.fromstring(efetch_res.content)
-                for article in fetch_root.findall(".//PubmedArticle"):
-                    pmid = article.findtext(".//PMID")
-                    year = None
-                    year_elem = article.find(".//PubDate/Year")
-                    if year_elem is not None:
-                        year = year_elem.text
-                    else:
-                        medline_date_elem = article.find(".//PubDate/MedlineDate")
-                        if medline_date_elem is not None:
-                            match = re.search(r'(\d{4})', medline_date_elem.text)
-                            if match: year = match.group(1)
-                    if pmid: PUBMED_CACHE[pmid] = year
-                time.sleep(0.4)
-            
-            for pid in chunk:
-                if pid not in PUBMED_CACHE: PUBMED_CACHE[pid] = None
-        except Exception as e:
-            print(f"❌ Error in PubMed API flow: {e}")
-            for pid in chunk:
-                if pid not in PUBMED_CACHE: PUBMED_CACHE[pid] = None
+    print(f"📡 Fetching publication years for {len(ids_to_fetch):,} PMIDs from PubMed...")
+    for i in range(0, len(ids_to_fetch), EFETCH_BATCH_SIZE):
+        batch = ids_to_fetch[i : i + EFETCH_BATCH_SIZE]
+        years = _efetch_batch(batch)
+        for pid in batch:
+            PUBMED_CACHE[pid] = years.get(pid)  # answered without this PMID -> None
+        if (i // EFETCH_BATCH_SIZE) % 50 == 49:
+            _save_pubmed_cache()
+        time.sleep(0.4)  # NCBI: at most 3 requests/s without an API key
+    _save_pubmed_cache()
+    n_none = sum(PUBMED_CACHE[p] is None for p in ids_to_fetch)
+    print(f"   ✅ {len(ids_to_fetch):,} PMIDs resolved ({n_none:,} without a year in PubMed)")
     return PUBMED_CACHE
 
 

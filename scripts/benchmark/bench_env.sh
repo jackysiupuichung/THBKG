@@ -37,7 +37,11 @@ for f in "${ADV_DIR}/train_dataset.csv" "${ADV_DIR}/test_dataset.csv"; do
   [ -f "$f" ] || { echo "❌ missing T3 labels $f (scripts/advancement_prediction/export_w3_advancement_csvs.py)"; exit 1; }
 done
 
+# PubMed publication years looked up while parsing (parsers/parser.py), kept on disk
+PUBMED_YEAR_CACHE="${OUTPUT_BASE}/pubmed_years.parquet"
+
 export OT_VERSION REF_BASE OUTPUT_BASE INPUT_EVIDENCE_DIR RAW_EDGES_DIR RAW_NODES_DIR RESOLVED_EVIDENCE_DIR NCT_CACHE
+export PUBMED_YEAR_CACHE RELEASE_DIR FEATURE_OUTPUT_DIR EVENT_OUTPUT_DIR
 export PYTHONUNBUFFERED=1
 export HF_HUB_OFFLINE=1  # compute nodes are offline; ESM-2 must already be in the HF cache
 

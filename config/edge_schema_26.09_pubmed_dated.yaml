@@ -1,0 +1,19 @@
+# Edge specs whose rows are dated through PubMed (EdgeParser.serialise looks up
+# the year of each row's earliest PMID when the evidence carries no date).
+# Used by scripts/benchmark/bench_01_edges.sh to re-parse these relations with
+# the retrying PubMed lookup; IntAct (parsers/intact) is parsed alongside.
+#
+# Mirrors the gene_ontology spec of edge_schema_26.09.yaml.
+
+gene_ontology:
+  input_dir: targets
+  sourceId: id
+  targetId: go.id
+  relation_name: has_function_in
+  props: [
+    datasourceId=constant:gene_ontology,
+    score=constant:1.0,
+    source_type=constant:target,
+    target_type=constant:go,
+    year
+  ]
