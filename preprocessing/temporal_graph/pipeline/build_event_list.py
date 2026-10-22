@@ -369,6 +369,15 @@ def build_event_list(
     dynamic_edges = edges[edges['year'].notna()].copy()
     print(f"📊 Dynamic edges: {len(dynamic_edges):,}")
 
+    # Rows scoring 0 add nothing to any score (EVA / ClinVar records without a
+    # pathogenic assertion: "evidence only", conflicting, not provided, benign);
+    # kept, a pair with only such rows is a score-0 edge in every year.
+    zero = dynamic_edges['score'] <= 0
+    if zero.any():
+        print(f"🗑️ Dropping {int(zero.sum()):,} rows with score <= 0: "
+              f"{dynamic_edges.loc[zero, 'datasourceId'].value_counts().to_dict()}")
+        dynamic_edges = dynamic_edges[~zero]
+
     # Apply per-datasource score cutoffs
     if 'datasources' in config:
         print(f"\n✂️ Applying datasource cutoffs...")

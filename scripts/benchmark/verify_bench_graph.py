@@ -7,8 +7,9 @@ edge with the trial's phase weight; gives static ontology edges (score 1,
 novelty 0) and edge_time -1; computes each year's top-50 evidence from that
 year's rows only; recovers PubMed-dated GO / IntAct rows lost in 26.09; stores
 IntAct pairs once in (min, max) order without self-loops; counts each
-(drug, target, trial) once in modulated_by; and re-encodes disease, GO and
-Reactome features. The checks below pin down what must NOT change. Fails
+(drug, target, trial) once in modulated_by; drops rows scoring 0; dates
+literature by publicationDate; and re-encodes disease, GO and Reactome
+features. The checks below pin down what must NOT change. Fails
 (exit 1) on any hard check.
 
 Hard checks
@@ -23,6 +24,10 @@ Hard checks
      recovered PubMed-dated GO / IntAct rows only add evidence; anything else
      is a bug. (Up to 0.1% violations allowed for the two PubMed-dated
      relations, where PubMed itself may have re-dated a record.)
+     Release pairs whose score before Y is 0 are skipped (score-0 rows are
+     dropped). literature is compared one year later in the bench graph
+     (bench before Y+1 vs release before Y), with the same 0.1% allowance:
+     its publicationDate falls a year after publicationYear in 179k rows.
      interacts_with is compared on (min, max) pairs without self-loops, the
      release's two directions taking their higher score.
   3b. static ontology types: identical edge_index/edge_time; edge_attr is
@@ -55,6 +60,8 @@ ONGOING_EDGE = ("target", "clinical_trial_ongoing", "disease")
 
 CHECK_YEARS = (1996, 2000, 2005, 2010, 2016, 2020, 2025, 2026)
 PUBMED_DATED = {"has_function_in", "interacts_with"}
+# Re-dated relations: years the bench graph may lag the release by
+REDATED_LAG = {"literature": 1}
 
 
 def _scores_before(src, dst, t, w, year, symmetric=False) -> pd.Series:
@@ -73,17 +80,23 @@ def _scores_before(src, dst, t, w, year, symmetric=False) -> pd.Series:
     return last.set_index(["s", "d"])["w"]
 
 
-def evidence_only_grows(b_store, r_store, r_src_to_b=None, symmetric=False) -> dict:
-    """Per check year: release pairs missing from the bench graph, and with a lower score."""
+def evidence_only_grows(b_store, r_store, r_src_to_b=None, symmetric=False, lag=0) -> dict:
+    """Per check year: release pairs missing from the bench graph, and with a lower score.
+
+    Release pairs with score 0 are skipped; the bench graph is read ``lag``
+    years later than the release.
+    """
     def cols(store, src_map=None):
         ei = store.edge_index.numpy().astype(np.int64)
         src = ei[0] if src_map is None else src_map[ei[0]]
         return src, ei[1], store.edge_time.numpy(), store.edge_attr[:, 0].numpy().astype(np.float64)
     rb, rr = cols(b_store), cols(r_store, r_src_to_b)
-    out = {"pairs": 0, "missing": 0, "lower": 0, "earlier_in_bench": 0}
+    out = {"pairs": 0, "missing": 0, "lower": 0, "earlier_in_bench": 0, "release_score0_skipped": 0}
     for y in CHECK_YEARS:
         r = _scores_before(*rr, y, symmetric=symmetric)
-        b = _scores_before(*rb, y, symmetric=symmetric)
+        out["release_score0_skipped"] += int((r <= 0).sum())
+        r = r[r > 0]
+        b = _scores_before(*rb, y + lag, symmetric=symmetric)
         j = b.reindex(r.index)
         out["pairs"] += len(r)
         out["missing"] += int(j.isna().sum())
@@ -145,13 +158,16 @@ def main() -> int:
              if "molecule" not in (et[0], et[2]) and et not in static]
     report["evidence_only_grows"] = {}
     for et in dated:
-        g = evidence_only_grows(bench[et], ref[et], symmetric=(et[0] == et[2]))
+        lag = REDATED_LAG.get(et[1], 0)
+        g = evidence_only_grows(bench[et], ref[et], symmetric=(et[0] == et[2]), lag=lag)
         report["evidence_only_grows"]["|".join(et)] = g
         bad = g["missing"] + g["lower"]
-        limit = 0.001 * g["pairs"] if et[1] in PUBMED_DATED else 0
+        limit = 0.001 * g["pairs"] if et[1] in PUBMED_DATED or lag else 0
         check(f"edges.grows.{et[1]}", bad <= limit,
-              f"missing {g['missing']:,}, lower {g['lower']:,} of {g['pairs']:,} release pair-years; "
-              f"{g['earlier_in_bench']:,} bench pair-years absent from the release")
+              f"missing {g['missing']:,}, lower {g['lower']:,} of {g['pairs']:,} release pair-years"
+              + (f" (bench read {lag} year later)" if lag else "")
+              + f"; {g['earlier_in_bench']:,} bench pair-years absent from the release; "
+              f"{g['release_score0_skipped']:,} score-0 release pair-years skipped")
 
     # 3b. static ontology edges: same edges, attributes fixed to (score 1, novelty 0)
     for et in sorted(static & b_types):
