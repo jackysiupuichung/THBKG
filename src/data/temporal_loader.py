@@ -14,21 +14,98 @@ from torch_geometric.utils import coalesce
 import torch_geometric.transforms as T
 
 
+# Relations that are symmetric by meaning (both ends the same node type, no
+# direction). They are made undirected within their own edge type; every other
+# relation gets a separate reverse type.
+SYMMETRIC_RELATIONS = frozenset({"interacts_with"})
+
+
+def _dedupe_max(edge_index: torch.Tensor, values: Dict[str, torch.Tensor],
+                time_key: Optional[str]) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """Collapse duplicate edges to one, taking the elementwise max of every attribute.
+
+    Duplicates are rows with the same (src, dst), or the same (src, dst, time)
+    when ``time_key`` is given (the continuous graph keeps one row per update).
+    """
+    cols = [edge_index[0], edge_index[1]]
+    if time_key is not None:
+        cols.append(values[time_key])
+    keys = torch.stack(cols, dim=1)
+    uniq, inv = torch.unique(keys, dim=0, return_inverse=True)
+    out = {}
+    for k, v in values.items():
+        shape = (uniq.size(0),) + tuple(v.shape[1:])
+        idx = inv.view(-1, *([1] * (v.dim() - 1))).expand_as(v)
+        out[k] = torch.empty(shape, dtype=v.dtype).scatter_reduce_(0, idx, v, reduce="amax", include_self=False)
+    return uniq[:, :2].t().contiguous(), out
+
+
+def to_undirected_typed(data: HeteroData, *, symmetric=SYMMETRIC_RELATIONS,
+                        dedupe_on_time: bool = True) -> HeteroData:
+    """Add reverse edges without merging attributes.
+
+    * A relation in ``symmetric`` (``interacts_with``) is made undirected within
+      its own edge type: each edge is added in both directions and duplicates
+      collapse to their elementwise max (score, edge_time, ...).
+    * Every other relation gets a reverse type ``(dst, rev_<rel>, src)`` carrying
+      the same per-edge tensors -- also the same-node-type ontologies, where
+      child->parent and parent->child are different relations.
+
+    Replaces PyG's ``ToUndirected()``, whose default merges a same-node-type
+    relation with its reverse and *adds* duplicate edges' attributes, edge_time
+    included: in the 26.09 graph that gave 93,242 interacts_with pairs (18.8%)
+    an edge year near 4,000, which temporal sampling then drops at every
+    decision year.
+
+    Args:
+        dedupe_on_time: treat rows of the same pair with different edge_time as
+            distinct (True for the continuous graph, one row per update; False
+            for a snapshot, one row per pair).
+    """
+    for et in list(data.edge_types):
+        src, rel, dst = et
+        if rel.startswith("rev_"):
+            continue
+        store = data[et]
+        nnz = store.edge_index.size(1)
+        values = {k: v for k, v in store.items()
+                  if k != "edge_index" and torch.is_tensor(v) and v.size(0) == nnz}
+        if rel in symmetric and src == dst:
+            ei = torch.cat([store.edge_index, store.edge_index.flip(0)], dim=1)
+            vals = {k: torch.cat([v, v], dim=0) for k, v in values.items()}
+            time_key = "edge_time" if dedupe_on_time and "edge_time" in vals else None
+            ei, vals = _dedupe_max(ei, vals, time_key)
+            store.edge_index = ei
+            for k, v in vals.items():
+                store[k] = v
+        else:
+            rev = data[dst, f"rev_{rel}", src]
+            rev.edge_index = store.edge_index.flip(0)
+            for k, v in values.items():
+                rev[k] = v
+    return data
+
+
 def load_event_graph(
     filepath: str,
     to_undirected: bool = True,
     normalize_features: bool = False,
+    undirected_mode: str = "typed",
 ) -> HeteroData:
     """
-    Load event-based temporal graph (HeteroData).
-    
+    Load the continuous graph: the event-based temporal HeteroData.
+
     Note: Features should be attached separately using src/pipeline/attach_features.py
-    
+
     Args:
         filepath: Path to temporal graph file (.pt)
         to_undirected: Whether to add reverse edges for message passing
         normalize_features: Whether to apply StandardScaler to node features
-        
+        undirected_mode: "typed" (default, ``to_undirected_typed``) or "legacy",
+            PyG's ``ToUndirected()`` as used before 2026-10-22, which sums the
+            attributes and edge_time of duplicate interacts_with edges. Only
+            for reproducing runs made before the fix.
+
     Returns:
         HeteroData object with edge_time and edge_weight attributes
     """
@@ -48,8 +125,13 @@ def load_event_graph(
 
     # 2. Convert to undirected for GNN message passing
     if to_undirected:
-        print("🔄 Converting to undirected graph (adding reverse edges)...")
-        data = T.ToUndirected()(data)
+        print(f"🔄 Converting to undirected graph (adding reverse edges, mode={undirected_mode})...")
+        if undirected_mode == "typed":
+            data = to_undirected_typed(data, dedupe_on_time=True)
+        elif undirected_mode == "legacy":
+            data = T.ToUndirected()(data)
+        else:
+            raise ValueError(f"unknown undirected_mode {undirected_mode!r}")
     
     # Remove node_id attribute if present to avoid PyG loader errors
     # (PyG loader tries to slice all attributes, and list[str] fails)
@@ -58,6 +140,29 @@ def load_event_graph(
             del data[node_type].node_id
             
     return data
+
+
+def load_discontinuous_graph(
+    release_dir,
+    year: int,
+    *,
+    normalise: str = "max",
+    recency: bool = True,
+    to_undirected: bool = True,
+    snapshot_dir=None,
+) -> HeteroData:
+    """
+    Load the discontinuous graph at one decision year: the snapshot holding each
+    pair's latest state before ``year``, with edge_attr = [score(, recency)].
+
+    Thin wrapper over ``src.benchmark.snapshots.load_snapshot`` (normalisation
+    "none" / "max" / "log" is applied there, once per load). Reverse edges use
+    ``to_undirected_typed`` with one row per pair.
+    """
+    from src.benchmark.snapshots import load_snapshot
+
+    return load_snapshot(release_dir, year, normalise=normalise, recency=recency,
+                         to_undirected=to_undirected, snapshot_dir=snapshot_dir)
 
 
 def is_clinical_trial_edge(edge_type: Tuple[str, str, str]) -> bool:

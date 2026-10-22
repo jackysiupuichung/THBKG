@@ -101,7 +101,7 @@ def main() -> None:
                     raise SystemExit(f"no raw edge files found for {key} in {args.raw_edges_dir}")
                 kind, smax = "harmonic", float(theoretical_max(sources, ds_map))
             observed = float(f.get_tensor(e["tensors"]["edge_attr"]["key"])[:, 0].max())
-            e["score_max"] = round(smax, 6)
+            e["score_max"] = float(smax)  # full precision: rounding pushes max-normalised values above 1
             e["score_kind"] = kind
             e["score_sources"] = sources
             flag = "" if observed <= smax + 1e-6 else "  <-- EXCEEDS"

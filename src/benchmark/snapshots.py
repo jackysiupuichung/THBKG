@@ -66,14 +66,14 @@ def load_snapshot(release_dir, year: int, *, normalise: str = "max", recency: bo
         year: decision year; the snapshot contains only evidence dated before it.
         normalise: "none", "max" or "log" (see module docstring).
         recency: include the recency column (the score-only variant drops it).
-        to_undirected: add a reverse edge type for every relation. Uses
-            ``merge=False``: PyG's default merges a same-node-type relation
-            (target interacts_with target) with its reverse and *adds* duplicate
-            edges' attributes, edge_time included.
+        to_undirected: add reverse edges with ``to_undirected_typed``
+            (src/data/temporal_loader.py): interacts_with becomes undirected
+            within its own type (one row per pair, elementwise max when both
+            directions exist); every other relation gets a ``rev_`` type.
         snapshot_dir: defaults to <release_dir>/snapshots.
     """
     from torch_geometric.data import HeteroData
-    import torch_geometric.transforms as T
+    from src.data.temporal_loader import to_undirected_typed
 
     if normalise not in NORMALISATIONS:
         raise ValueError(f"normalise must be one of {NORMALISATIONS}")
@@ -106,5 +106,5 @@ def load_snapshot(release_dir, year: int, *, normalise: str = "max", recency: bo
     data.edge_attr_columns = ["score", "recency"] if recency else ["score"]
     data.normalise = normalise
     if to_undirected:
-        data = T.ToUndirected(merge=False)(data)
+        data = to_undirected_typed(data, dedupe_on_time=False)
     return data
