@@ -29,7 +29,10 @@ Outcome bucket rules:
       NOT_YET_RECRUITING / ENROLLING_BY_INVITATION
                                                  -> still ongoing, no outcome row
 
-Non-NCT rows are dropped (no terminal date available).
+Non-NCT rows are dropped (no terminal date available). So are trials with no
+studyStartDate (none in ClinicalTrials.gov either): they are undated, and their
+terminal date is mostly just the last registry update. The T3 label pipeline
+ignores them too, so graph and labels count the same trials.
 Idempotent: tolerates running on already-mutated parquets.
 """
 
@@ -170,7 +173,9 @@ def process_file(path: Path, cache: pd.DataFrame, dry_run: bool, out_path: Path 
     df["_nct_id"] = df["clinicalReportId"].astype(str).str.upper()
     is_nct = df["_nct_id"].str.match(NCT_RE).fillna(False)
     n_dropped = int((~is_nct).sum())
-    df = df[is_nct].copy()
+    no_start = is_nct & df["studyStartDate"].isna()
+    n_no_start = int(no_start.sum())
+    df = df[is_nct & ~no_start].copy()
 
     df = df.merge(
         cache[["nct_id", "terminal_date", "overall_status"]].rename(
@@ -212,6 +217,7 @@ def process_file(path: Path, cache: pd.DataFrame, dry_run: bool, out_path: Path 
         "file": path.name,
         "rows_before": n_before,
         "rows_dropped_non_nct": n_dropped,
+        "rows_dropped_no_start": n_no_start,
         "rows_after": int(len(out)),
         "ongoing_rescored": n_rescored,
         "buckets": counts,
@@ -233,6 +239,7 @@ def main(cache_path: Path, dry_run: bool, input_dir: Path, output_dir: Path | No
     totals = {
         "rows_before": 0,
         "rows_dropped_non_nct": 0,
+        "rows_dropped_no_start": 0,
         "rows_after": 0,
         "ongoing_rescored": 0,
         "buckets": {},
@@ -241,10 +248,12 @@ def main(cache_path: Path, dry_run: bool, input_dir: Path, output_dir: Path | No
         r = process_file(path, cache, dry_run, out_path=(output_dir / path.name) if output_dir else None)
         print(
             f"  {r['file']}: {r['rows_before']} -> {r['rows_after']} "
-            f"(dropped non-NCT {r['rows_dropped_non_nct']}, ongoing rescored {r['ongoing_rescored']})"
+            f"(dropped non-NCT {r['rows_dropped_non_nct']}, no start date {r['rows_dropped_no_start']}, "
+            f"ongoing rescored {r['ongoing_rescored']})"
         )
         totals["rows_before"] += r["rows_before"]
         totals["rows_dropped_non_nct"] += r["rows_dropped_non_nct"]
+        totals["rows_dropped_no_start"] += r["rows_dropped_no_start"]
         totals["rows_after"] += r["rows_after"]
         totals["ongoing_rescored"] += r["ongoing_rescored"]
         for k, v in r["buckets"].items():
@@ -253,6 +262,7 @@ def main(cache_path: Path, dry_run: bool, input_dir: Path, output_dir: Path | No
     print("\n=== TOTALS ===")
     print(f"  rows before:           {totals['rows_before']}")
     print(f"  rows dropped (non-NCT):{totals['rows_dropped_non_nct']}")
+    print(f"  rows dropped (no start date): {totals['rows_dropped_no_start']}")
     print(f"  rows after:            {totals['rows_after']}")
     print(f"  ongoing rows rescored: {totals['ongoing_rescored']}")
     print("\n  bucket distribution:")

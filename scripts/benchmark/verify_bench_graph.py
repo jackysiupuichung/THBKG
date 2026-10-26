@@ -9,7 +9,8 @@ year's rows only; recovers PubMed-dated GO / IntAct rows lost in 26.09; stores
 IntAct pairs once in (min, max) order without self-loops; counts each
 (drug, target, trial) once in modulated_by; drops rows scoring 0; dates
 literature by publicationDate; emits no outcome edge for trials of UNKNOWN
-status; and re-encodes disease, GO and Reactome features. The checks below
+status; leaves out trials with no start date; and re-encodes disease, GO and
+Reactome features. The checks below
 pin down what must NOT change. Fails (exit 1) on any hard check.
 
 Nodes are matched by id: edits to the evidence add or remove a few targets
@@ -33,8 +34,9 @@ Hard checks
      dropped). literature is compared one year later in the bench graph
      (bench before Y+1 vs release before Y), with the same 0.1% allowance:
      its publicationDate falls a year after publicationYear in 179k rows.
-     clinical_trial_Unknown/Operational is reported, not checked: trials of
-     UNKNOWN status no longer emit it.
+     The trial outcome relations (positive, unmet_efficacy, adverse_effects,
+     Unknown/Operational) are reported, not checked: trials of UNKNOWN status
+     emit no outcome edge, and trials with no start date are left out.
      interacts_with is compared on (min, max) pairs without self-loops, the
      release's two directions taking their higher score.
   3b. static ontology types: identical edge_index/edge_time; edge_attr is
@@ -43,8 +45,10 @@ Hard checks
      to 2025): same (target, disease) pairs with the same first edge_time (so
      first-trial labels are unchanged); the final score per pair never drops;
      novelty unchanged (always 0).
-  5. modulated_by on the release's molecules: no pair goes missing at any check
-     year (scores may fall: the release counted each trial up to twice).
+  5. modulated_by on the release's molecules: at most 1% of release pair-years
+     go missing (drug-target pairs whose only trials have no start date; 34 of
+     10,253 pairs in 26.09); scores may fall (the release counted each trial
+     up to twice).
   6. release molecules keep their exact Morgan fingerprint (block 0) unless the
      release had mean-imputed them.
 Reported
@@ -74,8 +78,10 @@ RELEASE_YEARS = (1995, 2025)
 PUBMED_DATED = {"has_function_in", "interacts_with"}
 # Re-dated relations: years the bench graph may lag the release by
 REDATED_LAG = {"literature": 1}
-# Relations that lose release edges by design: reported only
-REPORT_ONLY = {"clinical_trial_Unknown/Operational"}
+# Relations that lose release edges by design (no outcome for UNKNOWN-status
+# trials; trials with no start date left out): reported only
+REPORT_ONLY = {"clinical_trial_Unknown/Operational", "clinical_trial_positive",
+               "clinical_trial_unmet_efficacy", "clinical_trial_adverse_effects"}
 
 
 def _scores_before(src, dst, t, w, year, symmetric=False) -> pd.Series:
@@ -262,7 +268,7 @@ def main() -> int:
         return 1
     g = evidence_only_grows(bench[MOD_EDGE], ref[MOD_EDGE], to_bench["molecule"], to_bench["target"])
     report["evidence_only_grows"]["|".join(MOD_EDGE)] = g
-    check("edges.modulated_by.no_pair_missing", g["missing"] == 0,
+    check("edges.modulated_by.few_pairs_missing", g["missing"] <= 0.01 * g["pairs"],
           f"missing {g['missing']:,} of {g['pairs']:,} release pair-years; lower score {g['lower']:,} "
           f"(expected: trials no longer counted twice); bench molecules {len(b_mol):,} vs release {len(r_mol):,}")
 
