@@ -18,7 +18,10 @@ ment      3 years after the split's last entry year
 
 T1 labels are read off the graph's own target->disease ``clinical_trial_*``
 edges, so a label year is by construction the year the masking rule hides. T3
-labels are external and unchanged.
+labels are read off the start-dated trial edge (``build_advancement_labels``):
+a pair enters Phase II in the first year a Phase II trial starts while it has
+no Phase III+ trial, and is positive if a Phase III+ trial starts by the
+horizon of its label file (``ADVANCEMENT_LABEL_FILES``).
 
 T1 positives are graded for NDCG by their max outcome phase: the highest phase
 among the pair's finished trials (outcome edges) up to the end of the graph.
@@ -81,6 +84,28 @@ MIN_FIRST_TRIAL_PHASE = {("discovery", "test"): 0.1}
 # evidence year, so its latest pairs enter Phase II window years before it.
 ADVANCEMENT_SPLITS = {"train": ("train", None, 2015), "val": ("eval", 2016, 2019),
                       "test": ("eval", 2020, None)}
+
+# T3 labels come from the start-dated trial edge, whose score is the highest
+# phase weight among the pair's trials started up to its year.
+ADVANCEMENT_RELATION = "clinical_trial_ongoing"
+# Phase weight -> phase. Compound stages count as their lower phase; unknown
+# phase (0.01) is ignored.
+WEIGHT_PHASE = {0.05: 1, 0.1: 1, 0.15: 1, 0.2: 2, 0.5: 2, 0.7: 3, 1.0: 4}
+ADVANCEMENT_WINDOW = 3  # years every pair gets to reach Phase III
+FIRST_ENTRY_YEAR = 1995
+# Label file -> (first entry year, last entry year, outcome horizon). Train
+# pairs are labelled ADVANCEMENT_WINDOW years after the last train entry year;
+# eval pairs at the graph's last year, so the last eval entries also get
+# ADVANCEMENT_WINDOW years.
+ADVANCEMENT_LABEL_FILES = {
+    "train": (FIRST_ENTRY_YEAR, SPLITS["train"][1], SPLITS["train"][1] + ADVANCEMENT_WINDOW),
+    "eval": (SPLITS["val"][0], LAST_GRAPH_YEAR - ADVANCEMENT_WINDOW, LAST_GRAPH_YEAR),
+}
+# T3 results are reported per therapeutic area: the primary ones are those not
+# matching this pattern with at least MIN_PRIMARY_TA_PAIRS eval pairs that have
+# direct (non-trial) target-disease evidence before their entry year.
+SECONDARY_TA_PATTERN = "biological.*process|pregnancy|poisoning|procedure|animal|infectious"
+MIN_PRIMARY_TA_PAIRS = 100
 
 T1_RELATION_PREFIX = "clinical_trial"
 
@@ -277,3 +302,88 @@ def advancement_labels(release_dir: str | Path, split: str) -> pd.DataFrame:
     if hi is not None:
         keep &= y <= hi
     return df[keep].reset_index(drop=True)
+
+
+def advancement_years(release_dir: str | Path) -> pd.DataFrame:
+    """Phase II entry year and first Phase III+ year of every (target, disease) pair.
+
+    A pair enters Phase II in the first year its highest phase so far is 2; a
+    pair whose first Phase II trial starts in the same year as, or after, a
+    Phase III+ one never enters (entry_year NaN). Returns src, dst, entry_year,
+    phase3_year.
+    """
+    from safetensors import safe_open
+
+    release_dir = Path(release_dir)
+    meta = _release_meta(release_dir)
+    e = next((e for e in meta["edge_types"]
+              if e["rel"] == ADVANCEMENT_RELATION and (e["src"], e["dst"]) == ("target", "disease")), None)
+    if e is None:
+        raise ValueError(f"no target->{ADVANCEMENT_RELATION}->disease edges in {release_dir}")
+    with safe_open(str(release_dir / "graph.safetensors"), framework="np") as f:
+        ei = f.get_tensor(e["tensors"]["edge_index"]["key"])
+        t = f.get_tensor(e["tensors"]["edge_time"]["key"])
+        w = np.round(f.get_tensor(e["tensors"]["edge_attr"]["key"])[:, 0].astype(np.float64), 3)
+    unknown = sorted(set(w.tolist()) - set(WEIGHT_PHASE) - {0.01})
+    if unknown:
+        raise ValueError(f"{ADVANCEMENT_RELATION} scores with no phase: {unknown}")
+    df = pd.DataFrame({"src": ei[0], "dst": ei[1], "year": t, "phase": pd.Series(w).map(WEIGHT_PHASE)})
+    df = df.dropna(subset=["phase"]).sort_values(["src", "dst", "year"])
+    # the score is already a running maximum; take it again so the rule holds as stated
+    df["phase"] = df.groupby(["src", "dst"])["phase"].cummax()
+    entry = df[df["phase"] == 2].groupby(["src", "dst"])["year"].min().rename("entry_year")
+    phase3 = df[df["phase"] >= 3].groupby(["src", "dst"])["year"].min().rename("phase3_year")
+    return pd.concat([entry, phase3], axis=1).reset_index()
+
+
+def build_advancement_labels(release_dir: str | Path) -> dict[str, pd.DataFrame]:
+    """T3 label files (``ADVANCEMENT_LABEL_FILES``): every pair entering Phase II
+    within a file's entry years, positive if it reaches Phase III by the file's
+    horizon. Columns: target_id, disease_id, target_index, disease_index,
+    transition_year, outcome."""
+    release_dir = Path(release_dir)
+    yrs = advancement_years(release_dir)
+    tid, did = node_ids(release_dir, "target"), node_ids(release_dir, "disease")
+    out = {}
+    for name, (lo, hi, horizon) in ADVANCEMENT_LABEL_FILES.items():
+        g = yrs[yrs["entry_year"].between(lo, hi)]
+        src, dst = g["src"].to_numpy(np.int64), g["dst"].to_numpy(np.int64)
+        out[name] = pd.DataFrame({
+            "target_id": tid[src], "disease_id": did[dst],
+            "target_index": src, "disease_index": dst,
+            "transition_year": g["entry_year"].to_numpy(np.int64),
+            "outcome": (g["phase3_year"] <= horizon).to_numpy(),  # NaN (never) -> False
+        }).sort_values(["transition_year", "disease_id", "target_id"], ignore_index=True)
+    return out
+
+
+def therapeutic_areas(diseases_dir: str | Path) -> pd.DataFrame:
+    """Each disease's Open Targets therapeutic areas, plus ("ALL_0", "all") for
+    every disease that has one. Columns: disease_id, therapeutic_area_id,
+    therapeutic_area_name."""
+    import pyarrow.dataset as ds
+
+    d = ds.dataset(str(diseases_dir), format="parquet").to_table(
+        columns=["id", "name", "therapeuticAreas", "ontology"]).to_pandas()
+    is_ta = d["ontology"].map(lambda o: bool(o) and bool(o.get("isTherapeuticArea")))
+    names = dict(zip(d.loc[is_ta, "id"], d.loc[is_ta, "name"]))
+    ex = d[["id", "therapeuticAreas"]].explode("therapeuticAreas").dropna()
+    ex = ex[ex["therapeuticAreas"].isin(names)]
+    ta = pd.DataFrame({"disease_id": ex["id"].to_numpy(), "therapeutic_area_id": ex["therapeuticAreas"].to_numpy(),
+                       "therapeutic_area_name": ex["therapeuticAreas"].map(names).to_numpy()})
+    every = pd.DataFrame({"disease_id": ta["disease_id"].unique(), "therapeutic_area_id": "ALL_0",
+                          "therapeutic_area_name": "all"})
+    return (pd.concat([every, ta], ignore_index=True).drop_duplicates()
+            .sort_values(["disease_id", "therapeutic_area_id"], ignore_index=True))
+
+
+def primary_therapeutic_areas(release_dir: str | Path, eval_labels: pd.DataFrame,
+                              tas: pd.DataFrame) -> list[str]:
+    """Names of the therapeutic areas T3 is reported on (see SECONDARY_TA_PATTERN)."""
+    first = _first_years(Path(release_dir), "target", "disease", lambda r: not r.startswith(T1_RELATION_PREFIX))
+    first = first.rename(columns={"src": "target_index", "dst": "disease_index", "year": "first_evidence_year"})
+    lab = eval_labels.merge(first, on=["target_index", "disease_index"], how="left")
+    lab["has_evidence"] = lab["first_evidence_year"] < lab["transition_year"]  # NaN -> False
+    per = lab.merge(tas, on="disease_id").groupby("therapeutic_area_name")["has_evidence"].sum()
+    keep = per[(per >= MIN_PRIMARY_TA_PAIRS) & ~per.index.str.contains(SECONDARY_TA_PATTERN)]
+    return sorted(keep.index.tolist(), key=lambda n: (n != "all", n))

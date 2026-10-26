@@ -774,9 +774,10 @@ def load_advancement_labels(
     mappings_file: str = None,
     verbose: bool = True,
 ) -> AdvancementLabels:
-    """Load advancement supervision labels from the dataset CSVs.
+    """Load advancement supervision labels from the dataset CSVs (or the release's
+    labels/train.parquet and eval.parquet).
 
-    The CSVs carry ``target_id, disease_id, transition_year, outcome``; node IDs
+    The files carry ``target_id, disease_id, transition_year, outcome``; node IDs
     are resolved to graph indices through the build-time node mapping. Rows whose
     endpoints are absent from the graph are dropped with a warning (they cannot
     be scored) — with a graph built by ``build_event_graph.py`` against the same
@@ -806,7 +807,7 @@ def load_advancement_labels(
         path = _resolve_repo_path(path)
         if not path.exists():
             raise FileNotFoundError(f"Advancement {split} CSV not found: {path}")
-        df = pd.read_csv(path)
+        df = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
         missing = {"target_id", "disease_id", "transition_year", "outcome"} - set(df.columns)
         if missing:
             raise ValueError(f"{path} is missing required columns: {sorted(missing)}")

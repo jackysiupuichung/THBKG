@@ -1,22 +1,26 @@
 #!/usr/bin/env python
-"""Write the T1 label table into a release directory and summarise both tasks.
+"""Write the benchmark label tables into a release directory and summarise them.
 
-    python scripts/benchmark/build_task_labels.py --release-dir $OUT/hf_release/THBKG
+    python scripts/benchmark/build_task_labels.py --release-dir $OUT/hf_release/THBKG \
+        [--diseases-dir $INPUT_EVIDENCE_DIR/diseases]
 
 Writes
   labels/discovery.parquet    T1: target_id, disease_id, *_index, first_trial_year,
-                              max_outcome_phase, grade
+                              first_trial_phase, max_outcome_phase, grade
+  labels/train.parquet        T3, read off the graph's start-dated trial edge:
+  labels/eval.parquet           target_id, disease_id, *_index, transition_year, outcome
+  labels/therapeutic_areas.parquet          disease -> therapeutic areas (needs
+  labels/primary_therapeutic_areas.json     --diseases-dir, default
+                                            $INPUT_EVIDENCE_DIR/diseases)
   benchmark_tasks.json        splits, slate filters, label counts and slate statistics
                               per task and split, plus the closed-form random floor on
                               val and test
-
-T3 (advancement) labels are the existing labels/train.parquet and eval.parquet;
-they are only summarised here.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -26,8 +30,9 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
-    ADVANCEMENT_SPLITS, MIN_DISEASE_POSITIVES, MIN_FIRST_TRIAL_PHASE, SPLITS, advancement_labels, build_discovery_labels, decision_years,
-    last_label_year, task_slates,
+    ADVANCEMENT_LABEL_FILES, ADVANCEMENT_SPLITS, MIN_DISEASE_POSITIVES, MIN_FIRST_TRIAL_PHASE, SPLITS,
+    advancement_labels, build_advancement_labels, build_discovery_labels, decision_years, last_label_year,
+    primary_therapeutic_areas, task_slates, therapeutic_areas,
 )
 
 
@@ -47,6 +52,10 @@ def _split_stats(task, split, labels, n_targets) -> tuple[pd.DataFrame, dict]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--release-dir", required=True, type=Path)
+    ap.add_argument("--diseases-dir", type=Path,
+                    default=(Path(os.environ["INPUT_EVIDENCE_DIR"]) / "diseases"
+                             if os.environ.get("INPUT_EVIDENCE_DIR") else None),
+                    help="Open Targets disease index, for the therapeutic-area tables")
     args = ap.parse_args()
     rd = args.release_dir
     meta = json.loads((rd / "metadata.json").read_text())
@@ -55,6 +64,23 @@ def main() -> None:
     t1 = build_discovery_labels(rd)
     t1.to_parquet(rd / "labels" / "discovery.parquet", index=False)
     print(f"labels/discovery.parquet:   {len(t1):,} (target, disease) pairs")
+
+    t3 = build_advancement_labels(rd)
+    for name, df in t3.items():
+        df.to_parquet(rd / "labels" / f"{name}.parquet", index=False)
+        lo, hi, horizon = ADVANCEMENT_LABEL_FILES[name]
+        print(f"labels/{name}.parquet: {len(df):,} pairs entering Phase II {lo}-{hi}, "
+              f"{int(df['outcome'].sum()):,} reach Phase III by {horizon}")
+    primary = None
+    if args.diseases_dir is not None:
+        tas = therapeutic_areas(args.diseases_dir)
+        tas.to_parquet(rd / "labels" / "therapeutic_areas.parquet", index=False)
+        primary = primary_therapeutic_areas(rd, t3["eval"], tas)
+        (rd / "labels" / "primary_therapeutic_areas.json").write_text(json.dumps(primary, indent=2))
+        print(f"labels/therapeutic_areas.parquet: {tas['disease_id'].nunique():,} diseases; "
+              f"{len(primary)} primary areas")
+    else:
+        print("no --diseases-dir: therapeutic-area tables not written")
 
     last = last_label_year(t1)
     summary = {
