@@ -10,11 +10,11 @@
 
 # Node features for the benchmark graph.
 #
-# The target node set is unchanged from 26.09 (guarded: aborts if any node set
-# differs from the release). Rebuilt here:
+# Every node type's features are rebuilt here, for this graph's own node sets
+# (a few targets differ from the 26.09 release; reported below):
 #   - targets: from the 26.09 raw inputs, to record which values are
-#     mean-imputed (target_features_imputed.parquet); the vectors must match
-#     the release's;
+#     mean-imputed (target_features_imputed.parquet); the vectors of targets
+#     the release also has must match the release's;
 #   - GO / Reactome: autoencoders retrained with a learnable input per node (the
 #     release fed torch.eye(N, 128), leaving 90% of GO terms with zero input);
 #   - molecules: per-modality tensors (Morgan, ESM-2 reduced to 64 by PCA,
@@ -35,9 +35,9 @@ import os, torch
 ref = torch.load(f"{os.environ['REF_BASE']}/progression/temporal_graph_datatype_mappings.pt", weights_only=False)["node_mapping"]
 for level in ("datatype", "datasource"):
     new = torch.load(f"{os.environ['OUTPUT_BASE']}/progression/temporal_graph_{level}_mappings.pt", weights_only=False)["node_mapping"]
-    for nt in ("target", "disease", "go", "reactome"):
-        assert new[nt] == ref[nt], f"{level}: {nt} node mapping differs from 26.09; cannot reuse its features"
-    print(f"{level}: target/disease/go/reactome mappings identical to 26.09; molecule {len(ref['molecule']):,} -> {len(new['molecule']):,}")
+    for nt in ref:
+        r, n = set(ref[nt]), set(new[nt])
+        print(f"{level} {nt}: {len(r):,} -> {len(n):,} nodes ({len(r - n)} dropped, {len(n - r)} added)")
 PY
 
 mkdir -p "$FEATURE_OUTPUT_DIR"
@@ -53,10 +53,10 @@ python -u - <<'PY'
 import os, torch
 ref = torch.load(f"{os.environ['REF_BASE']}/features/processed/integrated_target_features.pt")
 new = torch.load(f"{os.environ['FEATURE_OUTPUT_DIR']}/integrated_target_features.pt")
-assert ref.keys() == new.keys(), "target feature IDs differ from 26.09"
-bad = [k for k in ref if not torch.allclose(ref[k], new[k], atol=1e-5)]
+shared = ref.keys() & new.keys()
+bad = [k for k in shared if not torch.allclose(ref[k], new[k], atol=1e-5)]
 assert not bad, f"{len(bad)} target vectors differ from 26.09, e.g. {bad[:3]}"
-print(f"target features: {len(new):,} vectors match 26.09")
+print(f"target features: {len(shared):,} shared vectors match 26.09; {len(new.keys() - ref.keys())} new targets")
 PY
 
 python -m preprocessing.node_features.build_all_features \

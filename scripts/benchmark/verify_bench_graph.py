@@ -9,14 +9,19 @@ year's rows only; recovers PubMed-dated GO / IntAct rows lost in 26.09; stores
 IntAct pairs once in (min, max) order without self-loops; counts each
 (drug, target, trial) once in modulated_by; drops rows scoring 0; dates
 literature by publicationDate; emits no outcome edge for trials of UNKNOWN
-status; and re-encodes disease, GO and Reactome features. The checks below pin down what must NOT change. Fails
-(exit 1) on any hard check.
+status; and re-encodes disease, GO and Reactome features. The checks below
+pin down what must NOT change. Fails (exit 1) on any hard check.
+
+Nodes are matched by id: edits to the evidence add or remove a few targets
+(dropped score-0 rows, recovered PubMed-dated rows, evidence dated 2026), which
+shifts node indices.
 
 Hard checks
-  1. target/disease/go/reactome: same node ids in the same order; target
-     features identical; disease (768-d text) and GO / Reactome (64-d
-     autoencoder, now with a learnable node input) re-encoded, so their shape,
-     finiteness and distinct rows are checked.
+  1. disease/go/reactome: same node ids in the same order; re-encoded (disease
+     768-d text, GO / Reactome 64-d autoencoder with a learnable node input),
+     so their shape, finiteness and distinct rows are checked. target: every
+     release target missing from the bench graph had only score-0 evidence;
+     the targets both graphs share keep identical features.
   2. edge types: exactly the release's types.
   3. every dated edge type without a molecule endpoint: EVIDENCE ONLY GROWS.
      At each check year Y, every pair the release has before Y is present
@@ -34,9 +39,10 @@ Hard checks
      release's two directions taking their higher score.
   3b. static ontology types: identical edge_index/edge_time; edge_attr is
      exactly (1, 0).
-  4. clinical_trial_ongoing: same (target, disease) pairs with the same first
-     edge_time (so first-trial labels are unchanged); the final score per pair
-     never drops; novelty unchanged (always 0).
+  4. clinical_trial_ongoing, on the release's time range (folded into 1995,
+     to 2025): same (target, disease) pairs with the same first edge_time (so
+     first-trial labels are unchanged); the final score per pair never drops;
+     novelty unchanged (always 0).
   5. modulated_by on the release's molecules: no pair goes missing at any check
      year (scores may fall: the release counted each trial up to twice).
   6. release molecules keep their exact Morgan fingerprint (block 0) unless the
@@ -61,6 +67,10 @@ ONGOING_EDGE = ("target", "clinical_trial_ongoing", "disease")
 
 
 CHECK_YEARS = (1996, 2000, 2005, 2010, 2016, 2020, 2025, 2026)
+# The release's time range: evidence before 1995 was folded into 1995 (the
+# bench graph folds at 1985) and nothing after 2025 (the bench graph runs to
+# September 2026)
+RELEASE_YEARS = (1995, 2025)
 PUBMED_DATED = {"has_function_in", "interacts_with"}
 # Re-dated relations: years the bench graph may lag the release by
 REDATED_LAG = {"literature": 1}
@@ -84,18 +94,22 @@ def _scores_before(src, dst, t, w, year, symmetric=False) -> pd.Series:
     return last.set_index(["s", "d"])["w"]
 
 
-def evidence_only_grows(b_store, r_store, r_src_to_b=None, symmetric=False, lag=0) -> dict:
+def evidence_only_grows(b_store, r_store, src_map, dst_map, symmetric=False, lag=0) -> dict:
     """Per check year: release pairs missing from the bench graph, and with a lower score.
 
-    Release pairs with score 0 are skipped; the bench graph is read ``lag``
-    years later than the release.
+    ``src_map`` / ``dst_map`` take release node indices to bench indices (-1:
+    not in the bench graph). Release pairs with score 0 are skipped; the bench
+    graph is read ``lag`` years later than the release.
     """
-    def cols(store, src_map=None):
-        ei = store.edge_index.numpy().astype(np.int64)
-        src = ei[0] if src_map is None else src_map[ei[0]]
-        return src, ei[1], store.edge_time.numpy(), store.edge_attr[:, 0].numpy().astype(np.float64)
-    rb, rr = cols(b_store), cols(r_store, r_src_to_b)
-    out = {"pairs": 0, "missing": 0, "lower": 0, "earlier_in_bench": 0, "release_score0_skipped": 0}
+    ei = r_store.edge_index.numpy().astype(np.int64)
+    s, d = src_map[ei[0]], dst_map[ei[1]]
+    keep = (s >= 0) & (d >= 0)
+    w = r_store.edge_attr[:, 0].numpy().astype(np.float64)
+    rr = (s[keep], d[keep], r_store.edge_time.numpy()[keep], w[keep])
+    eb = b_store.edge_index.numpy().astype(np.int64)
+    rb = (eb[0], eb[1], b_store.edge_time.numpy(), b_store.edge_attr[:, 0].numpy().astype(np.float64))
+    out = {"pairs": 0, "missing": 0, "lower": 0, "earlier_in_bench": 0, "release_score0_skipped": 0,
+           "release_rows_on_dropped_nodes": int((~keep).sum())}
     for y in CHECK_YEARS:
         r = _scores_before(*rr, y, symmetric=symmetric)
         out["release_score0_skipped"] += int((r <= 0).sum())
@@ -135,20 +149,42 @@ def main() -> int:
         if not ok:
             failures.append(name)
 
-    # 1. unchanged node types
-    for nt in ("target", "disease", "go", "reactome"):
+    # release node index -> bench node index (-1: not in the bench graph)
+    to_bench = {}
+    for nt in ref.node_types:
+        b_index = {n: i for i, n in enumerate(bench[nt].node_id)}
+        to_bench[nt] = np.array([b_index.get(n, -1) for n in ref[nt].node_id], dtype=np.int64)
+
+    # 1. node types
+    for nt in ("disease", "go", "reactome"):  # same nodes, re-encoded (see module docstring)
         same_ids = list(bench[nt].node_id) == list(ref[nt].node_id)
         check(f"nodes.{nt}.ids", same_ids, f"bench={bench[nt].num_nodes:,} ref={ref[nt].num_nodes:,}")
         if same_ids:
-            if nt in ("disease", "go", "reactome"):  # re-encoded (see module docstring)
-                bxd = bench[nt].x
-                width = {"disease": 768, "go": 64, "reactome": 64}[nt]
-                ok = bxd.dim() == 2 and bxd.size(0) == ref[nt].num_nodes and bool(torch.isfinite(bxd).all())
-                n_distinct = int(torch.unique(bxd.round(decimals=4), dim=0).size(0))
-                check(f"nodes.{nt}.x_reencoded", ok and bxd.size(1) == width and n_distinct >= 0.99 * bxd.size(0),
-                      f"shape {list(bxd.shape)}, distinct rows {n_distinct:,} of {bxd.size(0):,}")
-            else:
-                check(f"nodes.{nt}.x", torch.equal(bench[nt].x, ref[nt].x))
+            bxd = bench[nt].x
+            width = {"disease": 768, "go": 64, "reactome": 64}[nt]
+            ok = bxd.dim() == 2 and bxd.size(0) == ref[nt].num_nodes and bool(torch.isfinite(bxd).all())
+            n_distinct = int(torch.unique(bxd.round(decimals=4), dim=0).size(0))
+            check(f"nodes.{nt}.x_reencoded", ok and bxd.size(1) == width and n_distinct >= 0.99 * bxd.size(0),
+                  f"shape {list(bxd.shape)}, distinct rows {n_distinct:,} of {bxd.size(0):,}")
+    tmap = to_bench["target"]
+    gone = np.flatnonzero(tmap < 0)
+    # a release target may only disappear if all its dated evidence scored 0
+    best = np.zeros(ref["target"].num_nodes)
+    for et in ref.edge_types:
+        if "target" not in (et[0], et[2]) or bool((ref[et].edge_time < 0).all()):
+            continue
+        w = ref[et].edge_attr[:, 0].numpy().astype(np.float64)
+        for side, nt in ((0, et[0]), (1, et[2])):
+            if nt == "target":
+                np.maximum.at(best, ref[et].edge_index[side].numpy(), w)
+    added = bench["target"].num_nodes - int((tmap >= 0).sum())
+    check("nodes.target.dropped_only_score0", bool((best[gone] <= 0).all()),
+          f"release {ref['target'].num_nodes:,}, bench {bench['target'].num_nodes:,}: {len(gone)} dropped "
+          f"(max release score {float(best[gone].max()) if len(gone) else 0:.3f}), {added} added")
+    shared = np.flatnonzero(tmap >= 0)
+    check("nodes.target.x_shared_identical",
+          torch.equal(bench["target"].x[torch.from_numpy(tmap[shared])], ref["target"].x[torch.from_numpy(shared)]),
+          f"{len(shared):,} shared targets")
 
     # 2. edge types
     b_types, r_types = set(bench.edge_types), set(ref.edge_types)
@@ -163,7 +199,8 @@ def main() -> int:
     report["evidence_only_grows"] = {}
     for et in dated:
         lag = REDATED_LAG.get(et[1], 0)
-        g = evidence_only_grows(bench[et], ref[et], symmetric=(et[0] == et[2]), lag=lag)
+        g = evidence_only_grows(bench[et], ref[et], to_bench[et[0]], to_bench[et[2]],
+                                symmetric=(et[0] == et[2]), lag=lag)
         report["evidence_only_grows"]["|".join(et)] = g
         bad = g["missing"] + g["lower"]
         limit = 0.001 * g["pairs"] if et[1] in PUBMED_DATED or lag else 0
@@ -179,8 +216,10 @@ def main() -> int:
 
     # 3b. static ontology edges: same edges, attributes fixed to (score 1, novelty 0)
     for et in sorted(static & b_types):
-        same_struct = (torch.equal(bench[et].edge_index, ref[et].edge_index)
-                       and bool((bench[et].edge_time == -1).all()))  # explicit static edge_time
+        r_ei = np.stack([to_bench[et[0]][ref[et].edge_index[0].numpy()], to_bench[et[2]][ref[et].edge_index[1].numpy()]])
+        same_edges = (r_ei.min() >= 0 and r_ei.shape == tuple(bench[et].edge_index.shape)
+                      and np.array_equal(np.unique(r_ei, axis=1), np.unique(bench[et].edge_index.numpy(), axis=1)))
+        same_struct = same_edges and bool((bench[et].edge_time == -1).all())  # explicit static edge_time
         a = bench[et].edge_attr
         fixed = bool((a[:, 0] == 1).all() and (a[:, 1] == 0).all())
         check(f"edges.static.{et[1]}.{et[0]}", same_struct and fixed,
@@ -188,9 +227,10 @@ def main() -> int:
 
     # 4. ongoing trial edge: same pairs and first years, scores only go up
     if ONGOING_EDGE in b_types and ONGOING_EDGE in r_types:
-        tgt_ids, dis_ids = list(bench["target"].node_id), list(bench["disease"].node_id)
-        b_on = _edges_df(bench[ONGOING_EDGE], tgt_ids, dis_ids)
-        r_on = _edges_df(ref[ONGOING_EDGE], tgt_ids, dis_ids)
+        b_on = _edges_df(bench[ONGOING_EDGE], list(bench["target"].node_id), list(bench["disease"].node_id))
+        r_on = _edges_df(ref[ONGOING_EDGE], list(ref["target"].node_id), list(ref["disease"].node_id))
+        # compare on the release's time range
+        b_on = b_on[b_on["time"] <= RELEASE_YEARS[1]].assign(time=lambda x: x["time"].clip(lower=RELEASE_YEARS[0]))
         agg = {"time": "min", "w": "max", "n": "max"}
         b_pair = b_on.groupby(["src", "dst"]).agg(agg)
         r_pair = r_on.groupby(["src", "dst"]).agg(agg)
@@ -220,9 +260,7 @@ def main() -> int:
         json.dump(report, open(args.out, "w"), indent=2)
         print(f"\n❌ {len(failures)} check(s) failed -> {args.out}")
         return 1
-    b_index = {m: i for i, m in enumerate(b_mol)}
-    r_to_b = np.array([b_index[m] for m in r_mol], dtype=np.int64)
-    g = evidence_only_grows(bench[MOD_EDGE], ref[MOD_EDGE], r_src_to_b=r_to_b)
+    g = evidence_only_grows(bench[MOD_EDGE], ref[MOD_EDGE], to_bench["molecule"], to_bench["target"])
     report["evidence_only_grows"]["|".join(MOD_EDGE)] = g
     check("edges.modulated_by.no_pair_missing", g["missing"] == 0,
           f"missing {g['missing']:,} of {g['pairs']:,} release pair-years; lower score {g['lower']:,} "
