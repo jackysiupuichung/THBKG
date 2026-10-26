@@ -17,7 +17,7 @@
 #     the release also has must match the release's;
 #   - GO / Reactome: autoencoders retrained with a learnable input per node (the
 #     release fed torch.eye(N, 128), leaving 90% of GO terms with zero input);
-#   - molecules: per-modality tensors (Morgan, ESM-2 reduced to 64 by PCA,
+#   - molecules: per-modality tensors (Morgan, ESM-2 at full width (1,280),
 #     drug type, presence masks), see molecule_multimodal.py;
 #   - diseases: PubMedBERT over "<name>. <description>" at full width (768),
 #     padding excluded from the mean (the release kept the first 256 dims,

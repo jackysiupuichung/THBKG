@@ -10,11 +10,13 @@ concatenated:
                           molecule_structure.py). Structure source, in order: Open
                           Targets canonicalSmiles, ChEMBL canonical_smiles, ChEMBL
                           HELM via RDKit for drugs with no protein sequence.
-* ``x_esm``    [N, 64]    ESM-2 residue embeddings, mean-pooled over every protein
+* ``x_esm``    [N, 1280]  ESM-2 residue embeddings, mean-pooled over every protein
                           chain the drug has in ChEMBL (a two-chain antibody
-                          averages heavy + light by residue count), then reduced
-                          by PCA over the biologics. Nucleic-acid chains are not
-                          embedded. The full 1,280-d vectors go to a side file.
+                          averages heavy + light by residue count), centred on
+                          the biologics' mean and divided by one global scale
+                          (``--esm-pca-dim k`` keeps the top k principal
+                          components instead). Nucleic-acid chains are not
+                          embedded. The raw vectors also go to a side file.
 * ``has_morgan``, ``has_esm`` [N] bool: which nodes have each modality (rows of
                           nodes without it are zero and never reach the model).
 * ``drug_type`` [N] long: Open Targets drugType index (DRUG_TYPES).
@@ -25,7 +27,7 @@ structure (cells, plasma products, ~14% of trialled drugs) get the drug-type
 embedding alone.
 
 Writes ``molecule_modalities.pt``, ``molecule_esm2_full.safetensors`` (+ ``_ids.parquet``)
-and ``molecule_features.yaml`` (shapes, PCA and coverage). GPU recommended for ESM;
+and ``molecule_features.yaml`` (shapes, ESM scaling and coverage). GPU recommended for ESM;
 run via scripts/collecting_node_features_03.sh or scripts/benchmark/.
 """
 
@@ -211,25 +213,29 @@ def build(args: argparse.Namespace) -> None:
         c["esm"] += int(has_esm[r])
         c["neither"] += int(not has_morgan[r] and not has_esm[r])
 
-    # ESM-2: 1,280 dense, highly correlated values per biologic (8 principal
-    # components carry 90% of their variance; raw antibody vectors have median
-    # cosine 0.997). Reduce to the top components of a PCA over the biologics
-    # (sequences only: no labels or dates), without per-component whitening, which
-    # amplifies the low-variance tail; one global scale makes the values O(1).
+    # ESM-2: 1,280 dense, highly correlated values per biologic (raw antibody
+    # vectors have median cosine 0.997; 8 principal components carry 90% of the
+    # variance). Centre on the biologics' mean (sequences only: no labels or
+    # dates) so drugs differ by more than a shared offset, and divide by one
+    # global scale so the values are O(1). All dimensions are kept unless
+    # --esm-pca-dim asks for the top principal components; no per-component
+    # whitening, which would amplify the low-variance tail.
     esm_full = (np.stack([esm_by_drug[m] for m, h in zip(kg_ids, has_esm) if h]).astype(np.float64)
                 if has_esm.any() else np.zeros((0, args.esm_dim)))
-    k = min(args.esm_pca_dim, max(len(esm_full) - 1, 1))
+    k = min(args.esm_pca_dim, max(len(esm_full) - 1, 1)) if args.esm_pca_dim else esm_full.shape[1]
     x_esm = np.zeros((n, k), dtype=np.float32)
-    pca_meta = {"components": 0}
+    esm_meta = {"dim": k, "principal_components": bool(args.esm_pca_dim)}
     if len(esm_full) > 1:
         mu = esm_full.mean(0)
-        _, sv, vt = np.linalg.svd(esm_full - mu, full_matrices=False)
-        proj = (esm_full - mu) @ vt[:k].T
-        scale = float(proj.std())
-        x_esm[has_esm] = (proj / scale).astype(np.float32)
-        var = sv ** 2 / (sv ** 2).sum()
-        pca_meta = {"components": k, "fit_on": int(len(esm_full)), "variance_kept": round(float(var[:k].sum()), 4),
-                    "global_scale": scale, "whitened": False}
+        centred = esm_full - mu
+        if args.esm_pca_dim:
+            _, sv, vt = np.linalg.svd(centred, full_matrices=False)
+            centred = centred @ vt[:k].T
+            var = sv ** 2 / (sv ** 2).sum()
+            esm_meta["variance_kept"] = round(float(var[:k].sum()), 4)
+        scale = float(centred.std())
+        x_esm[has_esm] = (centred / scale).astype(np.float32)
+        esm_meta.update({"fit_on": int(len(esm_full)), "centred": True, "global_scale": scale, "whitened": False})
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -259,7 +265,7 @@ def build(args: argparse.Namespace) -> None:
         "morgan": {"radius": args.radius, "fp_dim": args.fp_dim, "n": int(has_morgan.sum()),
                    "source_counts": morgan_src},
         "esm": {"model": args.esm_model, "pooling": "residue mean over all protein chains",
-                "n": int(has_esm.sum()), "n_chains": int(len(prot)), "pca": pca_meta,
+                "n": int(has_esm.sum()), "n_chains": int(len(prot)), "scaling": esm_meta,
                 "full_width_files": ["molecule_esm2_full.safetensors", "molecule_esm2_full_ids.parquet"]},
         "chembl_cache": str(args.chembl_cache),
         "num_molecules": n,
@@ -269,7 +275,7 @@ def build(args: argparse.Namespace) -> None:
 
     print(f"\n✅ {n:,} molecules -> {out / 'molecule_modalities.pt'}: x_morgan [{n}, {args.fp_dim}] "
           f"({int(has_morgan.sum()):,} present), x_esm [{n}, {k}] ({int(has_esm.sum()):,} present, "
-          f"PCA keeps {pca_meta.get('variance_kept', 0):.1%})")
+          f"{'top principal components' if args.esm_pca_dim else 'all dimensions, centred and scaled'})")
     print(f"   {'drugType':26s} {'n':>5s} {'morgan':>7s} {'esm':>5s} {'neither':>8s}")
     for t, c in sorted(type_counts.items(), key=lambda kv: -kv[1]["n"]):
         print(f"   {t:26s} {c['n']:5d} {c['morgan']:7d} {c['esm']:5d} {c['neither']:8d}")
@@ -286,7 +292,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--radius", type=int, default=2)
     ap.add_argument("--esm-model", default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--esm-dim", type=int, default=1280, help="only used if no drug has a sequence")
-    ap.add_argument("--esm-pca-dim", type=int, default=64, help="principal components kept of the ESM-2 embeddings")
+    ap.add_argument("--esm-pca-dim", type=int, default=0,
+                    help="keep only this many principal components of the ESM-2 embeddings (default 0: all 1,280)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--batch-size", type=int, default=8)
     return ap.parse_args()
