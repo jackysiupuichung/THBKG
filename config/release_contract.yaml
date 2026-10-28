@@ -1,0 +1,135 @@
+# What every THBKG release directory must hold, whatever the Open Targets
+# version. scripts/benchmark/check_release.py checks a release against it.
+#
+# Counts are not here: they change with every version. compare_releases.py
+# compares them release to release, within the bands under drift_defaults
+# unless a changes file (config/release_changes/) declares otherwise.
+#
+# The time range is not here either: it is config/event_graph_config.yaml
+# time_range, which the build reads and check_release.py cross-checks.
+
+format: thbkg-hetero-safetensors
+format_version: "1.0"
+edge_attr_columns: [score]
+
+# Files every release has, and the only other files it may have (globs).
+# Anything else (a stray __pycache__, a left-over label file) fails.
+files:
+  required:
+    - metadata.json
+    - graph.safetensors
+    - load_thbkg.py
+    - README.md
+    - croissant.json
+    - source_versions.json
+    - benchmark_tasks.json
+    - molecule_features.yaml
+    - labels/discovery.parquet
+    - labels/train.parquet
+    - labels/eval.parquet
+    - labels/therapeutic_areas.parquet
+    - labels/primary_therapeutic_areas.json
+    - scores/target_disease_by_source.parquet
+    - features/molecule_esm2_full.safetensors
+    - features/molecule_esm2_full_ids.parquet
+    - features/disease_embeddings.yaml
+    - features/target_features_imputed.parquet
+  optional:
+    - mappings/*.parquet          # checked per node type below
+    - snapshots/*.safetensors     # stage 5; checked when present
+    - snapshots/index.json
+    - verify_*.json               # build reports
+    - check_release.json
+    - compare_*.json
+
+# Upstream sources source_versions.json must record. open_targets.release
+# must equal the version the release was built for (--ot-version).
+source_versions: [open_targets, gene_ontology, intact, target_prioritisation,
+                  human_protein_atlas, chembl_biotherapeutics]
+
+# Node tensors: [width, dtype]; width null for a 1-d tensor. A node type may
+# hold no other tensors. min_distinct_rows: fraction of rows that must differ
+# (a text or autoencoder embedding that collapses to a few vectors fails; the
+# 26.09 release embedded missing descriptions as 'None': 11 vectors for 4,411
+# diseases).
+node_types:
+  target:
+    id_pattern: '^ENSG\d{11}$'
+    tensors: {x: [56, float32]}
+  disease:
+    id_pattern: '^[A-Za-z]+_[A-Za-z]*\d+$'   # EFO_0000180, MONDO_0005148, OBA_VT0000047, NCIT_C3262
+    tensors: {x: [768, float32]}
+    min_distinct_rows: 0.99
+  go:
+    id_pattern: '^GO:\d{7}$'
+    tensors: {x: [64, float32]}
+    min_distinct_rows: 0.99
+  reactome:
+    id_pattern: '^R-HSA-\d+$'
+    tensors: {x: [64, float32]}
+    min_distinct_rows: 0.99
+  molecule:
+    id_pattern: '^CHEMBL\d+$'
+    # per modality, never concatenated; x_<m> rows are zero where has_<m> is false
+    tensors:
+      x_morgan: [1024, float32]
+      x_esm: [1280, float32]
+      has_morgan: [null, bool]
+      has_esm: [null, bool]
+      drug_type: [null, int64]
+    modalities: [morgan, esm]
+
+# Edge types and how their rows are checked.
+#   evidence       dated; score in (0, score_max]; never falls within a pair
+#   symmetric      evidence stored once per pair, as (min, max), no self-loops
+#   static         edge_time -1, score 1, acyclic, no self-loops
+#   trial_start    dated when the trial started: unhalved phase weights
+#   trial_outcome  dated when it ended: phase weights
+#   trial_failure  dated when it ended, stopped for safety or efficacy: Open
+#                  Targets halves these, so twice the score is a phase weight
+edge_types:
+  - [disease, associated_with, reactome, evidence]
+  - [disease, is_subtype_of, disease, static]
+  - [go, is_subtype_of, go, static]
+  - [molecule, modulated_by, target, evidence]
+  - [reactome, is_subpathway_of, reactome, static]
+  - [target, affected_pathway, disease, evidence]
+  - [target, animal_model, disease, evidence]
+  - [target, clinical_trial_Unknown/Operational, disease, trial_outcome]
+  - [target, clinical_trial_adverse_effects, disease, trial_failure]
+  - [target, clinical_trial_ongoing, disease, trial_start]
+  - [target, clinical_trial_positive, disease, trial_outcome]
+  - [target, clinical_trial_unmet_efficacy, disease, trial_failure]
+  - [target, genetic_association, disease, evidence]
+  - [target, has_function_in, go, evidence]
+  - [target, interacts_with, target, symmetric]
+  - [target, involved_in, reactome, evidence]
+  - [target, literature, disease, evidence]
+  - [target, rna_expression, disease, evidence]
+  - [target, somatic_mutation, disease, evidence]
+
+# Open Targets clinical-precedence weight per phase; must equal
+# preprocessing/temporal_graph/parsers/apply_trial_resolution.py STAGE_SCORE.
+phase_weights: [0.01, 0.05, 0.1, 0.15, 0.2, 0.5, 0.7, 1.0]
+
+# Snapshots run from this decision year to the last edge year + 1.
+first_snapshot_year: 1995
+
+# compare_releases.py: the band every metric must stay in, new release against
+# the previous one, unless a changes file declares the change. ratio metrics
+# are new / old, fractions are of the old release's nodes or pairs.
+drift_defaults:
+  check_years: [2000, 2010, 2016, 2020]
+  bands:
+    nodes.removed: [0, 0.01]
+    nodes.added: [0, 0.05]
+    edges.rows: [0.9, 1.25]
+    edges.pairs: [0.9, 1.25]
+    edges.missing: [0, 0.01]               # at each check year
+    edges.lower: [0, 0.01]                 # at each check year
+    edges.gone: [0, 0.01]                  # missing at every year, not just re-dated
+    edges.first_year_changed: [0, 0.02]
+    edges.score_p50: [0.95, 1.05]
+    edges.score_p99: [0.95, 1.05]
+    labels.rows: [0.9, 1.25]
+    labels.positive_rate: [-0.02, 0.02]    # new - old

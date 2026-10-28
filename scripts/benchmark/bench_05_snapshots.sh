@@ -29,6 +29,9 @@ for et in d.edge_types:
 print("✅ 2016 snapshot loads; max-normalised edge_attr within [0, 1]; no edge dated >= 2016")
 PY
 
+# The release contract again, now with the snapshots (rewrites check_release.json)
+python scripts/benchmark/check_release.py --release-dir "$RELEASE_DIR" --ot-version "$OT_VERSION" --require-snapshots
+
 # safetensors writes 0600 files; make the release readable to the group and others
 chmod -R a+rX "$RELEASE_DIR"
 

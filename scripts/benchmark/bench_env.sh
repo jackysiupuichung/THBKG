@@ -40,8 +40,13 @@ done
 # PubMed publication years looked up while parsing (parsers/parser.py), kept on disk
 PUBMED_YEAR_CACHE="${OUTPUT_BASE}/pubmed_years.parquet"
 
+# Release checks (stage 4): the release this build is compared with, and the
+# changes declared against it. Point both at the new pair for each version.
+PREV_RELEASE_DIR="${PREV_RELEASE_DIR:-${REF_BASE}/hf_release/THBKG}"
+RELEASE_CHANGES="${RELEASE_CHANGES:-config/release_changes/v26.09_to_26.09_bench.yaml}"
+
 export OT_VERSION REF_BASE OUTPUT_BASE INPUT_EVIDENCE_DIR RAW_EDGES_DIR RAW_NODES_DIR RESOLVED_EVIDENCE_DIR NCT_CACHE
-export PUBMED_YEAR_CACHE RELEASE_DIR FEATURE_OUTPUT_DIR EVENT_OUTPUT_DIR
+export PUBMED_YEAR_CACHE RELEASE_DIR FEATURE_OUTPUT_DIR EVENT_OUTPUT_DIR PREV_RELEASE_DIR RELEASE_CHANGES
 export PYTHONUNBUFFERED=1
 export HF_HUB_OFFLINE=1  # compute nodes are offline; ESM-2 must already be in the HF cache
 

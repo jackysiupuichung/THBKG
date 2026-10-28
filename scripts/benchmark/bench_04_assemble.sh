@@ -63,6 +63,13 @@ cp -p "${FEATURE_OUTPUT_DIR}/molecule_esm2_full.safetensors" "${FEATURE_OUTPUT_D
       "${FEATURE_OUTPUT_DIR}/disease_embeddings.yaml" "${FEATURE_OUTPUT_DIR}/target_features_imputed.parquet" \
       "$RELEASE_DIR/features/"
 
+# What every release must hold whatever the version (config/release_contract.yaml),
+# then the drift from the previous release, which the changes file must declare.
+# Either failing stops the chain before the snapshots.
+python scripts/benchmark/check_release.py --release-dir "$RELEASE_DIR" --ot-version "$OT_VERSION"
+python scripts/benchmark/compare_releases.py --old "$PREV_RELEASE_DIR" --new "$RELEASE_DIR" \
+  --changes "$RELEASE_CHANGES" --diseases-dir "${INPUT_EVIDENCE_DIR}/diseases"
+
 # safetensors writes 0600 files; make the release readable to the group and others
 chmod -R a+rX "$RELEASE_DIR"
 
