@@ -8,7 +8,8 @@
 #SBATCH -t 1:0:0
 
 # Attach features, check the graph against the v26.09 release, export a
-# release directory, and write the T1 benchmark labels into it.
+# release directory, and write the benchmark labels (T1, T3, therapeutic areas)
+# and the per-source evidence scores into it.
 set -euo pipefail
 source scripts/benchmark/bench_env.sh
 
@@ -23,7 +24,8 @@ done
 python scripts/benchmark/verify_bench_graph.py \
   --bench-graph "${FINAL_GRAPH_DIR}/hetero_graph_with_features_datatype.pt" \
   --ref-graph "${REF_BASE}/graph/hetero_graph_with_features_datatype.pt" \
-  --out "${OUTPUT_BASE}/verify_vs_26.09.json"
+  --out "${OUTPUT_BASE}/verify_vs_26.09.json" \
+  --clinical-evidence "${REF_BASE}/raw_backup/sourceId=clinical_precedence"
 
 # Export into a fresh directory so no file from an earlier build lingers.
 rm -rf "${RELEASE_DIR:?}"
@@ -51,6 +53,9 @@ print(f"wrote {out}")
 PY
 
 python scripts/benchmark/build_task_labels.py --release-dir "$RELEASE_DIR"
+# per-source target-disease scores, for baselines that need the sources apart
+python scripts/benchmark/write_source_scores.py \
+  --events "${EVENT_OUTPUT_DIR}/events_datasource.parquet" --release-dir "$RELEASE_DIR"
 cp -p "${OUTPUT_BASE}/verify_vs_26.09.json" "${FEATURE_OUTPUT_DIR}/molecule_features.yaml" "$RELEASE_DIR/"
 # raw ESM-2 embeddings of the biologics (the graph carries them centred and scaled)
 mkdir -p "$RELEASE_DIR/features"

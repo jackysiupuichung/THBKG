@@ -42,15 +42,20 @@ Hard checks
   3b. static ontology types: identical edge_index/edge_time; edge_attr is
      exactly (1, 0).
   4. clinical_trial_ongoing, on the release's time range (folded into 1995,
-     to 2025): same (target, disease) pairs with the same first edge_time (so
-     first-trial labels are unchanged); the final score per pair never drops;
-     novelty unchanged (always 0).
-  5. modulated_by on the release's molecules: at most 1% of release pair-years
-     go missing (drug-target pairs whose only trials have no start date; 34 of
-     10,253 pairs in 26.09); scores may fall (the release counted each trial
-     up to twice).
-  6. release molecules keep their exact Morgan fingerprint (block 0) unless the
-     release had mean-imputed them.
+     to 2025): the same (target, disease) pairs, except that a pair whose
+     trials ALL lack a start date may be gone; for pairs whose trials all have
+     one, the same first edge_time (so first-trial labels are unchanged) and a
+     final score that never drops; novelty unchanged (always 0). In check 3, a
+     missing or lower ongoing pair-year is allowed only for a pair with at
+     least one trial lacking a start date (the release dated those trials by
+     publication date). Trials are read from --clinical-evidence.
+  5. molecules: a release molecule may be gone only if all its trials lack a
+     start date. modulated_by on the release's molecules: at most 1% of
+     release pair-years go missing (drug-target pairs whose only trials have
+     no start date; 34 of 10,253 pairs in 26.09); scores may fall (the release
+     counted each trial up to twice).
+  6. molecules both graphs have keep their exact Morgan fingerprint (block 0)
+     unless the release had mean-imputed them.
 Reported
   - molecule coverage by input modality; how many ongoing pairs changed score.
 
@@ -100,12 +105,13 @@ def _scores_before(src, dst, t, w, year, symmetric=False) -> pd.Series:
     return last.set_index(["s", "d"])["w"]
 
 
-def evidence_only_grows(b_store, r_store, src_map, dst_map, symmetric=False, lag=0) -> dict:
+def evidence_only_grows(b_store, r_store, src_map, dst_map, symmetric=False, lag=0, excused=None) -> dict:
     """Per check year: release pairs missing from the bench graph, and with a lower score.
 
     ``src_map`` / ``dst_map`` take release node indices to bench indices (-1:
     not in the bench graph). Release pairs with score 0 are skipped; the bench
-    graph is read ``lag`` years later than the release.
+    graph is read ``lag`` years later than the release. Misses on ``excused``
+    (a MultiIndex of bench (src, dst) pairs) are counted apart, as "excused".
     """
     ei = r_store.edge_index.numpy().astype(np.int64)
     s, d = src_map[ei[0]], dst_map[ei[1]]
@@ -114,7 +120,7 @@ def evidence_only_grows(b_store, r_store, src_map, dst_map, symmetric=False, lag
     rr = (s[keep], d[keep], r_store.edge_time.numpy()[keep], w[keep])
     eb = b_store.edge_index.numpy().astype(np.int64)
     rb = (eb[0], eb[1], b_store.edge_time.numpy(), b_store.edge_attr[:, 0].numpy().astype(np.float64))
-    out = {"pairs": 0, "missing": 0, "lower": 0, "earlier_in_bench": 0, "release_score0_skipped": 0,
+    out = {"pairs": 0, "missing": 0, "lower": 0, "excused": 0, "earlier_in_bench": 0, "release_score0_skipped": 0,
            "release_rows_on_dropped_nodes": int((~keep).sum())}
     for y in CHECK_YEARS:
         r = _scores_before(*rr, y, symmetric=symmetric)
@@ -122,11 +128,30 @@ def evidence_only_grows(b_store, r_store, src_map, dst_map, symmetric=False, lag
         r = r[r > 0]
         b = _scores_before(*rb, y + lag, symmetric=symmetric)
         j = b.reindex(r.index)
+        miss, low = j.isna().to_numpy(), (j < r - 1e-6).to_numpy()
+        ok = r.index.isin(excused) if excused is not None else np.zeros(len(r), bool)
         out["pairs"] += len(r)
-        out["missing"] += int(j.isna().sum())
-        out["lower"] += int((j < r - 1e-6).sum())
+        out["missing"] += int((miss & ~ok).sum())
+        out["lower"] += int((low & ~ok).sum())
+        out["excused"] += int(((miss | low) & ok).sum())
         out["earlier_in_bench"] += int(len(b) - j.notna().sum())
     return out
+
+
+def undated_trials(clinical_dir: str) -> tuple[pd.DataFrame, pd.Series]:
+    """ClinicalTrials.gov trials with no start date, which the bench graph leaves out.
+
+    Returns, per (targetId, diseaseId), whether ANY / ALL of its trials lack a
+    start date, and per drugId whether all of them do.
+    """
+    import pyarrow.dataset as ds
+    t = ds.dataset(clinical_dir, format="parquet").to_table(
+        columns=["targetId", "diseaseId", "drugId", "clinicalReportId", "studyStartDate"]).to_pandas()
+    t = t[t["clinicalReportId"].astype(str).str.upper().str.match(r"^NCT\d{8}$")]
+    t["undated"] = t["studyStartDate"].isna()
+    pairs = t.groupby(["targetId", "diseaseId"])["undated"].agg(any_undated="any", all_undated="all")
+    drugs = t.groupby("drugId")["undated"].all()
+    return pairs, drugs
 
 
 def _edges_df(store, src_ids, dst_ids) -> pd.DataFrame:
@@ -143,6 +168,8 @@ def main() -> int:
     ap.add_argument("--bench-graph", required=True)
     ap.add_argument("--ref-graph", required=True)
     ap.add_argument("--out", required=True, help="JSON report path")
+    ap.add_argument("--clinical-evidence", required=True,
+                    help="raw clinical_precedence evidence (to identify trials with no start date)")
     args = ap.parse_args()
 
     bench = torch.load(args.bench_graph, weights_only=False)
@@ -156,10 +183,18 @@ def main() -> int:
             failures.append(name)
 
     # release node index -> bench node index (-1: not in the bench graph)
-    to_bench = {}
+    to_bench, b_index = {}, {}
     for nt in ref.node_types:
-        b_index = {n: i for i, n in enumerate(bench[nt].node_id)}
-        to_bench[nt] = np.array([b_index.get(n, -1) for n in ref[nt].node_id], dtype=np.int64)
+        b_index[nt] = {n: i for i, n in enumerate(bench[nt].node_id)}
+        to_bench[nt] = np.array([b_index[nt].get(n, -1) for n in ref[nt].node_id], dtype=np.int64)
+
+    # trials with no start date, which the bench graph leaves out (see module docstring)
+    undated_pairs, undated_drugs = undated_trials(args.clinical_evidence)
+    any_undated = undated_pairs.index[undated_pairs["any_undated"]]
+    all_undated = set(undated_pairs.index[undated_pairs["all_undated"]])
+    excused_ongoing = pd.MultiIndex.from_tuples(
+        [(b_index["target"][t], b_index["disease"][d]) for t, d in any_undated
+         if t in b_index["target"] and d in b_index["disease"]], names=["s", "d"])
 
     # 1. node types
     for nt in ("disease", "go", "reactome"):  # same nodes, re-encoded (see module docstring)
@@ -206,7 +241,8 @@ def main() -> int:
     for et in dated:
         lag = REDATED_LAG.get(et[1], 0)
         g = evidence_only_grows(bench[et], ref[et], to_bench[et[0]], to_bench[et[2]],
-                                symmetric=(et[0] == et[2]), lag=lag)
+                                symmetric=(et[0] == et[2]), lag=lag,
+                                excused=excused_ongoing if et == ONGOING_EDGE else None)
         report["evidence_only_grows"]["|".join(et)] = g
         bad = g["missing"] + g["lower"]
         limit = 0.001 * g["pairs"] if et[1] in PUBMED_DATED or lag else 0
@@ -217,6 +253,7 @@ def main() -> int:
         check(f"edges.grows.{et[1]}", bad <= limit,
               f"missing {g['missing']:,}, lower {g['lower']:,} of {g['pairs']:,} release pair-years"
               + (f" (bench read {lag} year later)" if lag else "")
+              + (f"; {g['excused']:,} excused (pair has a trial with no start date)" if g["excused"] else "")
               + f"; {g['earlier_in_bench']:,} bench pair-years absent from the release; "
               f"{g['release_score0_skipped']:,} score-0 release pair-years skipped")
 
@@ -240,32 +277,38 @@ def main() -> int:
         agg = {"time": "min", "w": "max", "n": "max"}
         b_pair = b_on.groupby(["src", "dst"]).agg(agg)
         r_pair = r_on.groupby(["src", "dst"]).agg(agg)
-        same_pairs = b_pair.index.equals(r_pair.index)  # groupby sorts both
-        check("edges.ongoing.same_pairs", same_pairs, f"bench={len(b_pair):,} ref={len(r_pair):,}")
-        if same_pairs:
-            check("edges.ongoing.same_first_year", bool((b_pair["time"] == r_pair["time"]).all()))
-            drops = int((b_pair["w"] < r_pair["w"] - 1e-9).sum())
-            check("edges.ongoing.final_score_never_drops", drops == 0, f"pairs with lower score: {drops}")
-            check("edges.ongoing.novelty_unchanged", bool(((b_on["n"] == 0).all()) and ((r_on["n"] == 0).all())))
-            report["ongoing_rescore"] = {
-                "pairs": len(b_pair),
-                "pairs_final_score_raised": int((b_pair["w"] > r_pair["w"] + 1e-9).sum()),
-                "events_bench": len(b_on), "events_ref": len(r_on),
-            }
-            print(json.dumps(report["ongoing_rescore"]))
+        gone = r_pair.index.difference(b_pair.index)
+        new = b_pair.index.difference(r_pair.index)
+        gone_unexplained = [p for p in gone if p not in all_undated]
+        check("edges.ongoing.same_pairs", not gone_unexplained and len(new) == 0,
+              f"bench={len(b_pair):,} ref={len(r_pair):,}; {len(gone)} release pairs gone "
+              f"({len(gone) - len(gone_unexplained)} whose trials all lack a start date); {len(new)} new")
+        # first years and final scores, on the pairs whose trials all have a start date
+        shared = r_pair.index.intersection(b_pair.index)
+        shared = shared[~shared.isin(any_undated)]
+        bp, rp = b_pair.loc[shared], r_pair.loc[shared]
+        check("edges.ongoing.same_first_year", bool((bp["time"] == rp["time"]).all()),
+              f"{len(shared):,} pairs compared")
+        drops = int((bp["w"] < rp["w"] - 1e-9).sum())
+        check("edges.ongoing.final_score_never_drops", drops == 0, f"pairs with lower score: {drops}")
+        check("edges.ongoing.novelty_unchanged", bool(((b_on["n"] == 0).all()) and ((r_on["n"] == 0).all())))
+        report["ongoing_rescore"] = {
+            "pairs": len(b_pair), "pairs_compared": len(shared),
+            "pairs_final_score_raised": int((bp["w"] > rp["w"] + 1e-9).sum()),
+            "events_bench": len(b_on), "events_ref": len(r_on),
+        }
+        print(json.dumps(report["ongoing_rescore"]))
     else:
         check("edges.ongoing.present", False, "clinical_trial_ongoing missing")
 
     # 5. modulated_by on the release's molecules
     b_mol, r_mol = list(bench["molecule"].node_id), list(ref["molecule"].node_id)
-    r_set = set(r_mol)
-    superset = r_set <= set(b_mol)
-    check("nodes.molecule.superset", superset, f"bench={len(b_mol):,} ref={len(r_mol):,}")
-    if not superset:  # the checks below index release molecules in the bench graph
-        report["failures"] = failures
-        json.dump(report, open(args.out, "w"), indent=2)
-        print(f"\n❌ {len(failures)} check(s) failed -> {args.out}")
-        return 1
+    gone_mol = sorted(set(r_mol) - set(b_mol))
+    unexplained_mol = [m for m in gone_mol if not undated_drugs.get(m, False)]
+    check("nodes.molecule.release_kept", not unexplained_mol,
+          f"bench={len(b_mol):,} ref={len(r_mol):,}; {len(gone_mol)} release molecules gone "
+          f"({len(gone_mol) - len(unexplained_mol)} whose trials all lack a start date)"
+          + (f"; unexplained e.g. {unexplained_mol[:5]}" if unexplained_mol else ""))
     g = evidence_only_grows(bench[MOD_EDGE], ref[MOD_EDGE], to_bench["molecule"], to_bench["target"])
     report["evidence_only_grows"]["|".join(MOD_EDGE)] = g
     check("edges.modulated_by.few_pairs_missing", g["missing"] <= 0.01 * g["pairs"],
@@ -278,7 +321,9 @@ def main() -> int:
     check("features.molecule.per_modality", "x" not in bm and all(k in bm for k in (
         "x_morgan", "x_esm", "has_morgan", "has_esm", "drug_type")),
         sorted(k for k in bm.keys() if k != "node_id"))
-    rows = torch.tensor([b_idx[m] for m in r_mol])
+    kept = [i for i, m in enumerate(r_mol) if m in b_idx]
+    rows = torch.tensor([b_idx[r_mol[i]] for i in kept])
+    rx = rx[torch.tensor(kept)]
     match = (bm.x_morgan[rows] == rx).all(dim=1)
     imputed = ~((rx == 0) | (rx == 1)).all(dim=1)  # the release mean-imputed unparsable SMILES
     unexplained = int((~match & ~imputed).sum())
