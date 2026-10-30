@@ -82,11 +82,16 @@ SAFETENSORS_DTYPE = {"float32": "F32", "float64": "F64", "float16": "F16", "int6
 
 
 class Report:
+    """Named check results for the JSON report; each is printed PASS or FAIL as it is recorded."""
+
     def __init__(self):
+        """Start with no results and no failures."""
         self.results: dict = {}
         self.failures: list[str] = []
 
     def check(self, name: str, ok, detail=None) -> bool:
+        """Record check `name`: print PASS or FAIL with its detail, store it for the report and note a
+        failure. Returns whether it passed."""
         self.results[name] = {"ok": bool(ok), **({"detail": detail} if detail is not None else {})}
         print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  {detail}" if detail is not None else ""), flush=True)
         if not ok:
@@ -95,7 +100,8 @@ class Report:
 
 
 def acyclic(ei: np.ndarray, n: int) -> bool:
-    """Kahn's algorithm: peel nodes with no incoming edge until none are left."""
+    """Whether the directed graph with edges `ei` over `n` nodes has no cycle. Kahn's algorithm: repeatedly
+    remove the nodes with no incoming edge; all nodes go only if there is no cycle."""
     src, dst = ei[0], ei[1]
     indeg = np.bincount(dst, minlength=n)
     order = np.argsort(src, kind="stable")
@@ -114,12 +120,16 @@ def acyclic(ei: np.ndarray, n: int) -> bool:
 
 
 def edge_label(et, edge_types) -> str:
-    """Relation name, with the source type when the relation name is shared."""
+    """Short name for edge type `et` in check names: its relation, plus the source node type when two edge
+    types share the relation (is_subtype_of on disease and on go)."""
     shared = sum(1 for e in edge_types if e[1] == et[1]) > 1
     return f"{et[1]}.{et[0]}" if shared else et[1]
 
 
 def check_files(rep: Report, rd: Path, contract: dict, require_snapshots: bool) -> None:
+    """Files: every file the contract requires is present (snapshots/index.json too with `require_snapshots`),
+    and no file lies outside the contract's required and optional lists. huggingface_hub's .cache/ is
+    ignored."""
     fc = contract["files"]
     # .cache/ is huggingface_hub's download bookkeeping, not part of the release
     present = sorted(str(p.relative_to(rd)) for p in rd.rglob("*")
@@ -133,6 +143,9 @@ def check_files(rep: Report, rd: Path, contract: dict, require_snapshots: bool) 
 
 
 def check_meta(rep: Report, r: Release, contract: dict) -> None:
+    """metadata.json against the contract and graph.safetensors: format and edge_attr columns; every tensor it
+    lists is stored with the stated shape and dtype, and nothing else is; tensor lengths agree with
+    num_nodes and num_edges; every edge type has a score_max."""
     m = r.meta
     rep.check("meta.format", (m.get("format"), str(m.get("format_version"))) == (
         contract["format"], contract["format_version"]), f"{m.get('format')} {m.get('format_version')}")
@@ -171,6 +184,10 @@ def check_meta(rep: Report, r: Release, contract: dict) -> None:
 
 
 def check_config(rep: Report, rd: Path, contract: dict, ot_version: str) -> tuple[int, int]:
+    """The build's configuration: config/event_graph_config.yaml time_range equals the range
+    src/benchmark/tasks.py hard-codes; the contract's phase weights equal those of trial resolution and the
+    label code; source_versions.json names `ot_version` and every source the contract lists. Returns the
+    time range (first_year, last_year)."""
     tr = yaml.safe_load((_REPO / "config" / "event_graph_config.yaml").read_text())["time_range"]
     first, last = int(tr["first_year"]), int(tr["last_year"])
     rep.check("config.time_range_matches_tasks", (first, last) == (tasks.FIRST_GRAPH_YEAR, tasks.LAST_GRAPH_YEAR),
@@ -193,6 +210,10 @@ def check_config(rep: Report, rd: Path, contract: dict, ot_version: str) -> tupl
 
 
 def check_nodes(rep: Report, r: Release, contract: dict) -> None:
+    """Per node type: exactly the contract's node types, each with exactly its tensors (width and dtype);
+    finite float features; enough distinct embedding rows where the contract asks; mappings/ with index
+    0..n-1 and unique ids matching the id pattern; molecule modality rows zero exactly where the modality
+    is absent."""
     spec_all = contract["node_types"]
     rep.check("nodes.types", set(r.node_types) == set(spec_all),
               {"missing": sorted(set(spec_all) - set(r.node_types)),
@@ -236,7 +257,10 @@ def check_nodes(rep: Report, r: Release, contract: dict) -> None:
 
 
 def check_edges(rep: Report, r: Release, contract: dict, first: int, last: int) -> int:
-    """Returns the last dated edge year."""
+    """Per edge type: exactly the contract's edge types, each with rows and endpoints in range, then the rules
+    of its kind (module docstring); across them, that dated edges reach the time range's last year and
+    every trial-outcome pair has a start-dated trial edge no later than its first outcome. Returns the last
+    dated edge year."""
     kinds = {tuple(e[:3]): e[3] for e in contract["edge_types"]}
     have = set(r.edge_types)
     rep.check("edges.types", have == set(kinds),
@@ -315,6 +339,9 @@ def check_edges(rep: Report, r: Release, contract: dict, first: int, last: int) 
 
 
 def check_labels(rep: Report, r: Release, first: int, last: int) -> None:
+    """The label files against this graph: discovery, train and eval ids and indices agree with mappings/, one
+    row per pair, entry years inside each file's window, train and eval disjoint, and each file equal to
+    the table src/benchmark/tasks.py builds from the graph (so stale labels fail)."""
     rd = r.path
     idx = {nt: pd.Series(np.arange(r.num_nodes(nt)), index=r.node_ids(nt)) for nt in ("target", "disease")}
     rebuilt = {"discovery": tasks.build_discovery_labels(rd), **tasks.build_advancement_labels(rd)}
@@ -349,6 +376,9 @@ def check_labels(rep: Report, r: Release, first: int, last: int) -> None:
 
 
 def check_loader(rep: Report, r: Release, contract: dict, last: int) -> None:
+    """The release's own load_thbkg.py, as a user runs it: the undirected graph has a rev_ type mirroring
+    every relation but interacts_with; interacts_with holds both directions with nothing summed (edge_time
+    within the time range, score within score_max); max-normalised scores lie in [0, 1]."""
     spec = importlib.util.spec_from_file_location("release_load_thbkg", r.path / "load_thbkg.py")
     mod = importlib.util.module_from_spec(spec)
     # importing would leave __pycache__/ in the release (how one reached the v26.09 upload)
@@ -392,6 +422,9 @@ def check_loader(rep: Report, r: Release, contract: dict, last: int) -> None:
 
 
 def check_snapshots(rep: Report, r: Release, contract: dict, last_dated: int, required: bool) -> None:
+    """The per-year snapshots, when built (a failure if missing with `required`): years, edge-type order and
+    source graph hash in index.json; for every year and edge type, the edge count index.json records,
+    static rows at -1, no dated row from that year or later, and scores above 0."""
     p = r.path / "snapshots" / "index.json"
     if not p.exists():
         if required:
@@ -433,6 +466,8 @@ def check_snapshots(rep: Report, r: Release, contract: dict, last_dated: int, re
 
 
 def main() -> int:
+    """Run every check group on --release-dir, write the JSON report and return 1 if any check failed (0
+    otherwise)."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--release-dir", required=True, type=Path)
     ap.add_argument("--ot-version", required=True, help="Open Targets release the build used, e.g. 26.09")
@@ -447,8 +482,8 @@ def main() -> int:
     r = Release(rd)
 
     def run(group, fn, *a, default=None):
-        """A group that raises (e.g. label code rejecting a malformed graph) fails
-        as one check; the other groups still run."""
+        """Run one check group. If it raises (e.g. label code rejecting a malformed graph), record that as one
+        failed check and return `default`, so the other groups still run."""
         try:
             return fn(*a)
         except Exception as e:

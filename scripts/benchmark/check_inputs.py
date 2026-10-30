@@ -92,7 +92,8 @@ DROP = {  # report labels for the rules, in the order they are applied
 
 
 def pmids_of(v) -> list[str]:
-    """PMIDs in a literature / source value (parser.EdgeParser._extract_literature)."""
+    """PMIDs in a literature or source value, a single value or a list: bare digits, or the number in
+    'PMID:123' / 'pubmed: 123' (as parser.EdgeParser._extract_literature)."""
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return []
     vals = list(v) if isinstance(v, (list, tuple, np.ndarray)) else [v]
@@ -109,13 +110,16 @@ def pmids_of(v) -> list[str]:
 
 
 def struct_pmids(t) -> list[str]:
+    """PMIDs of one list element, e.g. a GO annotation: its literature, source or pubmedId field, the first
+    one set, as the parser reads it."""
     if not isinstance(t, dict):
         return []
     return pmids_of(t.get("literature") or t.get("source") or t.get("pubmedId"))
 
 
 def parse_dates(s: pd.Series) -> pd.Series:
-    """pd.to_datetime of each value, as the parser does row by row, over unique values."""
+    """Dates of a column as the parser reads them row by row: pd.to_datetime of each value in any format, NaT
+    when unparseable, without time zone. Each distinct value is parsed once."""
     if pd.api.types.is_datetime64_any_dtype(s):
         d = s
     else:
@@ -150,7 +154,11 @@ def row_years(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
 
 class PubMed:
+    """The build's PubMed cache (PMID -> publication year), and the PMIDs this check needed from it."""
+
     def __init__(self, path: Path | None):
+        """Load the cache at `path` (columns pmid, year; year None when PubMed gave none). No file: an empty
+        cache, so every PMID counts as uncached."""
         self.years: dict[str, int | None] = {}
         if path is not None and path.exists():
             c = pd.read_parquet(path)
@@ -159,7 +167,8 @@ class PubMed:
         self.needed: set[str] = set()
 
     def earliest(self, pmid_lists) -> tuple[np.ndarray, np.ndarray]:
-        """(earliest year, any PMID missing from the cache) per row; NaN: no year."""
+        """Per row of PMID lists: the earliest year among its cached PMIDs (NaN if none has one) and whether
+        any of its PMIDs is missing from the cache. Records every PMID asked for in `needed`."""
         year = np.full(len(pmid_lists), np.nan)
         uncached = np.zeros(len(pmid_lists), bool)
         for i, ps in enumerate(pmid_lists):
@@ -175,9 +184,12 @@ class PubMed:
 
 
 class Relation:
-    """Kept input pairs of one graph relation, in graph node indices."""
+    """One graph relation's kept input pairs, in graph node indices, with the year of each kept row; the pairs
+    that might be kept (unverifiable); and, per input source, the rows read and the rows each rule dropped."""
 
     def __init__(self, et, graph_index: dict, symmetric: bool):
+        """Empty relation for edge type `et`. `graph_index` maps each node type to a pd.Index of graph node
+        ids; `symmetric` orders pairs (min, max)."""
         self.et, self.symmetric = et, symmetric
         self.n_dst = len(graph_index[et[2]])
         self.gi = graph_index
@@ -188,6 +200,8 @@ class Relation:
         self.rows: Counter = Counter()
 
     def _keys(self, src_ids, dst_ids):
+        """Pair keys src * n_dst + dst in graph node indices ((min, max) for symmetric relations), and a mask
+        of pairs with an endpoint that is no graph node (key -1)."""
         s = self.gi[self.et[0]].get_indexer(src_ids)
         d = self.gi[self.et[2]].get_indexer(dst_ids)
         if self.symmetric:
@@ -196,6 +210,9 @@ class Relation:
         return np.where(bad, -1, s * self.n_dst + d), bad
 
     def add(self, source, src_ids, dst_ids, year, kept, possible, drops: dict):
+        """Add one input source's rows: count them and, per rule in `drops`, the rows it removed; store the
+        keys and years of the `kept` rows (kept pairs with an endpoint that is no graph node are counted as
+        missing instead) and the keys of the `possible` rows."""
         self.rows[source] += len(src_ids)
         for k, m in drops.items():
             self.drops[source][DROP[k]] += int(m.sum())
@@ -227,12 +244,14 @@ def node_index(evidence_dir: Path, nt: str) -> pd.Index:
 
 
 def spec_list(schema: dict):
+    """Every (name, spec) of an edge schema, once per spec where a name lists several."""
     for name, spec in schema.items():
         for s in (spec if isinstance(spec, list) else [spec]):
             yield name, s
 
 
 def constant(props, key):
+    """The value of prop `key=constant:value` in a spec's props, or None if the prop is not constant."""
     for p in props:
         if isinstance(p, str) and p.startswith(f"{key}=constant:"):
             return p.split("constant:", 1)[1]
@@ -241,6 +260,9 @@ def constant(props, key):
 
 def evidence_spec(rel: Relation, evidence_dir: Path, name: str, spec: dict, ot: dict, pubmed: PubMed,
                   first: int, last: int) -> None:
+    """Apply the rules to the input of one edge-schema spec, a parquet file at a time: expand list fields
+    (go.id, pathways.id), keep rows with both endpoints in the Open Targets index, date them (PubMed for
+    undated rows with PMIDs), keep a score above 0, and add the rows to `rel`."""
     props = spec.get("props", [])
     src_col, dst_col = spec["sourceId"], spec["targetId"]
     src_t, dst_t = constant(props, "source_type"), constant(props, "target_type")
@@ -298,8 +320,9 @@ def evidence_spec(rel: Relation, evidence_dir: Path, name: str, spec: dict, ot: 
 
 
 def trial_relations(rels: dict, trials_dir: Path, ot: dict, last: int, first: int) -> None:
-    """ongoing + modulated_by kept from every NCT trial with a start date; outcome
-    relations get those pairs as possible (checked one way)."""
+    """Trial relations from the raw clinical_precedence file: the ongoing edge and modulated_by are kept from
+    every NCT trial with a start date up to the cutoff, dated at its start; outcome relations get the same
+    pairs as possible only, since only trials that ended carry an outcome (checked one way)."""
     t = ds.dataset(str(trials_dir), format="parquet").to_table(
         columns=["targetId", "diseaseId", "drugId", "clinicalReportId", "studyStartDate"]).to_pandas()
     nct = t["clinicalReportId"].astype(str).str.upper().str.match(NCT_RE).fillna(False).to_numpy()
@@ -326,6 +349,8 @@ def trial_relations(rels: dict, trials_dir: Path, ot: dict, last: int, first: in
 
 
 def intact_relation(rel: Relation, evidence_dir: Path, ot: dict, pubmed: PubMed, first: int, last: int) -> None:
+    """IntAct from human.txt as the IntAct parser reads it (protein-protein rows with an Ensembl gene each):
+    drop self-loops, order each pair (min, max), date rows through PubMed, and add them to `rel`."""
     rows = []
     with open(evidence_dir / "intact" / "human.txt", encoding="utf-8") as f:
         header = f.readline()
@@ -358,6 +383,8 @@ def intact_relation(rel: Relation, evidence_dir: Path, ot: dict, pubmed: PubMed,
 
 
 def static_relations(rels: dict, evidence_dir: Path, ot: dict) -> None:
+    """Ontology edges, all kept and undated: disease and Reactome (id, parent) pairs from their node datasets,
+    and GO is_a pairs of non-obsolete terms from go.obo."""
     for nt, rel_name, d in (("disease", "is_subtype_of", "diseases"), ("reactome", "is_subpathway_of", "reactome")):
         et = (nt, rel_name, nt)
         if et not in rels:
@@ -383,6 +410,8 @@ def static_relations(rels: dict, evidence_dir: Path, ot: dict) -> None:
 
 
 def graph_first_years(r: Release, et, symmetric: bool) -> pd.Series:
+    """First year (smallest edge_time) of every pair of one release edge type, keyed src * n_dst + dst ((min,
+    max) for symmetric relations)."""
     ei, t, _ = r.edges(et)
     n_dst = r.num_nodes(et[2])
     a, b = (np.minimum(ei[0], ei[1]), np.maximum(ei[0], ei[1])) if symmetric else (ei[0], ei[1])
@@ -390,6 +419,8 @@ def graph_first_years(r: Release, et, symmetric: bool) -> pd.Series:
 
 
 def main() -> int:
+    """Read every input, compare each relation's kept pairs and first years with the release, check the PubMed
+    cache, write the JSON report and return 1 if any check failed (0 otherwise)."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--release-dir", required=True, type=Path)
     ap.add_argument("--evidence-dir", required=True, type=Path, help="the build's Open Targets download (evidenceDated)")
@@ -437,6 +468,7 @@ def main() -> int:
     report, failures = {}, []
 
     def check(name, ok, detail=None):
+        """Record check `name`: print PASS or FAIL with its detail and store it for the report."""
         report[name] = {"ok": bool(ok), **({"detail": detail} if detail is not None else {})}
         print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  {detail}" if detail is not None else ""), flush=True)
         if not ok:
@@ -461,6 +493,7 @@ def main() -> int:
         detail = {"graph_pairs": len(g), "kept_input_pairs": len(exp), "unverifiable_pairs": len(possible)}
 
         def ids(keys):
+            """Node ids of the first five pair keys, for examples in the report."""
             src, dst = r.node_ids(et[0]), r.node_ids(et[2])
             return [(src[k // rel.n_dst], dst[k % rel.n_dst]) for k in keys[:5]]
 
