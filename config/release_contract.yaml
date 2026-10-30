@@ -1,9 +1,11 @@
 # What every THBKG release directory must hold, whatever the Open Targets
-# version. scripts/benchmark/check_release.py checks a release against it.
+# version. scripts/benchmark/check_release.py checks a release against it, and
+# check_inputs.py checks it holds all of its own Open Targets input.
 #
-# Counts are not here: they change with every version. compare_releases.py
-# compares them release to release, within the bands under drift_defaults
-# unless a changes file (config/release_changes/) declares otherwise.
+# Counts are not here: they follow the input. Between two builds of one Open
+# Targets version, compare_releases.py keeps them within the bands under
+# drift_defaults unless a changes file (config/release_changes/) declares
+# otherwise; across versions it only reports them.
 #
 # The time range is not here either: it is config/event_graph_config.yaml
 # time_range, which the build reads and check_release.py cross-checks.
@@ -40,6 +42,7 @@ files:
     - snapshots/index.json
     - verify_*.json               # build reports
     - check_release.json
+    - check_inputs.json
     - compare_*.json
 
 # Upstream sources source_versions.json must record. open_targets.release
@@ -115,9 +118,15 @@ phase_weights: [0.01, 0.05, 0.1, 0.15, 0.2, 0.5, 0.7, 1.0]
 # Snapshots run from this decision year to the last edge year + 1.
 first_snapshot_year: 1995
 
-# compare_releases.py: the band every metric must stay in, new release against
-# the previous one, unless a changes file declares the change. ratio metrics
-# are new / old, fractions are of the old release's nodes or pairs.
+# check_inputs.py: the largest share of the PMIDs that date a row (GO, IntAct)
+# that PubMed may return without a year. A failed request stored as "no year"
+# lost 11% of IntAct in the 26.09 build.
+inputs:
+  pubmed_no_year_max: 0.02
+
+# compare_releases.py, between builds of one Open Targets version: the band
+# every metric must stay in unless a changes file declares the change. ratio
+# metrics are new / old, fractions are of the old build's nodes or pairs.
 drift_defaults:
   check_years: [2000, 2010, 2016, 2020]
   bands:

@@ -63,10 +63,13 @@ cp -p "${FEATURE_OUTPUT_DIR}/molecule_esm2_full.safetensors" "${FEATURE_OUTPUT_D
       "${FEATURE_OUTPUT_DIR}/disease_embeddings.yaml" "${FEATURE_OUTPUT_DIR}/target_features_imputed.parquet" \
       "$RELEASE_DIR/features/"
 
-# What every release must hold whatever the version (config/release_contract.yaml),
-# then the drift from the previous release, which the changes file must declare.
-# Either failing stops the chain before the snapshots.
+# What every release must hold whatever the version (config/release_contract.yaml);
+# that it holds all of its own Open Targets input; then the drift from another
+# build (declared if it is of the same version, reported if not). A failure
+# stops the chain before the snapshots.
 python scripts/benchmark/check_release.py --release-dir "$RELEASE_DIR" --ot-version "$OT_VERSION"
+python scripts/benchmark/check_inputs.py --release-dir "$RELEASE_DIR" --evidence-dir "$INPUT_EVIDENCE_DIR" \
+  --trials-dir "$RAW_TRIALS_DIR" --pubmed-cache "$PUBMED_YEAR_CACHE" --edge-schema "config/edge_schema_${OT_VERSION}.yaml"
 python scripts/benchmark/compare_releases.py --old "$PREV_RELEASE_DIR" --new "$RELEASE_DIR" \
   --changes "$RELEASE_CHANGES" --diseases-dir "${INPUT_EVIDENCE_DIR}/diseases"
 

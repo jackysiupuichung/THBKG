@@ -40,13 +40,16 @@ done
 # PubMed publication years looked up while parsing (parsers/parser.py), kept on disk
 PUBMED_YEAR_CACHE="${OUTPUT_BASE}/pubmed_years.parquet"
 
-# Release checks (stage 4): the release this build is compared with, and the
-# changes declared against it. Point both at the new pair for each version.
+# Release checks (stage 4). The input check reads the original trial file (the
+# input of trial resolution). The comparison is with another build: of the
+# same Open Targets version it needs the changes declared against it; of a
+# different version it only reports.
+RAW_TRIALS_DIR="${REF_BASE}/raw_backup/sourceId=clinical_precedence"
 PREV_RELEASE_DIR="${PREV_RELEASE_DIR:-${REF_BASE}/hf_release/THBKG}"
 RELEASE_CHANGES="${RELEASE_CHANGES:-config/release_changes/v26.09_to_26.09_bench.yaml}"
 
 export OT_VERSION REF_BASE OUTPUT_BASE INPUT_EVIDENCE_DIR RAW_EDGES_DIR RAW_NODES_DIR RESOLVED_EVIDENCE_DIR NCT_CACHE
-export PUBMED_YEAR_CACHE RELEASE_DIR FEATURE_OUTPUT_DIR EVENT_OUTPUT_DIR PREV_RELEASE_DIR RELEASE_CHANGES
+export PUBMED_YEAR_CACHE RELEASE_DIR FEATURE_OUTPUT_DIR EVENT_OUTPUT_DIR RAW_TRIALS_DIR PREV_RELEASE_DIR RELEASE_CHANGES
 export PYTHONUNBUFFERED=1
 export HF_HUB_OFFLINE=1  # compute nodes are offline; ESM-2 must already be in the HF cache
 
