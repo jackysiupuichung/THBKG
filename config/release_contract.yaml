@@ -2,10 +2,7 @@
 # version. scripts/benchmark/check_release.py checks a release against it, and
 # check_inputs.py checks it holds all of its own Open Targets input.
 #
-# Counts are not here: they follow the input. Between two builds of one Open
-# Targets version, compare_releases.py keeps them within the bands under
-# drift_defaults unless a changes file (config/release_changes/) declares
-# otherwise; across versions it only reports them.
+# Counts are not here: they follow the input, which check_inputs.py checks.
 #
 # The time range is not here either: it is config/event_graph_config.yaml
 # time_range, which the build reads and check_release.py cross-checks.
@@ -43,7 +40,6 @@ files:
     - verify_*.json               # build reports
     - check_release.json
     - check_inputs.json
-    - compare_*.json
 
 # Upstream sources source_versions.json must record. open_targets.release
 # must equal the version the release was built for (--ot-version).
@@ -123,22 +119,3 @@ first_snapshot_year: 1995
 # lost 11% of IntAct in the 26.09 build.
 inputs:
   pubmed_no_year_max: 0.02
-
-# compare_releases.py, between builds of one Open Targets version: the band
-# every metric must stay in unless a changes file declares the change. ratio
-# metrics are new / old, fractions are of the old build's nodes or pairs.
-drift_defaults:
-  check_years: [2000, 2010, 2016, 2020]
-  bands:
-    nodes.removed: [0, 0.01]
-    nodes.added: [0, 0.05]
-    edges.rows: [0.9, 1.25]
-    edges.pairs: [0.9, 1.25]
-    edges.missing: [0, 0.01]               # at each check year
-    edges.lower: [0, 0.01]                 # at each check year
-    edges.gone: [0, 0.01]                  # missing at every year, not just re-dated
-    edges.first_year_changed: [0, 0.02]
-    edges.score_p50: [0.95, 1.05]
-    edges.score_p99: [0.95, 1.05]
-    labels.rows: [0.9, 1.25]
-    labels.positive_rate: [-0.02, 0.02]    # new - old

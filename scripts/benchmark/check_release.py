@@ -4,9 +4,8 @@
 The contract (config/release_contract.yaml) is what every release must
 satisfy, whatever the Open Targets version: its files, node and edge types,
 tensor shapes and dtypes, id formats, time range, score rules and label
-consistency. Counts are not in it: they change with every version, and
-compare_releases.py compares them with the previous release. Fails (exit 1) on
-any check.
+consistency. Counts are not in it: they follow the input, which
+check_inputs.py checks. Fails (exit 1) on any check.
 
     python scripts/benchmark/check_release.py --release-dir R --ot-version 26.09 \\
         [--out R/check_release.json] [--require-snapshots]

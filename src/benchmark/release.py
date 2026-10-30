@@ -2,9 +2,9 @@
 
 A release holds metadata.json (node and edge schema), graph.safetensors (the
 tensors it lists) and mappings/<node type>.parquet (node id <-> index). Used by
-the release checks (scripts/benchmark/check_release.py, compare_releases.py),
-which must also read older releases: only the first edge_attr column (score)
-is read, so releases exported with or without novelty read alike.
+the release checks (scripts/benchmark/check_release.py, check_inputs.py). Only
+the first edge_attr column (score) is read, so releases exported with or
+without novelty read alike.
 """
 from __future__ import annotations
 
