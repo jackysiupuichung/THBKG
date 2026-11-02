@@ -1,0 +1,12 @@
+# Europe PMC literature edges, re-parsed by scripts/benchmark/bench_01_edges.sh
+# so its rows are dated by the current YEAR_PRIORITY (publicationDate before
+# publicationYear, 29fef74); the 26.09 build's parse predates that.
+#
+# Mirrors the europepmc spec of edge_schema_26.09.yaml.
+
+europepmc:
+  input_dir: sourceId=europepmc
+  sourceId: targetId
+  targetId: diseaseId
+  relation_name: literature
+  props: [source_type=constant:target, target_type=constant:disease, datasourceId, score, year, id]
