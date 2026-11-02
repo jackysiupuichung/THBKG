@@ -5,29 +5,29 @@
 #SBATCH -n 1
 #SBATCH -c 1
 #SBATCH --mem=200G
-#SBATCH -t 8:0:0
+#SBATCH -t 12:0:0
 
 # Raw edges + event lists for the benchmark graph.
 #
-# Only clinical_precedence edges change:
-#   - modulated_by, because all drug types are now molecule nodes;
-#   - the target->disease trial buckets, because the start-dated ongoing edge
-#     now carries the phase weight instead of Open Targets' score, which is
-#     halved for trials that later stopped for safety or efficacy (a leak of
-#     the trial's outcome into its start year).
-# So clinical_precedence is re-resolved from the original download into this
-# tree and re-parsed. GO annotations and IntAct interactions are re-parsed too:
-# their rows are dated through PubMed, and the 26.09 build lost 48,582 GO and
-# 105,422 IntAct rows to one failed PubMed request cached as "no year" (the
-# lookup now retries and fails loudly; answers are kept in $PUBMED_YEAR_CACHE).
-# Europe PMC is re-parsed as well: its rows are dated by publicationDate since
-# 29fef74, and the 26.09 build's parse dated them by publicationYear, which is
-# decades late for some older papers (scripts/benchmark/check_inputs.py found
-# 97,956 literature pairs with another first year).
-# Every other raw edge parquet is copied from the 26.09 build. The event lists
-# are then rebuilt over the full edge set.
+# Every edge is parsed from the Open Targets download with the current parsers,
+# as preprocessing/temporal_graph/pipeline/kg_pipeline.py does. Nothing is copied
+# from the 26.09 build, so a parser change cannot miss a source: copying its
+# Europe PMC parse kept literature dated by publicationYear after 29fef74, and
+# scripts/benchmark/check_inputs.py found 97,956 pairs with another first year.
 #
-# The 26.09 event-list step needed 200G (it OOMed at 64G) and ran 2.5 h.
+# Clinical trials are parsed from this tree's own trial resolution of the
+# original download, not from the 26.09 build's: all drug types are molecule
+# nodes (modulated_by); the start-dated ongoing edge carries the phase weight,
+# not Open Targets' score, which is halved for trials that later stopped for
+# safety or efficacy (a leak of the outcome into the start year); trials of
+# UNKNOWN status get no outcome edge; trials with no start date are left out.
+# GO annotations and IntAct are dated through PubMed: the lookup retries and
+# fails loudly (the 26.09 build lost 48,582 GO and 105,422 IntAct rows to one
+# failed request cached as "no year"), and answers are kept in $PUBMED_YEAR_CACHE.
+# The event lists are then built over the full edge set.
+#
+# The 26.09 event-list step needed 200G (it OOMed at 64G) and ran 2.5 h; the
+# full parse took about 2 h of the 26.09 build.
 set -euo pipefail
 source scripts/benchmark/bench_env.sh
 
@@ -37,43 +37,46 @@ python -u -m preprocessing.temporal_graph.parsers.apply_trial_resolution \
   --input-dir "${REF_BASE}/raw_backup/sourceId=clinical_precedence" \
   --output-dir "${RESOLVED_EVIDENCE_DIR}/sourceId=clinical_precedence"
 
-# --- 1. seed raw edges from the release build (minus the files re-parsed below)
-mkdir -p "$RAW_EDGES_DIR" "$STATIC_EDGES_DIR"
-rm -f "$RAW_EDGES_DIR"/*.parquet
-n=0
-for f in "$REF_BASE"/evidences/edges/*.parquet; do
-  case "$(basename "$f")" in
-    *_clinical_precedence.parquet) continue ;;
-    target_has_function_in_go_gene_ontology.parquet|target_interacts_with_target_intact.parquet) continue ;;
-    target_literature_disease_europepmc.parquet) continue ;;
-  esac
-  cp -p "$f" "$RAW_EDGES_DIR/"; n=$((n + 1))
-done
-rm -f "$STATIC_EDGES_DIR"/*.parquet
-cp -p "$REF_BASE"/evidences/static_edges/*.parquet "$STATIC_EDGES_DIR/"
-echo "Copied ${n} edge files and $(ls "$STATIC_EDGES_DIR" | wc -l) static edge files from ${REF_BASE}"
-
-# --- 2. nodes (all drug types), clinical_precedence edges from the fixed file,
-#        the PubMed-dated GO annotation and IntAct edges, and Europe PMC
+# --- 1. nodes and every edge, parsed into this tree. The edge schema is split:
+#        clinical_precedence is read from the trial resolution above, every
+#        other source from the download. Both halves are written next to the
+#        edges as a record of what was parsed.
+mkdir -p "$RAW_EDGES_DIR" "$STATIC_EDGES_DIR" "${KG_OUTPUT_DIR}/schemas"
+rm -f "$RAW_EDGES_DIR"/*.parquet "$STATIC_EDGES_DIR"/*.parquet
 python -u - <<'PY'
 import os, sys
+import yaml
 sys.path.insert(0, os.path.abspath("preprocessing/temporal_graph"))
 from parsers.parser import NodeParser, EdgeParser
 from parsers.intact.parser import IntActParser
+from parsers.go_ontology.parser import GOOntologyParser
 
 inp = os.environ["INPUT_EVIDENCE_DIR"] + "/"
-out = os.environ["RAW_EDGES_DIR"]
-_, node_store = NodeParser(inp, "config/node_schema.yaml", os.environ["RAW_NODES_DIR"], node_store=None).parse()
-EdgeParser(os.environ["RESOLVED_EVIDENCE_DIR"] + "/", "config/edge_schema_26.09_clinical_only.yaml",
-           out, node_store=node_store).parse()
-EdgeParser(inp, "config/edge_schema_26.09_pubmed_dated.yaml", out, node_store=node_store).parse()
-IntActParser(inp, "config/edge_schema_26.09_pubmed_dated.yaml", out, node_store=node_store).parse()
-EdgeParser(inp, "config/edge_schema_26.09_europepmc.yaml", out, node_store=node_store).parse()
-PY
-ls -la "$RAW_EDGES_DIR"/*_clinical_precedence.parquet "$RAW_EDGES_DIR"/target_has_function_in_go_gene_ontology.parquet \
-       "$RAW_EDGES_DIR"/target_interacts_with_target_intact.parquet "$RAW_EDGES_DIR"/target_literature_disease_europepmc.parquet
+out, static_out = os.environ["RAW_EDGES_DIR"], os.environ["STATIC_EDGES_DIR"]
+edge_schema = f"config/edge_schema_{os.environ['OT_VERSION']}.yaml"
+static_schema = "config/static_edge_schema.yaml"
+schema = yaml.safe_load(open(edge_schema))
+split = {"clinical": {k: v for k, v in schema.items() if k == "clinical_precedence"},
+         "evidence": {k: v for k, v in schema.items() if k != "clinical_precedence"}}
+paths = {}
+for part, spec in split.items():
+    paths[part] = os.path.join(os.environ["KG_OUTPUT_DIR"], "schemas", f"edge_schema_{part}.yaml")
+    with open(paths[part], "w") as f:
+        f.write(f"# {part} part of {edge_schema}, written by bench_01_edges.sh\n")
+        yaml.safe_dump(spec, f, sort_keys=False)
+print(f"{edge_schema}: {len(split['evidence'])} sources from {inp}, clinical_precedence from the trial resolution")
 
-# --- 3. event lists (same two levels as scripts/collecting_edges_01.sh)
+_, node_store = NodeParser(inp, "config/node_schema.yaml", os.environ["RAW_NODES_DIR"], node_store=None).parse()
+EdgeParser(os.environ["RESOLVED_EVIDENCE_DIR"] + "/", paths["clinical"], out, node_store=node_store).parse()
+EdgeParser(inp, paths["evidence"], out, node_store=node_store).parse()
+IntActParser(inp, edge_schema, out, node_store=node_store).parse()
+GOOntologyParser(inp, static_schema, static_out, node_store=node_store, static=True).parse()
+EdgeParser(inp, static_schema, static_out, node_store=node_store, static=True).parse()
+PY
+echo "Parsed $(ls "$RAW_EDGES_DIR"/*.parquet | wc -l) edge files and $(ls "$STATIC_EDGES_DIR"/*.parquet | wc -l) static edge files"
+ls -la "$RAW_EDGES_DIR" "$STATIC_EDGES_DIR"
+
+# --- 2. event lists (same two levels as scripts/collecting_edges_01.sh)
 CONFIG="config/event_graph_config.yaml"
 python preprocessing/temporal_graph/pipeline/build_event_list.py \
   --input-dir "$RAW_EDGES_DIR" --config "$CONFIG" \
