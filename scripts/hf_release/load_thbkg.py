@@ -9,8 +9,9 @@ Two views of the same graph:
   ``snapshots/``, holding each pair's latest state before that year, with
   ``edge_attr`` = [score, recency].
 
-It also reads the advancement label splits. No pickle, and no THBKG source
-package required.
+It also reads the label tables of the three tasks. No pickle, and no THBKG
+source package required. Reads release format 2.x (metadata.json
+format_version); a newer major needs the load_thbkg.py shipped with it.
 
     pip install torch torch_geometric safetensors pandas pyarrow
 
@@ -19,7 +20,9 @@ package required.
     data  = load_graph("path/to/release")                         # continuous, PyG HeteroData, raw scores
     snap  = load_snapshot("path/to/release", 2016)                # discontinuous, decision year 2016, raw
     snap  = load_snapshot("path/to/release", 2016, normalise="max")   # scores scaled to [0, 1] per relation
-    train = load_labels("path/to/release", "train")               # pandas DataFrame
+    t1    = load_labels("path/to/release", "discovery")           # T1, pandas DataFrame
+    t2    = load_labels("path/to/release", "hypothesis")          # T2
+    train = load_labels("path/to/release", "train")               # T3
     eval_ = load_labels("path/to/release", "eval")
 
     # map a label endpoint to its graph node index
@@ -49,6 +52,17 @@ from safetensors.torch import load_file
 SYMMETRIC_RELATIONS = frozenset({"interacts_with"})
 LOG_K = 100.0
 NORMALISATIONS = ("none", "max", "log")
+FORMAT_MAJOR = 2  # newest metadata.json format_version major this loader reads
+
+
+def _read_meta(release_dir: Path) -> dict:
+    """metadata.json, refusing a release format newer than this loader."""
+    meta = json.loads((release_dir / "metadata.json").read_text())
+    version = str(meta.get("format_version", "1.0"))
+    if int(version.split(".")[0]) > FORMAT_MAJOR:
+        raise ValueError(f"release format {version} is newer than this loader ({FORMAT_MAJOR}.x): "
+                         "use the load_thbkg.py shipped with the release")
+    return meta
 
 
 def _scale(v, vmax, normalise, et):
@@ -174,7 +188,7 @@ def load_graph(release_dir, to_undirected: bool = True, with_node_ids: bool = Fa
     from torch_geometric.data import HeteroData
 
     release_dir = Path(release_dir)
-    meta = json.loads((release_dir / "metadata.json").read_text())
+    meta = _read_meta(release_dir)
     tensors = load_file(str(release_dir / "graph.safetensors"))
 
     data = HeteroData()
@@ -217,7 +231,7 @@ def load_snapshot(release_dir, year: int, normalise: str = "none", recency: bool
     if normalise not in NORMALISATIONS:
         raise ValueError(f"normalise must be one of {NORMALISATIONS}")
     release_dir = Path(release_dir)
-    meta = json.loads((release_dir / "metadata.json").read_text())
+    meta = _read_meta(release_dir)
     _check_snapshot_index(release_dir, meta, year)
     snap = load_np(str(release_dir / "snapshots" / f"{int(year)}.safetensors"))
 
@@ -238,10 +252,20 @@ def load_snapshot(release_dir, year: int, normalise: str = "none", recency: bool
 
 
 def load_labels(release_dir, split: str = "train"):
-    """Read an advancement label split as a pandas DataFrame.
+    """Read a label table as a pandas DataFrame.
 
-    Columns: target_id, disease_id, transition_year, outcome. ``split`` accepts
-    "train" or "eval" (aliases: "test" -> "eval").
+    ``split``:
+      "discovery"   T1: target_id, disease_id, *_index, first_trial_year,
+                    first_trial_phase, max_outcome_phase, grade
+      "hypothesis"  T2: target_id, disease_id, *_index, first_direct_year, novel,
+                    first_literature_year, first_other_evidence_year,
+                    first_trial_year, literature_repeated, target_prior_diseases
+      "train", "eval" (alias "test")
+                    T3: target_id, disease_id, *_index, transition_year, outcome
+
+    T1 and T2 slates are built from these tables per decision year (all targets
+    minus those already linked), with the split's filters: see
+    src/benchmark/tasks.py in the THBKG repository.
     """
     import pandas as pd
     name = {"train": "train", "eval": "eval", "test": "eval"}.get(split, split)
@@ -264,9 +288,10 @@ if __name__ == "__main__":
         ys = snapshot_years(d)
         print(f"snapshots: {ys[0]}-{ys[-1]}")
         print(load_snapshot(d, ys[len(ys) // 2]))
-    for split in ("train", "eval"):
+    for split, flag in (("discovery", None), ("hypothesis", "novel"), ("train", "outcome"), ("eval", "outcome")):
         try:
             df = load_labels(d, split)
-            print(f"{split}: {len(df):,} labels, {int(df['outcome'].astype(bool).sum()):,} positive")
         except FileNotFoundError:
-            pass
+            continue
+        pos = "" if flag is None else f", {int(df[flag].astype(bool).sum()):,} positive"
+        print(f"{split}: {len(df):,} pairs{pos}")

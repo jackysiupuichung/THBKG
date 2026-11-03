@@ -12,7 +12,14 @@ without locking downstream users to a specific PyG version:
 
 It also stages ``load_thbkg.py`` (the standalone reassembly helper), the dataset
 card and ``croissant.json`` into the output dir, so the whole folder can be
-``huggingface-cli upload``-ed as-is.
+``huggingface-cli upload``-ed as-is. The benchmark build
+(scripts/benchmark/bench_04_assemble.sh) then rewrites the labels from the
+graph (build_task_labels.py) and croissant.json with the files' checksums
+(write_croissant.py).
+
+Format 2.0 (``FORMAT_VERSION``) is the benchmark build: export with
+``--score-only``, per-modality molecule tensors and 768-d disease features.
+Format 1.0 was the v26.09 release: edge_attr [score, novelty].
 
 Heavy: loads the full ~500 MB graph into memory. Run via sbatch (see
 export_hf.sh), not in the foreground.
@@ -30,6 +37,7 @@ from safetensors.torch import save_file
 
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parents[1]  # scripts/hf_release/ -> repo root
+FORMAT_VERSION = "2.0"  # config/release_contract.yaml format_version; load_thbkg.FORMAT_MAJOR
 
 _DTYPE_STR = {
     torch.float32: "float32",
@@ -61,7 +69,7 @@ def export(graph_file, mappings_file, train_csv, test_csv, out_dir,
     tensors: dict[str, torch.Tensor] = {}
     meta = {
         "format": "thbkg-hetero-safetensors",
-        "format_version": "1.0",
+        "format_version": FORMAT_VERSION,
         "reassemble_with": "load_thbkg.py:load_graph",
         # The training loader (src.data.temporal_loader.load_event_graph) adds
         # reverse edges before message passing. The tensors stored here are the

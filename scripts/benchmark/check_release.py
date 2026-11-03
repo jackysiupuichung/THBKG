@@ -13,6 +13,10 @@ check_inputs.py checks. Fails (exit 1) on any check.
 Checks
   files      every required file exists, and nothing outside the contract's
              file list (a stray __pycache__, a left-over label file)
+  croissant  every file croissant.json lists exists with the sha256 it states;
+             every file set matches files (snapshots/ when present, or
+             --require-snapshots); every record set's fields are columns of
+             its parquet file
   meta       format and edge_attr columns; every tensor metadata.json lists is
              in graph.safetensors with that shape and dtype, and no other;
              lengths agree with num_nodes / num_edges; every edge type has a
@@ -140,6 +144,45 @@ def check_files(rep: Report, rd: Path, contract: dict, require_snapshots: bool) 
     extra = [p for p in present if not any(fnmatch.fnmatch(p, g) for g in allowed)]
     rep.check("files.required", not missing, {"missing": missing} if missing else f"{len(required)} files")
     rep.check("files.nothing_else", not extra, {"unexpected": extra[:20]} if extra else f"{len(present)} files")
+
+
+def check_croissant(rep: Report, rd: Path, require_snapshots: bool) -> None:
+    """croissant.json describes this build (scripts/hf_release/write_croissant.py fills its checksums): every
+    FileObject exists with the sha256 it states, every FileSet matches files (snapshots/ only once built), and
+    every record set's fields are columns of the parquet it reads."""
+    import pyarrow.parquet as pq
+
+    c = json.loads((rd / "croissant.json").read_text())
+    dist = {d["@id"]: d for d in c["distribution"]}
+    stale, empty = [], []
+    for d in dist.values():
+        if d["@type"] == "cr:FileObject":
+            p = rd / d["contentUrl"]
+            if not p.is_file():
+                stale.append(f"{d['contentUrl']}: missing")
+                continue
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 24), b""):
+                    h.update(chunk)
+            if h.hexdigest() != d.get("sha256"):
+                stale.append(f"{d['contentUrl']}: sha256 differs")
+        elif not any(rd.glob(d["includes"])) and (require_snapshots or not d["includes"].startswith("snapshots/")):
+            empty.append(d["includes"])
+    rep.check("croissant.files", not stale and not empty, {"stale": stale, "no_files": empty} if stale or empty
+              else f"{len(dist)} distributions, version {c.get('version')}")
+    bad = []
+    for rs in c["recordSet"]:
+        src = rs["field"][0]["source"]
+        d = dist[(src.get("fileObject") or src["fileSet"])["@id"]]
+        files = [rd / d["contentUrl"]] if d["@type"] == "cr:FileObject" else sorted(rd.glob(d["includes"]))
+        for p in files:
+            if not p.is_file():
+                continue  # croissant.files reports it
+            cols = set(pq.read_schema(p).names)
+            bad += [f"{rs['name']}.{fl['name']} not in {p.relative_to(rd)}" for fl in rs["field"]
+                    if fl["source"]["extract"]["column"] not in cols]
+    rep.check("croissant.fields", not bad, bad[:10] or f"{len(c['recordSet'])} record sets")
 
 
 def check_meta(rep: Report, r: Release, contract: dict) -> None:
@@ -493,6 +536,7 @@ def main() -> int:
             return default
 
     run("files", check_files, rep, rd, contract, args.require_snapshots)
+    run("croissant", check_croissant, rep, rd, args.require_snapshots)
     run("meta", check_meta, rep, r, contract)
     first, last = run("config", check_config, rep, rd, contract, args.ot_version,
                       default=(tasks.FIRST_GRAPH_YEAR, tasks.LAST_GRAPH_YEAR))

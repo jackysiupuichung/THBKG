@@ -62,6 +62,8 @@ mkdir -p "$RELEASE_DIR/features"
 cp -p "${FEATURE_OUTPUT_DIR}/molecule_esm2_full.safetensors" "${FEATURE_OUTPUT_DIR}/molecule_esm2_full_ids.parquet" \
       "${FEATURE_OUTPUT_DIR}/disease_embeddings.yaml" "${FEATURE_OUTPUT_DIR}/target_features_imputed.parquet" \
       "$RELEASE_DIR/features/"
+# Croissant metadata with the sha256 of every file it lists, now that all are in place
+python scripts/hf_release/write_croissant.py --release-dir "$RELEASE_DIR"
 
 # What every release must hold whatever the version (config/release_contract.yaml),
 # and that it holds all of its own Open Targets input. A failure stops the chain

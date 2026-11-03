@@ -8,7 +8,9 @@
 # time_range, which the build reads and check_release.py cross-checks.
 
 format: thbkg-hetero-safetensors
-format_version: "1.0"
+# 2.0: edge_attr [score] (novelty dropped), per-modality molecule tensors, 768-d
+# disease features, score_max per edge type. load_thbkg.py refuses a newer major.
+format_version: "2.0"
 edge_attr_columns: [score]
 
 # Files every release has, and the only other files it may have (globs).

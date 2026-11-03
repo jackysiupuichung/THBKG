@@ -6,14 +6,24 @@
     "column": "cr:column",
     "conformsTo": "dct:conformsTo",
     "cr": "http://mlcommons.org/croissant/",
-    "data": {"@id": "cr:data", "@type": "@json"},
-    "dataType": {"@id": "cr:dataType", "@type": "@vocab"},
+    "data": {
+      "@id": "cr:data",
+      "@type": "@json"
+    },
+    "dataType": {
+      "@id": "cr:dataType",
+      "@type": "@vocab"
+    },
     "dct": "http://purl.org/dc/terms/",
-    "examples": {"@id": "cr:examples", "@type": "@json"},
+    "equivalentProperty": "cr:equivalentProperty",
+    "examples": {
+      "@id": "cr:examples",
+      "@type": "@json"
+    },
     "extract": "cr:extract",
     "field": "cr:field",
-    "fileProperty": "cr:fileProperty",
     "fileObject": "cr:fileObject",
+    "fileProperty": "cr:fileProperty",
     "fileSet": "cr:fileSet",
     "format": "cr:format",
     "includes": "cr:includes",
@@ -23,11 +33,13 @@
     "md5": "cr:md5",
     "parentField": "cr:parentField",
     "path": "cr:path",
+    "rai": "http://mlcommons.org/croissant/RAI/",
     "recordSet": "cr:recordSet",
     "references": "cr:references",
     "regex": "cr:regex",
     "repeated": "cr:repeated",
     "replace": "cr:replace",
+    "samplingRate": "cr:samplingRate",
     "sc": "https://schema.org/",
     "separator": "cr:separator",
     "source": "cr:source",
@@ -35,145 +47,904 @@
     "transform": "cr:transform"
   },
   "@type": "sc:Dataset",
-  "conformsTo": "http://mlcommons.org/croissant/1.0",
+  "conformsTo": [
+    "http://mlcommons.org/croissant/1.0",
+    "http://mlcommons.org/croissant/RAI/1.0"
+  ],
   "name": "THBKG",
-  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG): a biomedical knowledge graph where every edge is dated by the year its evidence first appeared, enabling leak-free as-of queries at any historical decision point. Built from Open Targets 26.09, Gene Ontology, Reactome, IntAct, the Human Protein Atlas, and ClinicalTrials.gov. Ships a clinical-advancement benchmark in which each target-disease pair is scored only from evidence datable strictly before its Phase II transition year. Stats: 109,087 nodes (target, disease, molecule, Gene Ontology term, Reactome pathway); ~13.6M edges over nineteen relations (sixteen temporal, three static); 47,802 advancement labels split temporally into 34,740 train / 13,062 eval pairs (w3 window).",
-  "version": "26.09",
+  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG), format 2.0, built from Open Targets 26.09 with Gene Ontology, Reactome, IntAct, the Human Protein Atlas, ChEMBL and ClinicalTrials.gov. Every evidence edge carries the year it was first observed, so the graph can be read as of any past decision year, as a continuous event stream or as yearly snapshots. 110,220 nodes (target, disease, molecule, GO term, Reactome pathway) and 14.1M edge rows over 19 relations. Three benchmark tasks score year Y on evidence dated before Y: T1 discovery (a target-disease pair's first clinical trial), T2 hypothesis (a pair's first direct link is a literature co-mention) and T3 advancement (a pair entering Phase II reaches Phase III).",
+  "version": "26.09.1",
   "license": "https://creativecommons.org/licenses/by/4.0/",
-  "url": "https://github.com/jackysiupuichung/THBKG",
-  "sameAs": "https://doi.org/10.5281/zenodo.20795231",
+  "url": "https://huggingface.co/datasets/jspc00012567/THBKG",
+  "sameAs": [
+    "https://github.com/jackysiupuichung/THBKG",
+    "https://doi.org/10.5281/zenodo.20795231"
+  ],
   "citeAs": "Siu, Cabrera, Mudaliar, and Zubiaga. THBKG: A Temporal Biomedical Knowledge Graph for Leak-Free Clinical Advancement Prediction.",
   "keywords": [
     "temporal knowledge graph",
     "biomedical knowledge graph",
-    "decision-aligned evaluation",
-    "temporal data leakage",
+    "link prediction",
+    "target identification",
+    "hypothesis generation",
     "clinical trial prediction",
-    "drug target identification"
+    "temporal data leakage",
+    "decision-aligned evaluation"
   ],
   "isLiveDataset": true,
   "creator": {
     "@type": "sc:Organization",
     "name": "Queen Mary University of London; Recursion Pharmaceuticals"
   },
+  "rai:dataCollection": "Derived from public releases: Open Targets Platform 26.09 evidence (pinned in source_versions.json), Gene Ontology, Reactome, IntAct, Human Protein Atlas v25, ChEMBL 37 biotherapeutic sequences and ClinicalTrials.gov trial dates. Each evidence row is dated by its publication, study or trial date.",
+  "rai:dataLimitations": "Dates are evidence dates as curated in Open Targets 26.09, not the dates evidence entered the databases. A pair first trialled or co-mentioned after the decision year counts as a negative, so precision is a lower bound. Literature co-mentions are text-mined and include passing mentions.",
+  "rai:dataBiases": "New links favour well-studied targets: a target-popularity prior is a strong baseline. Clinical and literature evidence over-represents oncology and other heavily studied therapeutic areas.",
+  "rai:personalSensitiveInformation": "None. Aggregate gene, disease, drug and trial records; no individual-level data.",
+  "rai:dataUseCases": "Benchmarking time-aware link prediction for target discovery, hypothesis generation and clinical advancement; not validated for clinical decision making.",
   "distribution": [
     {
       "@type": "cr:FileObject",
-      "@id": "github-repo",
-      "name": "github-repo",
-      "description": "THBKG source repository: construction pipeline, benchmark splits, and evaluation harness.",
-      "contentUrl": "https://github.com/jackysiupuichung/THBKG/tree/v26.09",
-      "encodingFormat": "git+https",
-      "sha256": "main"
+      "@id": "graph",
+      "name": "graph",
+      "description": "The continuous graph: node feature tensors and, per edge type, edge_index, edge_attr ([score]) and edge_time (year).",
+      "contentUrl": "graph.safetensors",
+      "encodingFormat": "application/octet-stream",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
     },
     {
       "@type": "cr:FileObject",
-      "@id": "graph-pt",
-      "name": "hetero-graph",
-      "description": "PyTorch-Geometric HeteroData object: the assembled temporal heterogeneous graph with node features and dated, feature-carrying edges (26.09). Evidence only \u2014 the advancement labels are distributed separately as CSVs and joined to the graph by node ID at train/eval time.",
-      "containedIn": {"@id": "github-repo"},
-      "contentUrl": "graph/hetero_graph_with_features_datatype.pt",
-      "encodingFormat": "application/octet-stream"
+      "@id": "metadata",
+      "name": "metadata",
+      "description": "Schema to reassemble graph.safetensors: node and edge types, tensor keys, shapes, dtypes, score_max per edge type.",
+      "contentUrl": "metadata.json",
+      "encodingFormat": "application/json",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
     },
     {
       "@type": "cr:FileObject",
-      "@id": "train-split",
-      "name": "train-split",
-      "description": "Advancement labels for the training set (pairs entering Phase II 1995-2015).",
-      "containedIn": {"@id": "github-repo"},
-      "contentUrl": "data/clinical_trial_advancement/26.09_w3/train_dataset.csv",
-      "encodingFormat": "text/csv"
+      "@id": "loader",
+      "name": "loader",
+      "description": "Standalone loader: PyG HeteroData for the continuous graph or a snapshot, and the label tables.",
+      "contentUrl": "load_thbkg.py",
+      "encodingFormat": "text/x-python",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
     },
     {
       "@type": "cr:FileObject",
-      "@id": "eval-split",
-      "name": "eval-split",
-      "description": "Advancement labels for the held-out evaluation set (pairs entering Phase II 2016-2021; w3 window). N=13,062, 7.9% positive.",
-      "containedIn": {"@id": "github-repo"},
-      "contentUrl": "data/clinical_trial_advancement/26.09_w3/test_dataset.csv",
-      "encodingFormat": "text/csv"
+      "@id": "card",
+      "name": "card",
+      "description": "Dataset card.",
+      "contentUrl": "README.md",
+      "encodingFormat": "text/markdown",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "benchmark-tasks",
+      "name": "benchmark-tasks",
+      "description": "Splits, slate filters, label and slate counts per task and split, and closed-form random floors.",
+      "contentUrl": "benchmark_tasks.json",
+      "encodingFormat": "application/json",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "source-versions",
+      "name": "source-versions",
+      "description": "Pinned upstream data versions.",
+      "contentUrl": "source_versions.json",
+      "encodingFormat": "application/json",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "molecule-features",
+      "name": "molecule-features",
+      "description": "How the molecule feature tensors were built.",
+      "contentUrl": "molecule_features.yaml",
+      "encodingFormat": "application/x-yaml",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "discovery-labels",
+      "name": "discovery-labels",
+      "description": "T1 discovery labels: one row per target-disease pair with a clinical trial.",
+      "contentUrl": "labels/discovery.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "hypothesis-labels",
+      "name": "hypothesis-labels",
+      "description": "T2 hypothesis labels: one row per directly linked target-disease pair.",
+      "contentUrl": "labels/hypothesis.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "advancement-train",
+      "name": "advancement-train",
+      "description": "T3 advancement labels, pairs entering Phase II 1995-2015.",
+      "contentUrl": "labels/train.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "advancement-eval",
+      "name": "advancement-eval",
+      "description": "T3 advancement labels, pairs entering Phase II 2016-2023 (val 2016-2019, test 2020-2023).",
+      "contentUrl": "labels/eval.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "therapeutic-areas",
+      "name": "therapeutic-areas",
+      "description": "Disease to Open Targets therapeutic areas.",
+      "contentUrl": "labels/therapeutic_areas.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "primary-therapeutic-areas",
+      "name": "primary-therapeutic-areas",
+      "description": "The therapeutic areas T3 is reported on.",
+      "contentUrl": "labels/primary_therapeutic_areas.json",
+      "encodingFormat": "application/json",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "source-scores",
+      "name": "source-scores",
+      "description": "Per-source target-disease scores by year.",
+      "contentUrl": "scores/target_disease_by_source.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "esm2-full",
+      "name": "esm2-full",
+      "description": "Raw 1280-d ESM-2 650M embeddings of the biologics (the graph carries them centred and scaled).",
+      "contentUrl": "features/molecule_esm2_full.safetensors",
+      "encodingFormat": "application/octet-stream",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "esm2-full-ids",
+      "name": "esm2-full-ids",
+      "description": "Molecule ids of the rows of molecule_esm2_full.safetensors.",
+      "contentUrl": "features/molecule_esm2_full_ids.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "disease-embeddings",
+      "name": "disease-embeddings",
+      "description": "How the disease feature embeddings were made.",
+      "contentUrl": "features/disease_embeddings.yaml",
+      "encodingFormat": "application/x-yaml",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "target-imputation",
+      "name": "target-imputation",
+      "description": "Which target feature groups were imputed, per target.",
+      "contentUrl": "features/target_features_imputed.parquet",
+      "encodingFormat": "application/x-parquet",
+      "sha256": "filled in by scripts/hf_release/write_croissant.py"
+    },
+    {
+      "@type": "cr:FileSet",
+      "@id": "node-mappings",
+      "name": "node-mappings",
+      "description": "Node index to node_id, one file per node type (target, disease, molecule, go, reactome).",
+      "encodingFormat": "application/x-parquet",
+      "includes": "mappings/*.parquet"
+    },
+    {
+      "@type": "cr:FileSet",
+      "@id": "snapshots",
+      "name": "snapshots",
+      "description": "Snapshot view: <Y>.safetensors holds each pair's latest state before decision year Y (edge_index, score, recency, edge_time per edge type); index.json lists the years and the edge-type order.",
+      "encodingFormat": "application/octet-stream",
+      "includes": "snapshots/*"
     }
   ],
   "recordSet": [
     {
       "@type": "cr:RecordSet",
-      "@id": "advancement_labels_train",
-      "name": "advancement_labels_train",
-      "description": "Training advancement labels: one row per target-disease pair entering Phase II in 1995-2015.",
-      "key": {"@id": "advancement_labels_train/target_id"},
+      "@id": "discovery",
+      "name": "discovery",
+      "description": "T1: a pair is a positive in its first_trial_year, ranked among the targets with no trial for the disease before that year.",
       "field": [
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_train/target_id",
+          "@id": "discovery/target_id",
           "name": "target_id",
-          "description": "Ensembl gene identifier of the target.",
+          "description": "Ensembl gene id of the target.",
           "dataType": "sc:Text",
-          "source": {"fileObject": {"@id": "train-split"}, "extract": {"column": "target_id"}}
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "target_id"
+            }
+          }
         },
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_train/disease_id",
+          "@id": "discovery/disease_id",
           "name": "disease_id",
-          "description": "Open Targets disease identifier (MONDO, EFO, HP or Orphanet).",
+          "description": "Open Targets disease id (MONDO, EFO, HP or Orphanet).",
           "dataType": "sc:Text",
-          "source": {"fileObject": {"@id": "train-split"}, "extract": {"column": "disease_id"}}
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "disease_id"
+            }
+          }
         },
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_train/transition_year",
-          "name": "transition_year",
-          "description": "Year the pair entered Phase II; the decision date at which the pair is scored on evidence dated strictly before it.",
+          "@id": "discovery/target_index",
+          "name": "target_index",
+          "description": "Index of the target in mappings/target.parquet and the graph tensors.",
           "dataType": "sc:Integer",
-          "source": {"fileObject": {"@id": "train-split"}, "extract": {"column": "transition_year"}}
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "target_index"
+            }
+          }
         },
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_train/outcome",
-          "name": "outcome",
-          "description": "True if the target-disease pair reached Phase III by a fixed horizon (2018 for train, 2024 for eval), else False. Eval entries stop at 2021, so every pair has at least three years of follow-up.",
-          "dataType": "sc:Boolean",
-          "source": {"fileObject": {"@id": "train-split"}, "extract": {"column": "outcome"}}
+          "@id": "discovery/disease_index",
+          "name": "disease_index",
+          "description": "Index of the disease in mappings/disease.parquet and the graph tensors.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "disease_index"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "discovery/first_trial_year",
+          "name": "first_trial_year",
+          "description": "Year the pair's first clinical trial (any phase) started.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "first_trial_year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "discovery/first_trial_phase",
+          "name": "first_trial_phase",
+          "description": "Phase weight of the pair's strongest trial in that year (0.01 unknown, 0.05 early Phase 1, 0.1 Phase 1, ... 1.0 approved).",
+          "dataType": "sc:Float",
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "first_trial_phase"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "discovery/max_outcome_phase",
+          "name": "max_outcome_phase",
+          "description": "Highest phase grade among the pair's finished trials by the end of the graph; empty while none has finished.",
+          "dataType": "sc:Float",
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "max_outcome_phase"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "discovery/grade",
+          "name": "grade",
+          "description": "NDCG gain: max_outcome_phase, or 0.5 when no trial has finished. Looks past the decision year: for scoring only.",
+          "dataType": "sc:Float",
+          "source": {
+            "fileObject": {
+              "@id": "discovery-labels"
+            },
+            "extract": {
+              "column": "grade"
+            }
+          }
         }
       ]
     },
     {
       "@type": "cr:RecordSet",
-      "@id": "advancement_labels_eval",
-      "name": "advancement_labels_eval",
-      "description": "Held-out evaluation advancement labels (w3 window): one row per target-disease pair entering Phase II in 2016-2021. N=13,062, 7.9% positive.",
-      "key": {"@id": "advancement_labels_eval/target_id"},
+      "@id": "hypothesis",
+      "name": "hypothesis",
+      "description": "T2: a pair is a positive in its first_direct_year when novel, ranked among the targets with no direct edge of any relation to the disease before that year.",
       "field": [
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_eval/target_id",
+          "@id": "hypothesis/target_id",
           "name": "target_id",
-          "description": "Ensembl gene identifier of the target.",
+          "description": "Ensembl gene id of the target.",
           "dataType": "sc:Text",
-          "source": {"fileObject": {"@id": "eval-split"}, "extract": {"column": "target_id"}}
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "target_id"
+            }
+          }
         },
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_eval/disease_id",
+          "@id": "hypothesis/disease_id",
           "name": "disease_id",
-          "description": "Open Targets disease identifier (MONDO, EFO, HP or Orphanet).",
+          "description": "Open Targets disease id (MONDO, EFO, HP or Orphanet).",
           "dataType": "sc:Text",
-          "source": {"fileObject": {"@id": "eval-split"}, "extract": {"column": "disease_id"}}
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "disease_id"
+            }
+          }
         },
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_eval/transition_year",
-          "name": "transition_year",
-          "description": "Year the pair entered Phase II; the decision date at which the pair is scored on evidence dated strictly before it.",
+          "@id": "hypothesis/target_index",
+          "name": "target_index",
+          "description": "Index of the target in mappings/target.parquet and the graph tensors.",
           "dataType": "sc:Integer",
-          "source": {"fileObject": {"@id": "eval-split"}, "extract": {"column": "transition_year"}}
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "target_index"
+            }
+          }
         },
         {
           "@type": "cr:Field",
-          "@id": "advancement_labels_eval/outcome",
-          "name": "outcome",
-          "description": "True if the target-disease pair reached Phase III by a fixed horizon (2018 for train, 2024 for eval), else False. Eval entries stop at 2021, so every pair has at least three years of follow-up.",
+          "@id": "hypothesis/disease_index",
+          "name": "disease_index",
+          "description": "Index of the disease in mappings/disease.parquet and the graph tensors.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "disease_index"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "hypothesis/first_direct_year",
+          "name": "first_direct_year",
+          "description": "Year of the pair's first direct edge of any relation, trials included.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "first_direct_year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "hypothesis/novel",
+          "name": "novel",
+          "description": "True when that first edge is a literature co-mention: the positives.",
           "dataType": "sc:Boolean",
-          "source": {"fileObject": {"@id": "eval-split"}, "extract": {"column": "outcome"}}
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "novel"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "hypothesis/first_literature_year",
+          "name": "first_literature_year",
+          "description": "Year of the pair's first literature co-mention; empty if never.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "first_literature_year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "hypothesis/first_other_evidence_year",
+          "name": "first_other_evidence_year",
+          "description": "Year of the pair's first non-literature, non-trial evidence; empty if never.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "first_other_evidence_year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "hypothesis/first_trial_year",
+          "name": "first_trial_year",
+          "description": "Year of the pair's first clinical trial; empty if never.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "first_trial_year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "hypothesis/literature_repeated",
+          "name": "literature_repeated",
+          "description": "The literature score rose again in a later year: another paper co-mentioned the pair.",
+          "dataType": "sc:Boolean",
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "literature_repeated"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "hypothesis/target_prior_diseases",
+          "name": "target_prior_diseases",
+          "description": "Diseases the target had a direct edge to before first_direct_year.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "hypothesis-labels"
+            },
+            "extract": {
+              "column": "target_prior_diseases"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@type": "cr:RecordSet",
+      "@id": "advancement_train",
+      "name": "advancement_train",
+      "description": "T3 train: pairs entering Phase II 1995-2015, outcome by 2018.",
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_train/target_id",
+          "name": "target_id",
+          "description": "Ensembl gene id of the target.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-train"
+            },
+            "extract": {
+              "column": "target_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_train/disease_id",
+          "name": "disease_id",
+          "description": "Open Targets disease id (MONDO, EFO, HP or Orphanet).",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-train"
+            },
+            "extract": {
+              "column": "disease_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_train/target_index",
+          "name": "target_index",
+          "description": "Index of the target in mappings/target.parquet and the graph tensors.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-train"
+            },
+            "extract": {
+              "column": "target_index"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_train/disease_index",
+          "name": "disease_index",
+          "description": "Index of the disease in mappings/disease.parquet and the graph tensors.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-train"
+            },
+            "extract": {
+              "column": "disease_index"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_train/transition_year",
+          "name": "transition_year",
+          "description": "Year the pair entered Phase II: the decision year it is scored at, on evidence dated before it.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-train"
+            },
+            "extract": {
+              "column": "transition_year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_train/outcome",
+          "name": "outcome",
+          "description": "True if a Phase III or later trial started by 2018.",
+          "dataType": "sc:Boolean",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-train"
+            },
+            "extract": {
+              "column": "outcome"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@type": "cr:RecordSet",
+      "@id": "advancement_eval",
+      "name": "advancement_eval",
+      "description": "T3 eval: pairs entering Phase II 2016-2023, outcome by 2026.",
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_eval/target_id",
+          "name": "target_id",
+          "description": "Ensembl gene id of the target.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-eval"
+            },
+            "extract": {
+              "column": "target_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_eval/disease_id",
+          "name": "disease_id",
+          "description": "Open Targets disease id (MONDO, EFO, HP or Orphanet).",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-eval"
+            },
+            "extract": {
+              "column": "disease_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_eval/target_index",
+          "name": "target_index",
+          "description": "Index of the target in mappings/target.parquet and the graph tensors.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-eval"
+            },
+            "extract": {
+              "column": "target_index"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_eval/disease_index",
+          "name": "disease_index",
+          "description": "Index of the disease in mappings/disease.parquet and the graph tensors.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-eval"
+            },
+            "extract": {
+              "column": "disease_index"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_eval/transition_year",
+          "name": "transition_year",
+          "description": "Year the pair entered Phase II: the decision year it is scored at, on evidence dated before it.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-eval"
+            },
+            "extract": {
+              "column": "transition_year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "advancement_eval/outcome",
+          "name": "outcome",
+          "description": "True if a Phase III or later trial started by 2026.",
+          "dataType": "sc:Boolean",
+          "source": {
+            "fileObject": {
+              "@id": "advancement-eval"
+            },
+            "extract": {
+              "column": "outcome"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@type": "cr:RecordSet",
+      "@id": "therapeutic_areas",
+      "name": "therapeutic_areas",
+      "description": "Each disease's Open Targets therapeutic areas, plus 'all' for every disease that has one.",
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "therapeutic_areas/disease_id",
+          "name": "disease_id",
+          "description": "Open Targets disease id.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "therapeutic-areas"
+            },
+            "extract": {
+              "column": "disease_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "therapeutic_areas/therapeutic_area_id",
+          "name": "therapeutic_area_id",
+          "description": "Therapeutic area id (ALL_0 for 'all').",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "therapeutic-areas"
+            },
+            "extract": {
+              "column": "therapeutic_area_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "therapeutic_areas/therapeutic_area_name",
+          "name": "therapeutic_area_name",
+          "description": "Therapeutic area name.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "therapeutic-areas"
+            },
+            "extract": {
+              "column": "therapeutic_area_name"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@type": "cr:RecordSet",
+      "@id": "target_disease_by_source",
+      "name": "target_disease_by_source",
+      "description": "Per-source target-disease scores: one row per pair, source and year in which the score changed.",
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "target_disease_by_source/target_id",
+          "name": "target_id",
+          "description": "Ensembl gene id of the target.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "source-scores"
+            },
+            "extract": {
+              "column": "target_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "target_disease_by_source/disease_id",
+          "name": "disease_id",
+          "description": "Open Targets disease id.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "source-scores"
+            },
+            "extract": {
+              "column": "disease_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "target_disease_by_source/relation",
+          "name": "relation",
+          "description": "Graph relation the source feeds.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "source-scores"
+            },
+            "extract": {
+              "column": "relation"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "target_disease_by_source/datasource",
+          "name": "datasource",
+          "description": "Open Targets data source id.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "source-scores"
+            },
+            "extract": {
+              "column": "datasource"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "target_disease_by_source/year",
+          "name": "year",
+          "description": "Year of the score.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileObject": {
+              "@id": "source-scores"
+            },
+            "extract": {
+              "column": "year"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "target_disease_by_source/score",
+          "name": "score",
+          "description": "The source's harmonic-sum score of the evidence dated up to that year.",
+          "dataType": "sc:Float",
+          "source": {
+            "fileObject": {
+              "@id": "source-scores"
+            },
+            "extract": {
+              "column": "score"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@type": "cr:RecordSet",
+      "@id": "node_mappings",
+      "name": "node_mappings",
+      "description": "Node index to node_id per node type.",
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "node_mappings/index",
+          "name": "index",
+          "description": "Node index in the graph tensors.",
+          "dataType": "sc:Integer",
+          "source": {
+            "fileSet": {
+              "@id": "node-mappings"
+            },
+            "extract": {
+              "column": "index"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "node_mappings/node_id",
+          "name": "node_id",
+          "description": "Source identifier (Ensembl, Open Targets disease id, ChEMBL, GO, Reactome).",
+          "dataType": "sc:Text",
+          "source": {
+            "fileSet": {
+              "@id": "node-mappings"
+            },
+            "extract": {
+              "column": "node_id"
+            }
+          }
         }
       ]
     }
