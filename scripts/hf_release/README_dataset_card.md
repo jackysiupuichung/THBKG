@@ -319,6 +319,39 @@ Dataset artifacts: **CC-BY-4.0**. Source code (construction pipeline, benchmark
 harness): MIT, at <https://github.com/jackysiupuichung/THBKG>. Archival DOI on
 Zenodo: concept [10.5281/zenodo.20795231](https://doi.org/10.5281/zenodo.20795231).
 
+### Sources
+
+THBKG is derived from the resources below. If you use the parts that come from
+them, please cite them as well.
+
+| Source | Licence | In THBKG |
+|---|---|---|
+| [Open Targets Platform](https://platform-docs.opentargets.org/licence) 26.09 | CC0 1.0 | evidence edges and per-source scores, disease index, molecules and SMILES, drug–target and clinical-trial edges, target-prioritisation features (Buniello et al., *Nucleic Acids Res.* 2025) |
+| [Gene Ontology](https://geneontology.org/docs/go-citation-policy/), release 2026-07-26 | CC BY 4.0 | GO terms, hierarchy and annotations |
+| [Reactome](https://reactome.org/license) | CC0 | pathways, hierarchy and membership |
+| [IntAct](https://www.ebi.ac.uk/intact/), release 2026-01-09 | CC BY 4.0 | protein–protein interactions |
+| [Human Protein Atlas](https://v25.proteinatlas.org/about/licence) v25 | CC BY 4.0 | single-cell-type RNA expression in the target features (v25.proteinatlas.org; Karlsson et al., *Sci. Adv.* 2021) |
+| [ChEMBL](https://chembl.gitbook.io/chembl-interface-documentation/about) 37 | CC BY-SA 3.0 | protein sequences of biologics, embedded with ESM-2 |
+| [ClinicalTrials.gov](https://clinicaltrials.gov/about-site/terms-conditions) | U.S. National Library of Medicine terms | trial start and completion dates, fetched 2026-10-13 |
+| MONDO, EFO (via Open Targets) | CC BY 4.0, Apache 2.0 | disease identifiers and hierarchy |
+| Orphanet (via Open Targets) | CC BY 4.0 | genetic-association evidence: Orphadata Science © INSERM 1999, as in Open Targets 26.09, aggregated into scores |
+| UniProt (via Open Targets) | CC BY 4.0 | genetic-association evidence |
+| [ESM-2 650M](https://github.com/facebookresearch/esm), [PubMedBERT](https://huggingface.co/microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext) | MIT | models used to compute molecule and disease features (Lin et al., *Science* 2023; Gu et al., *ACM Trans. Comput. Healthc.* 2021) |
+
+- **ESM-2 molecule features.** `x_esm` and `features/molecule_esm2_full.*` are
+  embeddings computed from ChEMBL 37 protein sequences. We treat them as
+  computed features of factual sequences, not an adaptation of the ChEMBL
+  database, and distribute them under CC BY 4.0 with this attribution to ChEMBL.
+- **Sources Open Targets redistributes under its own terms.** Evidence from the
+  COSMIC Cancer Gene Census, Genomics England PanelApp and Project Score is
+  included as Open Targets 26.09 distributes it. Open Targets' licence statement
+  says these sources agreed for their data to be used without restriction by
+  Open Targets users. Using those resources directly is governed by their own
+  terms, which restrict redistribution and commercial use. Their contribution is
+  listed per source (`datasource`) in `scores/target_disease_by_source.parquet`.
+  The graph's edge scores combine it with other sources.
+- No endorsement by any source is implied.
+
 ```
 Siu, Cabrera, Mudaliar, and Zubiaga.
 THBKG: A Temporal Biomedical Knowledge Graph for Leak-Free Clinical Advancement Prediction.
