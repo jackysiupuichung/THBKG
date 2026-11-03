@@ -254,9 +254,10 @@ footer pre { margin: 12px 0 0; background: #0f0f0f; color: #e8e6e1; border-radiu
       <div class="eyebrow reveal">The graph</div>
       <h2 class="reveal">Dated evidence, assembled into a heterogeneous graph</h2>
       <p class="lead reveal">
-        Evidence records from Open Targets, Gene Ontology, Reactome, IntAct, the Human Protein Atlas and
+        Evidence records from Open Targets, Gene Ontology, Reactome, IntAct, the Human Protein Atlas, ChEMBL and
         ClinicalTrials.gov are scored and dated, then assembled into five node types joined by sixteen
-        temporal and three static relations. Cutting the graph at a year gives the evidence available then.
+        temporal and three static relations. Cutting the graph at a year gives the evidence available then;
+        the release ships that cut for every decision year from 1995 as a ready-made snapshot.
       </p>
     </div>
     <figure class="reveal">
@@ -268,10 +269,10 @@ footer pre { margin: 12px 0 0; background: #0f0f0f; color: #e8e6e1; border-radiu
       <figcaption><b>Figure 2.</b> Schema: five node types (target, disease, molecule, Reactome pathway, GO term) connected by 16 temporal edge types, masked per instance at the decision year, and 3 static ontology edge types present regardless of cutoff. The advancement relation is the prediction target and is held outside the graph.</figcaption>
     </figure>
     <div class="grid4">
-      <div class="card mini reveal"><div class="label">Nodes</div><div class="stat">109,087</div><p>targets, diseases, molecules, GO terms, pathways</p></div>
-      <div class="card mini reveal"><div class="label">Edges</div><div class="stat">13.6M</div><p>over 19 relation types</p></div>
-      <div class="card mini reveal"><div class="label">Labelled pairs</div><div class="stat">47,802</div><p>target–disease pairs entering Phase II</p></div>
-      <div class="card mini reveal"><div class="label">Release</div><div class="stat">OT 26.09</div><p>current build; every source version pinned</p></div>
+      <div class="card mini reveal"><div class="label">Nodes</div><div class="stat">110,220</div><p>targets, diseases, molecules, GO terms, pathways</p></div>
+      <div class="card mini reveal"><div class="label">Edges</div><div class="stat">14.1M</div><p>over 19 relation types</p></div>
+      <div class="card mini reveal"><div class="label">Benchmark tasks</div><div class="stat">3</div><p>first trial, first published link, Phase II to III</p></div>
+      <div class="card mini reveal"><div class="label">Release</div><div class="stat">v2</div><p>on Open Targets 26.09; every source version pinned</p></div>
     </div>
   </div>
 </section>
@@ -304,17 +305,20 @@ footer pre { margin: 12px 0 0; background: #0f0f0f; color: #e8e6e1; border-radiu
       <p class="lead reveal">
         Each example is a target–disease pair at its Phase II entry. Models rank pairs using only evidence
         dated strictly before that year. Labels follow a fixed horizon: a pair is positive if it reached
-        Phase III by 2018 (train) or 2024 (evaluation). The primary metric is relative success at top <em>N</em>,
-        reported per therapeutic area.
+        Phase III by 2018 (train) or by the end of the evaluation follow-up (2024 in the paper's 26.03
+        build, 2026 in v2). The primary metric is relative success at top <em>N</em>, reported per
+        therapeutic area.
       </p>
     </div>
     <div class="split reveal">
       <div class="split-bar">
-        <div class="tr"><b>Train · 1995–2015</b>34,740 pairs, 17.7% positive</div>
-        <div class="ev"><b>Eval · 2016–21</b>13,062 pairs, 7.9% positive</div>
-        <div class="fu"><b>Follow-up</b>to 2024</div>
+        <div class="tr"><b>Train · 1995–2015</b>34,720 pairs, 17.7% positive</div>
+        <div class="ev"><b>Eval · 2016–23</b>16,534 pairs, 7.4% positive</div>
+        <div class="fu"><b>Follow-up</b>to 2026</div>
       </div>
-      <p class="lead" style="font-size:13px;margin-top:10px">Split sizes for the current 26.09 release.</p>
+      <p class="lead" style="font-size:13px;margin-top:10px">Split sizes for the current v2 release (evaluation: validation 2016–19, test 2020–23).
+        v2 adds two tasks on the same protocol: <b>T1 discovery</b>, which targets will enter the clinic for a disease,
+        and <b>T2 hypothesis</b>, which targets will first be linked to a disease in the literature.</p>
     </div>
     <figure class="reveal">
       <span class="tag">Published results · Open Targets 26.03</span>
@@ -358,30 +362,35 @@ footer pre { margin: 12px 0 0; background: #0f0f0f; color: #e8e6e1; border-radiu
       <div class="eyebrow reveal">Releases</div>
       <h2 class="reveal">A continually updated graph</h2>
       <p class="lead reveal">
-        THBKG is rebuilt on each Open Targets release. The paper's results use the 26.03 build, which stays
-        available as Hugging Face revision <code>v26.03</code>. Builds are not directly comparable: disease
-        identifiers moved from EFO to MONDO in 26.06, and 26.09 adds substantially more clinical data.
+        THBKG is versioned on its own. The current release, <b>v2</b> (November 2026), is built on Open Targets
+        26.09: it adds the T1 and T2 tasks, yearly snapshots, per-modality molecule features covering every drug
+        type, and release checks that hold each build to exactly its own Open Targets input. The paper's results
+        use the 26.03 build, which stays available as Hugging Face revision <code>v26.03</code>. Builds are not
+        directly comparable: disease identifiers moved from EFO to MONDO in 26.06, and clinical records change
+        between Open Targets releases.
       </p>
     </div>
     <div class="tbl reveal">
       <table>
-        <thead><tr><th>Build</th><th>26.09 (current)</th><th>26.03 (paper)</th><th>Change</th></tr></thead>
+        <thead><tr><th>Build</th><th>v2 (current)</th><th>v26.09</th><th>26.03 (paper)</th></tr></thead>
         <tbody>
-          <tr><td>Nodes</td><td>109,087</td><td>110,396</td><td class="chg">−1%</td></tr>
-          <tr><td>Edges</td><td>13.64M</td><td>11.07M</td><td class="chg">+23%</td></tr>
-          <tr><td>Clinical-trial edges</td><td>275,414</td><td>171,316</td><td class="chg">+61%</td></tr>
-          <tr><td>Labelled pairs</td><td>47,802</td><td>28,795</td><td class="chg">+66%</td></tr>
-          <tr><td>Evaluation pairs</td><td>13,062</td><td>7,193</td><td class="chg">+82%</td></tr>
+          <tr><td>Open Targets release</td><td>26.09</td><td>26.09</td><td>26.03</td></tr>
+          <tr><td>Nodes</td><td>110,220</td><td>109,087</td><td>110,396</td></tr>
+          <tr><td>Edges</td><td>14.10M</td><td>13.64M</td><td>11.07M</td></tr>
+          <tr><td>Clinical-trial edges</td><td>258,519</td><td>275,414</td><td>171,316</td></tr>
+          <tr><td>Advancement pairs (eval)</td><td>51,254 (16,534)</td><td>47,802 (13,062)</td><td>28,795 (7,193)</td></tr>
+          <tr><td>Tasks</td><td>T1, T2, T3</td><td>T3</td><td>T3</td></tr>
         </tbody>
       </table>
     </div>
 <pre class="code reveal"><span class="c"># load the current release (pickle-free: safetensors + parquet)</span>
 from huggingface_hub import snapshot_download
-from load_thbkg import load_graph, load_labels   <span class="c"># shipped with the dataset</span>
+from load_thbkg import load_graph, load_snapshot, load_labels   <span class="c"># shipped with the dataset</span>
 
-path  = snapshot_download(<span class="s">"jspc00012567/THBKG"</span>, repo_type=<span class="s">"dataset"</span>)
-graph = load_graph(path)            <span class="c"># PyG HeteroData</span>
-train = load_labels(path, <span class="s">"train"</span>)  <span class="c"># target_id, disease_id, transition_year, outcome</span>
+path  = snapshot_download(<span class="s">"jspc00012567/THBKG"</span>, repo_type=<span class="s">"dataset"</span>, revision=<span class="s">"v2"</span>)
+graph = load_graph(path)                 <span class="c"># PyG HeteroData, every dated edge</span>
+snap  = load_snapshot(path, 2020)        <span class="c"># the graph as it stood before 2020</span>
+t3    = load_labels(path, <span class="s">"train"</span>)      <span class="c"># also "discovery" (T1), "hypothesis" (T2), "eval"</span>
 
 <span class="c"># the paper's 26.03 build</span>
 snapshot_download(<span class="s">"jspc00012567/THBKG"</span>, repo_type=<span class="s">"dataset"</span>, revision=<span class="s">"v26.03"</span>)</pre>
@@ -410,7 +419,9 @@ snapshot_download(<span class="s">"jspc00012567/THBKG"</span>, repo_type=<span c
 }</pre>
     <p class="fine">
       Dataset artifacts are released under <a href="https://creativecommons.org/licenses/by/4.0/">CC-BY-4.0</a>; source code under the MIT license.
-      Built from <a href="https://platform.opentargets.org/">Open Targets</a>. An earlier 23.06 build had a same-year clinical-trial-edge leak and is deprecated.
+      Built from <a href="https://platform.opentargets.org/">Open Targets</a>; per-source licences and attribution are listed in the
+      <a href="https://huggingface.co/datasets/jspc00012567/THBKG">dataset card</a>. THBKG v2: <a href="https://doi.org/10.5281/zenodo.23920457">10.5281/zenodo.23920457</a>.
+      An earlier 23.06 build had a same-year clinical-trial-edge leak and is deprecated.
     </p>
   </div>
 </footer>
