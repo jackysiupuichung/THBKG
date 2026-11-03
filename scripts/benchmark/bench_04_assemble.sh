@@ -7,9 +7,11 @@
 #SBATCH --mem=96G
 #SBATCH -t 1:0:0
 
-# Attach features, check the graph against the v26.09 release, export a
-# release directory, and write the benchmark labels (T1, T3, therapeutic areas)
-# and the per-source evidence scores into it.
+# Attach features, export a release directory, write the benchmark labels (T1,
+# T2, T3, therapeutic areas), the per-source evidence scores and the Croissant
+# metadata into it, and check the release on its own: against the release
+# contract and against its own Open Targets input. Nothing is compared with
+# another release.
 set -euo pipefail
 source scripts/benchmark/bench_env.sh
 
@@ -19,13 +21,6 @@ for level in datatype datasource; do
     --output-file "${FINAL_GRAPH_DIR}/hetero_graph_with_features_${level}.pt" \
     --feature-dir "$FEATURE_OUTPUT_DIR"
 done
-
-# Hard checks against the release; a failure stops the job before export.
-python scripts/benchmark/verify_bench_graph.py \
-  --bench-graph "${FINAL_GRAPH_DIR}/hetero_graph_with_features_datatype.pt" \
-  --ref-graph "${REF_BASE}/graph/hetero_graph_with_features_datatype.pt" \
-  --out "${OUTPUT_BASE}/verify_vs_26.09.json" \
-  --clinical-evidence "${REF_BASE}/raw_backup/sourceId=clinical_precedence"
 
 # Export into a fresh directory so no file from an earlier build lingers.
 rm -rf "${RELEASE_DIR:?}"
@@ -56,7 +51,7 @@ python scripts/benchmark/build_task_labels.py --release-dir "$RELEASE_DIR"
 # per-source target-disease scores, for baselines that need the sources apart
 python scripts/benchmark/write_source_scores.py \
   --events "${EVENT_OUTPUT_DIR}/events_datasource.parquet" --release-dir "$RELEASE_DIR"
-cp -p "${OUTPUT_BASE}/verify_vs_26.09.json" "${FEATURE_OUTPUT_DIR}/molecule_features.yaml" "$RELEASE_DIR/"
+cp -p "${FEATURE_OUTPUT_DIR}/molecule_features.yaml" "$RELEASE_DIR/"
 # raw ESM-2 embeddings of the biologics (the graph carries them centred and scaled)
 mkdir -p "$RELEASE_DIR/features"
 cp -p "${FEATURE_OUTPUT_DIR}/molecule_esm2_full.safetensors" "${FEATURE_OUTPUT_DIR}/molecule_esm2_full_ids.parquet" \

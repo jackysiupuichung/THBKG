@@ -40,7 +40,6 @@ files:
     - mappings/*.parquet          # checked per node type below
     - snapshots/*.safetensors     # stage 5; checked when present
     - snapshots/index.json
-    - verify_*.json               # build reports
     - check_release.json
     - check_inputs.json
 

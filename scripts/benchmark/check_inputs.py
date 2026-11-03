@@ -18,7 +18,9 @@ so a bug in the parser does not hide itself):
              pathways.id), as config/edge_schema_<version>.yaml specifies
   endpoints  both ids must be in the Open Targets node index of their type,
              targets protein-coding only (the parser drops the rest); every
-             kept pair's endpoints must then be graph nodes
+             kept pair's endpoints must then be graph nodes. A dropped row is
+             counted under the node type of the id that failed (the source's
+             when both did)
   year       the first non-null column of parsers.parser.YEAR_PRIORITY; a date
              after EVIDENCE_CUTOFF counts as missing (no fallback); a row still
              undated with PMIDs (GO, IntAct) takes its earliest PubMed year from
@@ -40,6 +42,10 @@ Checks (hard)
   inputs.<relation>.first_year  pairs whose first graph year differs from
                                 their earliest kept row
   inputs.relations_covered      every release relation has an input rule
+  inputs.disease_ids            no input row is dropped for a disease id the
+                                release's own disease index lacks (evidence
+                                mapped to other disease ids, e.g. EFO terms
+                                Open Targets has replaced, would be lost)
   inputs.pubmed.cached          every PMID a row needs is in the PubMed cache
   inputs.pubmed.no_year         at most inputs.pubmed_no_year_max (contract) of
                                 those PMIDs have no year in PubMed
@@ -79,7 +85,11 @@ TRIAL_START = "clinical_trial_ongoing"
 TRIAL_OUTCOMES = {"clinical_trial_positive", "clinical_trial_Unknown/Operational",
                   "clinical_trial_unmet_efficacy", "clinical_trial_adverse_effects"}
 DROP = {  # report labels for the rules, in the order they are applied
-    "endpoint": "endpoint not an Open Targets entity",
+    "endpoint_target": "target not a protein-coding Open Targets target",
+    "endpoint_disease": "disease not in the Open Targets disease index",
+    "endpoint_molecule": "molecule not in the Open Targets drug index",
+    "endpoint_go": "GO term not in the Open Targets GO index",
+    "endpoint_reactome": "pathway not in the Open Targets Reactome index",
     "undated": "no date and no PMID",
     "future": "dated after the cutoff",
     "no_pubmed_year": "PMIDs without a PubMed year",
@@ -243,6 +253,17 @@ def node_index(evidence_dir: Path, nt: str) -> pd.Index:
     return pd.Index(pd.unique(ids))
 
 
+def endpoints(ot: dict, src_t: str, src_ids, dst_t: str, dst_ids) -> tuple[np.ndarray, dict]:
+    """Rows with both ids in the Open Targets index of their type, and the endpoint drop rules: a row is
+    dropped under the node type of the id that is missing (the source's when both are)."""
+    s_ok = ot[src_t].get_indexer(src_ids) >= 0
+    d_ok = ot[dst_t].get_indexer(dst_ids) >= 0
+    drops = {f"endpoint_{src_t}": ~s_ok}
+    key = f"endpoint_{dst_t}"
+    drops[key] = drops.get(key, np.zeros(len(s_ok), bool)) | (s_ok & ~d_ok)
+    return s_ok & d_ok, drops
+
+
 def spec_list(schema: dict):
     """Every (name, spec) of an edge schema, once per spec where a name lists several."""
     for name, spec in schema.items():
@@ -293,7 +314,7 @@ def evidence_spec(rel: Relation, evidence_dir: Path, name: str, spec: dict, ot: 
             df["_dst"] = df[dst_col]
             df["_pmids"] = df["literature"].map(pmids_of) if "literature" in df.columns else [[] for _ in range(len(df))]
         src_ids, dst_ids = df[src_col].astype(str).to_numpy(), df["_dst"].astype(str).to_numpy()
-        rest = (ot[src_t].get_indexer(src_ids) >= 0) & (ot[dst_t].get_indexer(dst_ids) >= 0)
+        rest, ep_drops = endpoints(ot, src_t, src_ids, dst_t, dst_ids)
         year, decided = row_years(df)
         # the parser looks up PubMed for any valid row still without a year (or year 0)
         has_pm = df["_pmids"].map(len).to_numpy() > 0
@@ -308,7 +329,7 @@ def evidence_spec(rel: Relation, evidence_dir: Path, name: str, spec: dict, ot: 
         else:
             score_ok = np.full(len(df), float(const_score) > 0)
         unverifiable = rest & use_pm & np.isnan(pm_year) & uncached
-        drops = {"endpoint": ~rest,
+        drops = {**ep_drops,
                  "undated": rest & undated & ~use_pm & ~decided,
                  "future": rest & undated & ~use_pm & decided,
                  "no_pubmed_year": rest & undated & use_pm & ~unverifiable,
@@ -335,8 +356,8 @@ def trial_relations(rels: dict, trials_dir: Path, ot: dict, last: int, first: in
         if et not in rels:
             continue
         s_ids, d_ids = t[s_col].astype(str).to_numpy(), t[d_col].astype(str).to_numpy()
-        ep = (ot[et[0]].get_indexer(s_ids) >= 0) & (ot[et[2]].get_indexer(d_ids) >= 0)
-        drops = {"endpoint": ~ep, "not_nct": ep & ~nct, "no_start": ep & nct & ~has_start,
+        ep, ep_drops = endpoints(ot, et[0], s_ids, et[2], d_ids)
+        drops = {**ep_drops, "not_nct": ep & ~nct, "no_start": ep & nct & ~has_start,
                  "future": ep & nct & has_start & ~ok_date}
         kept = ep & nct & has_start & ok_date
         rels[et].add("clinical_precedence", s_ids, d_ids, year, kept, np.zeros(len(t), bool), drops)
@@ -369,12 +390,12 @@ def intact_relation(rel: Relation, evidence_dir: Path, ot: dict, pubmed: PubMed,
     a, b = df["a"].to_numpy(dtype=str), df["b"].to_numpy(dtype=str)
     loop = a == b
     lo, hi = np.where(a < b, a, b), np.where(a < b, b, a)
-    ep = (ot["target"].get_indexer(lo) >= 0) & (ot["target"].get_indexer(hi) >= 0)
+    ep, ep_drops = endpoints(ot, "target", lo, "target", hi)
     has_pm = df["pmids"].map(len).to_numpy() > 0
     year, uncached = pubmed.earliest([p if h else [] for p, h in zip(df["pmids"], has_pm & ep & ~loop)])
     year[year > min(MAX_EVIDENCE_YEAR, last)] = np.nan
     rest = ~loop & ep
-    drops = {"self_loop": loop, "endpoint": ~loop & ~ep, "undated": rest & ~has_pm,
+    drops = {"self_loop": loop, **{k: m & ~loop for k, m in ep_drops.items()}, "undated": rest & ~has_pm,
              "no_pubmed_year": rest & has_pm & np.isnan(year) & ~uncached}
     unverifiable = rest & has_pm & np.isnan(year) & uncached
     drops["uncached"] = unverifiable
@@ -511,6 +532,10 @@ def main() -> int:
                    "examples": [(a, b, int(exp[k]), int(g[k])) for (a, b), k in zip(ids(diff.to_numpy()), diff[:5])]})
         report[f"inputs.{label}.drops"] = {s: {"rows": rel.rows[s], **{k: v for k, v in c.items() if v}}
                                           for s, c in rel.drops.items()}
+
+    lost = {f"{edge_key(et)} {s}": c[DROP['endpoint_disease']] for et, rel in rels.items()
+            for s, c in rel.drops.items() if c.get(DROP["endpoint_disease"])}
+    check("inputs.disease_ids", not lost, lost or "no input row dropped for its disease id")
 
     needed = pubmed.needed
     uncached = [p for p in needed if p not in pubmed.years]

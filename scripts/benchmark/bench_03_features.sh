@@ -10,11 +10,9 @@
 
 # Node features for the benchmark graph.
 #
-# Every node type's features are rebuilt here, for this graph's own node sets
-# (a few targets differ from the 26.09 release; reported below):
-#   - targets: from the 26.09 raw inputs, to record which values are
-#     mean-imputed (target_features_imputed.parquet); the vectors of targets
-#     the release also has must match the release's;
+# Every node type's features are rebuilt here, for this graph's own node sets:
+#   - targets: from the Open Targets 26.09 and Human Protein Atlas raw inputs,
+#     recording which values are mean-imputed (target_features_imputed.parquet);
 #   - GO / Reactome: autoencoders retrained with a learnable input per node (the
 #     release fed torch.eye(N, 128), leaving 90% of GO terms with zero input);
 #   - molecules: per-modality tensors (Morgan, ESM-2 at full width (1,280),
@@ -30,16 +28,6 @@ set -euo pipefail
 source scripts/benchmark/bench_env.sh
 [ -f "$CHEMBL_CACHE" ] || { echo "❌ missing $CHEMBL_CACHE (run the fetch on a login node)"; exit 1; }
 
-python -u - <<'PY'
-import os, torch
-ref = torch.load(f"{os.environ['REF_BASE']}/progression/temporal_graph_datatype_mappings.pt", weights_only=False)["node_mapping"]
-for level in ("datatype", "datasource"):
-    new = torch.load(f"{os.environ['OUTPUT_BASE']}/progression/temporal_graph_{level}_mappings.pt", weights_only=False)["node_mapping"]
-    for nt in ref:
-        r, n = set(ref[nt]), set(new[nt])
-        print(f"{level} {nt}: {len(r):,} -> {len(n):,} nodes ({len(r - n)} dropped, {len(n - r)} added)")
-PY
-
 mkdir -p "$FEATURE_OUTPUT_DIR"
 python -m preprocessing.node_features.build_all_features \
   --mappings-file "${EVENT_OUTPUT_DIR}/temporal_graph_datatype_mappings.pt" \
@@ -48,16 +36,6 @@ python -m preprocessing.node_features.build_all_features \
   --output-dir "$FEATURE_OUTPUT_DIR" \
   --temp-dir "$TEMP_NODE_DIR" \
   --node-types target
-
-python -u - <<'PY'
-import os, torch
-ref = torch.load(f"{os.environ['REF_BASE']}/features/processed/integrated_target_features.pt")
-new = torch.load(f"{os.environ['FEATURE_OUTPUT_DIR']}/integrated_target_features.pt")
-shared = ref.keys() & new.keys()
-bad = [k for k in shared if not torch.allclose(ref[k], new[k], atol=1e-5)]
-assert not bad, f"{len(bad)} target vectors differ from 26.09, e.g. {bad[:3]}"
-print(f"target features: {len(shared):,} shared vectors match 26.09; {len(new.keys() - ref.keys())} new targets")
-PY
 
 python -m preprocessing.node_features.build_all_features \
   --mappings-file "${EVENT_OUTPUT_DIR}/temporal_graph_datatype_mappings.pt" \

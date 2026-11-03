@@ -95,7 +95,6 @@ release (format 1.0). Code written for v26.09 does not run on it unchanged.
 | `features/` | Raw 1280-d ESM-2 embeddings of the biologics, target-feature imputation flags, how disease embeddings were made. |
 | `benchmark_tasks.json` | Splits, slate filters, label and slate counts per task and split, closed-form random floors. |
 | `check_release.json`, `check_inputs.json` | The release checks this build passed (see *Checks*). |
-| `verify_vs_26.09.json` | Comparison of this build with the format-1.0 v26.09 graph. |
 | `molecule_features.yaml`, `source_versions.json` | Molecule feature recipe; pinned upstream versions. |
 | `load_thbkg.py` | Standalone loader: PyG `HeteroData` for either view, label tables. |
 | `croissant.json` | MLCommons Croissant metadata, with the sha256 of every file. |

@@ -1,9 +1,10 @@
 # Shared paths for the benchmark graph build (sourced by bench_0*.sh).
 #
-# Reads the 26.09 release build (REF_BASE) and writes a separate tree
-# (OUTPUT_BASE), so the published v26.09 artifacts are never touched. The
-# clinical_precedence input is already trial-resolved (Stage B), so Stage B is
-# not re-run here.
+# Reads only the Open Targets 26.09 download kept under REF_BASE (evidenceDated,
+# raw_backup, the raw feature inputs in features/raw) and writes a separate tree
+# (OUTPUT_BASE), so the published v26.09 artifacts are never touched. Nothing
+# built from another release is read or compared: stage 1 runs trial resolution
+# itself and parses every source, and the checks look at this release alone.
 
 OT_VERSION="26.09"
 BUILD_TAG="${BUILD_TAG:-bench}"
