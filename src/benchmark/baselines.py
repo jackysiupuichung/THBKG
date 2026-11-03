@@ -1,7 +1,8 @@
 """Baselines computed from the release without training.
 
-Both read the per-source target-disease scores (scores/target_disease_by_source.parquet)
-as of a decision year Y (each (pair, source)'s latest row dated before Y):
+The first two read the per-source target-disease scores
+(scores/target_disease_by_source.parquet) as of a decision year Y (each
+(pair, source)'s latest row dated before Y):
 
 * ``open_targets_score``: Open Targets' direct association score. Each
   source's score is multiplied by its weight (config/datatype_mapping.yaml:
@@ -9,6 +10,13 @@ as of a decision year Y (each (pair, source)'s latest row dated before Y):
   sorted and harmonic-summed (the i-th counts 1/i^2) and divided by pi^2/6.
   Trial evidence is not part of the table, so it never contributes.
 * ``genetics_score``: the same over the genetic-association sources alone.
+
+Both are 0 for every T2 candidate, which by definition has no direct edge to
+the disease before Y. T2's reference is instead
+
+* ``target_degree``: a popularity prior, the number of diseases each target had
+  a direct edge to (any relation, trials included) before Y, read off
+  labels/hypothesis.parquet.
 """
 from __future__ import annotations
 
@@ -90,3 +98,10 @@ def open_targets_score(scores: SourceScores, year: int, weights: dict) -> pd.Dat
 
 def genetics_score(scores: SourceScores, year: int, weights: dict, genetic: set) -> pd.DataFrame:
     return harmonic_score(scores.as_of(year), weights, genetic)
+
+
+def target_degree(hypothesis_labels: pd.DataFrame, year: int, num_targets: int) -> np.ndarray:
+    """[num_targets] diseases each target had a direct edge to before ``year`` (T2's popularity prior)."""
+    before = hypothesis_labels["first_direct_year"].to_numpy() < year
+    targets = hypothesis_labels["target_index"].to_numpy()[before]
+    return np.bincount(targets, minlength=num_targets).astype(np.float64)

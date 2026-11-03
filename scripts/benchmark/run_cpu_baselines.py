@@ -1,16 +1,21 @@
 #!/usr/bin/env python
-"""Run the baselines that need no training on both tasks, for val and test.
+"""Run the baselines that need no training on every task, for val and test.
 
     python scripts/benchmark/run_cpu_baselines.py --release-dir $RELEASE_DIR --out-dir $OUT
 
 Methods (src/benchmark/baselines.py):
-  random         T1: closed-form expectation; T3: a constant score (RS@N = 1)
-  open_targets   Open Targets direct association score at the decision year
-  genetics       the same over the genetic-association sources
+  random         T1, T2: closed-form expectation; T3: a constant score (RS@N = 1)
+  open_targets   T1, T3: Open Targets direct association score at the decision year
+  genetics       T1, T3: the same over the genetic-association sources
+  target_degree  T2: diseases the target had a direct edge to before the decision year
+                 (open_targets and genetics are 0 on every T2 candidate)
 
 Writes, in --out-dir:
   t1_metrics.csv          method, split, precision/recall/NDCG@K macro-averaged over slates
   t1_per_slate.parquet    the same per slate (year, disease_index)
+  t2_metrics.csv          the same for T2, plus recall@K per stratum (over the slates with
+                          a positive in it)
+  t2_per_slate.parquet    the same per slate
   t3_predictions.parquet  method, split, pair, transition_year, outcome, score
   t3_summary.csv          RS@N, AUROC, AP: TA mean and "all", per method and split
   t3_by_ta.csv            per primary therapeutic area
@@ -29,9 +34,11 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.advancement_metrics import evaluate_advancement  # noqa: E402
-from src.benchmark.baselines import SourceScores, harmonic_score, source_weights  # noqa: E402
+from src.benchmark.baselines import SourceScores, harmonic_score, source_weights, target_degree  # noqa: E402
 from src.benchmark.slates import evaluate, expected_random, macro_average, slate_stats  # noqa: E402
-from src.benchmark.tasks import advancement_labels, decision_years, last_label_year, task_slates  # noqa: E402
+from src.benchmark.tasks import (  # noqa: E402
+    advancement_labels, decision_years, evaluate_task, last_label_year, task_slates,
+)
 
 SPLITS = ("val", "test")
 
@@ -87,6 +94,24 @@ def main() -> None:
     t1m.to_csv(out / "t1_metrics.csv", index=False)
     pd.DataFrame(per_slate).to_parquet(out / "t1_per_slate.parquet", index=False)
 
+    # ---- T2: rank every target with no direct edge to the disease yet, one decision year at a time
+    t2 = pd.read_parquet(rd / "labels" / "hypothesis.parquet")
+
+    def degree_for_year(year, slates):
+        degree = target_degree(t2, year, n_targets)
+        return lambda s: degree[s.candidates]
+
+    t2_rows, t2_per_slate = [], []
+    for split in SPLITS:
+        macro, rows = evaluate_task("hypothesis", split, t2, num_targets=n_targets, score_fn_for_year=degree_for_year)
+        t2_rows.append({"method": "random", "split": split, **expected_random(pd.DataFrame(rows))})
+        t2_rows.append({"method": "target_degree", "split": split, **macro})
+        t2_per_slate.extend({"method": "target_degree", "split": split, **r} for r in rows)
+        print(f"T2 {split}: {len(rows):,} slates ({time.time() - t0:.0f}s)")
+    t2m = pd.DataFrame(t2_rows)
+    t2m.to_csv(out / "t2_metrics.csv", index=False)
+    pd.DataFrame(t2_per_slate).to_parquet(out / "t2_per_slate.parquet", index=False)
+
     # ---- T3: score each labelled pair at its Phase II entry year
     tas = pd.read_parquet(rd / "labels" / "therapeutic_areas.parquet")
     primary = json.loads((rd / "labels" / "primary_therapeutic_areas.json").read_text())
@@ -119,6 +144,10 @@ def main() -> None:
     print("\nT1 (macro over slates)")
     cols = [c for c in t1m.columns if c.split("@")[0] in ("precision", "recall", "ndcg")] + ["n_slates"]
     print(t1m[["method", "split"] + cols].round(4).to_string(index=False))
+    print("\nT2 (macro over slates; a stratum's recall over the slates with a positive in it)")
+    cols = ([c for c in t2m.columns if c.split("@")[0] in ("precision", "recall", "ndcg")]
+            + [c for c in t2m.columns if c.endswith(".recall@100")] + ["n_slates"])
+    print(t2m.set_index(["method", "split"])[cols].T.round(4).to_string())
     print("\nT3")
     print(t3s.pivot_table(index=["split", "method", "scope"], columns="N", values="RS").round(2).join(
         t3s.groupby(["split", "method", "scope"])[["auroc", "ap"]].first().round(3)).to_string())
