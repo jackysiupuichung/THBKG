@@ -7,14 +7,19 @@
 Writes
   labels/discovery.parquet    T1: target_id, disease_id, *_index, first_trial_year,
                               first_trial_phase, max_outcome_phase, grade
+  labels/hypothesis.parquet   T2, every direct target-disease pair: target_id, disease_id,
+                              *_index, first_direct_year, novel (the positives: that first
+                              edge is a literature co-mention), and for the strata
+                              first_literature_year, first_other_evidence_year,
+                              first_trial_year, literature_repeated, target_prior_diseases
   labels/train.parquet        T3, read off the graph's start-dated trial edge:
   labels/eval.parquet           target_id, disease_id, *_index, transition_year, outcome
   labels/therapeutic_areas.parquet          disease -> therapeutic areas (needs
   labels/primary_therapeutic_areas.json     --diseases-dir, default
                                             $INPUT_EVIDENCE_DIR/diseases)
   benchmark_tasks.json        splits, slate filters, label counts and slate statistics
-                              per task and split, plus the closed-form random floor on
-                              val and test
+                              per task and split (T2: positives per stratum), plus the
+                              closed-form random floor on val and test
 """
 from __future__ import annotations
 
@@ -30,16 +35,16 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
-    ADVANCEMENT_LABEL_FILES, ADVANCEMENT_SPLITS, MIN_DISEASE_POSITIVES, MIN_FIRST_TRIAL_PHASE, SPLITS,
-    advancement_labels, build_advancement_labels, build_discovery_labels, decision_years, last_label_year,
-    primary_therapeutic_areas, task_slates, therapeutic_areas,
+    ADVANCEMENT_LABEL_FILES, ADVANCEMENT_SPLITS, HYPOTHESIS_STRATA, MIN_DISEASE_POSITIVES, MIN_FIRST_TRIAL_PHASE,
+    SPLITS, advancement_labels, build_advancement_labels, build_discovery_labels, build_hypothesis_labels,
+    decision_years, last_label_year, primary_therapeutic_areas, task_slates, therapeutic_areas,
 )
 
 
 def _split_stats(task, split, labels, n_targets) -> tuple[pd.DataFrame, dict]:
     """Build slates one year at a time and keep only their sizes (a full T1 split
     holds ~19,600 candidates per slate), plus the grade counts of their positives."""
-    years = decision_years(split, last_label_year(labels))
+    years = decision_years(split, last_label_year(labels, task))
     frames, grades = [], []
     for y in years:
         slates = task_slates(task, split, labels, num_targets=n_targets, years=[y])
@@ -65,6 +70,11 @@ def main() -> None:
     t1.to_parquet(rd / "labels" / "discovery.parquet", index=False)
     print(f"labels/discovery.parquet:   {len(t1):,} (target, disease) pairs")
 
+    t2 = build_hypothesis_labels(rd)
+    t2.to_parquet(rd / "labels" / "hypothesis.parquet", index=False)
+    print(f"labels/hypothesis.parquet:  {len(t2):,} directly linked (target, disease) pairs, "
+          f"{int(t2['novel'].sum()):,} first linked by a literature co-mention")
+
     t3 = build_advancement_labels(rd)
     for name, df in t3.items():
         df.to_parquet(rd / "labels" / f"{name}.parquet", index=False)
@@ -87,14 +97,16 @@ def main() -> None:
         "splits_decision_years": {k: [lo, last if hi is None else hi] for k, (lo, hi) in SPLITS.items()},
         "min_positives_per_disease": {f"{t}.{s}": k for (t, s), k in MIN_DISEASE_POSITIVES.items()},
         "min_first_trial_phase": {f"{t}.{s}": v for (t, s), v in MIN_FIRST_TRIAL_PHASE.items()},
+        "hypothesis_strata": HYPOTHESIS_STRATA,
         "tasks": {},
     }
-    for task, labels in (("discovery", t1),):
+    for task, labels in (("discovery", t1), ("hypothesis", t2)):
         summary["tasks"][task] = {}
         for split in SPLITS:
             stats, grade_counts = _split_stats(task, split, labels, n_targets)
             s = slate_summary(stats)
-            s["positive_grades"] = grade_counts
+            if task == "discovery":  # T2 positives are not graded
+                s["positive_grades"] = grade_counts
             if split != "train" and not stats.empty:
                 s["random_expected"] = expected_random(stats)
             summary["tasks"][task][split] = s

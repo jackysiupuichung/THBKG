@@ -1,9 +1,9 @@
 """Label tables for the THBKG benchmark tasks.
 
-Both tasks follow one target-disease pair through the clinic, under one
-temporal protocol: a model ranks candidates for a decision year ``Y`` using only
-graph evidence dated strictly before ``Y``. T1 splits decision years by
-``SPLITS``; T3 splits its labelled pairs by Phase II entry year
+The tasks follow one target-disease pair from its first link to the clinic,
+under one temporal protocol: a model ranks candidates for a decision year ``Y``
+using only graph evidence dated strictly before ``Y``. T1 and T2 split decision
+years by ``SPLITS``; T3 splits its labelled pairs by Phase II entry year
 (``ADVANCEMENT_SPLITS``) into the same train/val/test periods.
 
 ========  ==========================================  =============================
@@ -11,6 +11,9 @@ task      positive                                    candidate pool for (diseas
 ========  ==========================================  =============================
 T1        (target, disease) pair whose first trial    every target with no trial for
 discovery (any phase) starts in ``Y``                 that disease before ``Y``
+T2        (target, disease) pair whose first direct   every target with no direct
+hypo-     edge is a literature co-mention in ``Y``    edge of any relation (trials
+thesis                                                included) to it before ``Y``
 T3        Phase II entry in ``Y`` that reaches        the labelled pairs themselves
 advance-  Phase III by a fixed horizon, at least      (labels/train|eval.parquet)
 ment      3 years after the split's last entry year
@@ -22,6 +25,16 @@ labels are read off the start-dated trial edge (``build_advancement_labels``):
 a pair enters Phase II in the first year a Phase II trial starts while it has
 no Phase III+ trial, and is positive if a Phase III+ trial starts by the
 horizon of its label file (``ADVANCEMENT_LABEL_FILES``).
+
+T2 labels (``build_hypothesis_labels``) hold every direct target->disease pair
+of the graph with the year of its first direct edge. A pair is a positive in
+that year only if the edge is a literature co-mention (``novel``): the first
+evidence of any kind linking the target to the disease is a paper mentioning
+both. A pair first linked by other evidence is left out of that year's slate,
+and every linked pair leaves the pool, so a repeat co-mention never counts. T2
+has no quality filter and no grade. ``HYPOTHESIS_STRATA`` split the positives,
+for reporting only, by what followed (another co-mention, other evidence, a
+trial; these look past ``Y``) and by how studied the target was before ``Y``.
 
 T1 positives are graded for NDCG by their max outcome phase: the highest phase
 among the pair's finished trials (outcome edges) up to the end of the graph.
@@ -51,7 +64,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .slates import Slate, discovery_slates
+from .slates import KS, Slate, discovery_slates, evaluate, hypothesis_slates, macro_average
 
 # The graph's last evidence year (config/event_graph_config.yaml
 # time_range.last_year): evidence runs to the 26.09 release, September 2026.
@@ -60,8 +73,10 @@ LAST_GRAPH_YEAR = 2026
 # so the partial year never enters the test split; last_label_year() checks the
 # labels run to LAST_GRAPH_YEAR.
 LAST_DECISION_YEAR = 2025
-# Decision years for T1, inclusive.
+# Decision years for T1 and T2, inclusive.
 SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, LAST_DECISION_YEAR)}
+# Label column holding the year a pair becomes a positive, per slate task.
+LABEL_YEAR = {"discovery": "first_trial_year", "hypothesis": "first_direct_year"}
 # Evidence dated 1985 or earlier is collapsed onto 1985 by the event list
 # (config time_range.first_year), so 1985 cannot be a decision year: a "first
 # trial in 1985" means "by 1985".
@@ -122,6 +137,20 @@ OUTCOME_RELATIONS = {
 PHASE_GRADE = {0.01: 0.5, 0.05: 0.5, 0.1: 1.0, 0.15: 1.5, 0.2: 2.0, 0.5: 2.5, 0.7: 3.0, 1.0: 4.0}
 MIN_POSITIVE_GRADE = 0.5  # positives whose trials have not finished yet
 
+# T2: the relation whose first edge makes a pair a positive (Europe PMC co-mentions).
+HYPOTHESIS_RELATION = "literature"
+# T2 target-degree strata: diseases the target had a direct edge to before Y,
+# as [lo, hi) with None = open.
+TARGET_DEGREE_BINS = {"0_9": (0, 10), "10_99": (10, 100), "100_999": (100, 1000), "1000_plus": (1000, None)}
+# T2 strata of the positives, name -> meaning; computed by hypothesis_strata().
+HYPOTHESIS_STRATA = {
+    "repeated": "co-mentioned again in a later year",
+    "other_evidence": "linked by non-literature evidence by the end of the graph",
+    "trial": "trialled for the disease by the end of the graph",
+    **{f"target_degree_{name}": f"target had a direct edge to {f'{lo} or more' if hi is None else f'{lo}-{hi - 1}'}"
+                                " diseases before Y" for name, (lo, hi) in TARGET_DEGREE_BINS.items()},
+}
+
 
 def _release_meta(release_dir: Path) -> dict:
     return json.loads((release_dir / "metadata.json").read_text())
@@ -133,8 +162,8 @@ def node_ids(release_dir: Path, node_type: str) -> np.ndarray:
     return df.sort_values("index")["node_id"].astype(str).to_numpy()
 
 
-def _first_years(release_dir: Path, src: str, dst: str, keep) -> pd.DataFrame:
-    """Earliest edge_time per (src index, dst index) over the matching relations."""
+def _edge_years(release_dir: Path, src: str, dst: str, keep) -> pd.DataFrame:
+    """Every (src index, dst index, edge_time) row of the matching relations."""
     from safetensors import safe_open
 
     meta = _release_meta(release_dir)
@@ -148,8 +177,12 @@ def _first_years(release_dir: Path, src: str, dst: str, keep) -> pd.DataFrame:
             parts.append(pd.DataFrame({"src": ei[0], "dst": ei[1], "year": t}))
     if not parts:
         raise ValueError(f"no {src}->{dst} relations matched in {release_dir}")
-    df = pd.concat(parts, ignore_index=True)
-    return df.groupby(["src", "dst"], as_index=False)["year"].min()
+    return pd.concat(parts, ignore_index=True)
+
+
+def _first_years(release_dir: Path, src: str, dst: str, keep) -> pd.DataFrame:
+    """Earliest edge_time per (src index, dst index) over the matching relations."""
+    return _edge_years(release_dir, src, dst, keep).groupby(["src", "dst"], as_index=False)["year"].min()
 
 
 def max_outcome_phase(release_dir: str | Path, horizon: int | None = None) -> pd.DataFrame:
@@ -241,10 +274,66 @@ def build_discovery_labels(release_dir: str | Path) -> pd.DataFrame:
     return out.sort_values(["first_trial_year", "disease_id", "target_id"], ignore_index=True)
 
 
-def last_label_year(labels: pd.DataFrame) -> int:
+def build_hypothesis_labels(release_dir: str | Path) -> pd.DataFrame:
+    """T2: every direct target->disease pair, the year of its first direct edge
+    (any relation, trials included) and whether that edge is a literature
+    co-mention (``novel``: the positives).
+
+    For the strata, which look past that year: the first literature, other
+    evidence and trial years (NA when never), ``literature_repeated`` (the
+    literature score rose again in a later year: another paper co-mentioned the
+    pair) and ``target_prior_diseases`` (diseases the target had a direct edge
+    to before the pair's first direct year).
+    """
+    release_dir = Path(release_dir)
+    lit = (_edge_years(release_dir, "target", "disease", lambda r: r == HYPOTHESIS_RELATION)
+           .groupby(["src", "dst"])["year"].agg(["min", "size"]))
+    other = _first_years(release_dir, "target", "disease",
+                         lambda r: r != HYPOTHESIS_RELATION and not r.startswith(T1_RELATION_PREFIX)
+                         ).set_index(["src", "dst"])["year"]
+    trial = _first_years(release_dir, "target", "disease",
+                         lambda r: r.startswith(T1_RELATION_PREFIX)).set_index(["src", "dst"])["year"]
+    df = pd.concat({"literature": lit["min"], "other": other, "trial": trial, "lit_rows": lit["size"]}, axis=1)
+    df["first"] = df[["literature", "other", "trial"]].min(axis=1).astype(np.int64)
+    df = df.reset_index().sort_values(["src", "first"], ignore_index=True)
+    # rows of the same target dated before this one: the first row of its year, counted within the target
+    within = df.groupby("src").cumcount()
+    df["prior"] = within.groupby([df["src"], df["first"]]).transform("min")
+    tid, did = node_ids(release_dir, "target"), node_ids(release_dir, "disease")
+    src, dst = df["src"].to_numpy(np.int64), df["dst"].to_numpy(np.int64)
+    out = pd.DataFrame({
+        "target_id": tid[src],
+        "disease_id": did[dst],
+        "target_index": src,
+        "disease_index": dst,
+        "first_direct_year": df["first"].to_numpy(np.int64),
+        "novel": (df["literature"] == df["first"]).to_numpy(bool),  # NaN (never co-mentioned) -> False
+        "first_literature_year": df["literature"].astype("Int64").array,
+        "first_other_evidence_year": df["other"].astype("Int64").array,
+        "first_trial_year": df["trial"].astype("Int64").array,
+        "literature_repeated": (df["lit_rows"] > 1).to_numpy(bool),
+        "target_prior_diseases": df["prior"].to_numpy(np.int64),
+    })
+    return out.sort_values(["first_direct_year", "disease_id", "target_id"], ignore_index=True)
+
+
+def hypothesis_strata(labels: pd.DataFrame) -> dict[str, pd.Series]:
+    """The ``HYPOTHESIS_STRATA`` of every row of a T2 label table, as bool columns."""
+    out = {"repeated": labels["literature_repeated"].astype(bool),
+           "other_evidence": labels["first_other_evidence_year"].notna(),
+           "trial": labels["first_trial_year"].notna()}
+    deg = labels["target_prior_diseases"]
+    for name, (lo, hi) in TARGET_DEGREE_BINS.items():
+        out[f"target_degree_{name}"] = (deg >= lo) & (True if hi is None else deg < hi)
+    if list(out) != list(HYPOTHESIS_STRATA):
+        raise ValueError("hypothesis_strata() and HYPOTHESIS_STRATA disagree")
+    return out
+
+
+def last_label_year(labels: pd.DataFrame, task: str = "discovery") -> int:
     """End of the test split (LAST_DECISION_YEAR), once the labels are checked to
     run to the graph's last year."""
-    latest = int(labels["first_trial_year"].max())
+    latest = int(labels[LABEL_YEAR[task]].max())
     if latest != LAST_GRAPH_YEAR:
         raise ValueError(f"labels run to {latest} but LAST_GRAPH_YEAR is {LAST_GRAPH_YEAR}: "
                          "update it together with the graph's time range")
@@ -252,7 +341,7 @@ def last_label_year(labels: pd.DataFrame) -> int:
 
 
 def decision_years(split: str, last_year: int | None = None) -> list[int]:
-    """Decision years of a T1 split. ``last_year`` resolves an open-ended split."""
+    """Decision years of a T1 or T2 split. ``last_year`` resolves an open-ended split."""
     lo, hi = SPLITS[split]
     if hi is None:
         if last_year is None:
@@ -266,29 +355,51 @@ def task_slates(task: str, split: str, labels: pd.DataFrame, *,
     """Slates for one task and split, with the split's years and slate filter applied.
 
     ``years`` restricts to a subset of the split, e.g. one year at a time to
-    bound memory (a T1 slate holds ~19,600 candidates).
+    bound memory (a slate holds ~19,600 candidates; a T2 year up to ~6,000 slates).
     """
-    if task != "discovery":
+    if task not in LABEL_YEAR:
         raise ValueError(f"unknown slate task {task!r} (T3 is evaluated on its labelled pairs)")
     if num_targets is None:
-        raise ValueError("discovery slates need num_targets")
-    split_years = decision_years(split, last_label_year(labels))
+        raise ValueError(f"{task} slates need num_targets")
+    year_col = LABEL_YEAR[task]
+    split_years = decision_years(split, last_label_year(labels, task))
     years = split_years if years is None else [y for y in years if y in split_years]
-    min_phase = MIN_FIRST_TRIAL_PHASE.get((task, split))
-    if min_phase is not None:
-        labels = labels.assign(rankable=labels["first_trial_phase"] >= min_phase)
-    slates = discovery_slates(labels, years, num_targets)
+    if task == "hypothesis":
+        labels = labels.assign(rankable=labels["novel"], **hypothesis_strata(labels))
+        slates = hypothesis_slates(labels, years, num_targets, strata=HYPOTHESIS_STRATA)
+    else:
+        min_phase = MIN_FIRST_TRIAL_PHASE.get((task, split))
+        if min_phase is not None:
+            labels = labels.assign(rankable=labels["first_trial_phase"] >= min_phase)
+        slates = discovery_slates(labels, years, num_targets)
     k = MIN_DISEASE_POSITIVES.get((task, split), 1)
     if k > 1:
         # Counted over the whole split, not over ``years``, so a year-by-year
-        # build keeps the same slates. Every T1 positive is in its slate's pool.
-        in_split = labels["first_trial_year"].isin(split_years)
+        # build keeps the same slates. Every positive is in its slate's pool.
+        in_split = labels[year_col].isin(split_years)
         if "rankable" in labels.columns:
             in_split &= labels["rankable"]
         per_disease = labels.loc[in_split].groupby("disease_index").size()
         keep = set(per_disease.index[per_disease >= k].tolist())
         slates = [s for s in slates if s.disease_index in keep]
     return slates
+
+
+def evaluate_task(task: str, split: str, labels: pd.DataFrame, *, num_targets: int,
+                  score_fn_for_year, ks=KS) -> tuple[dict, list[dict]]:
+    """Build and score a T1 or T2 split one decision year at a time, then macro-average over its slates.
+
+    ``score_fn_for_year(year, slates)`` returns the ``score_fn`` for that year's
+    slates (one score per ``slate.candidates``), so a model can embed the year's
+    snapshot once. Only that year's slates are held in memory: a whole T2 split
+    would be ~5 GB of candidate arrays.
+    """
+    per_slate = []
+    for y in decision_years(split, last_label_year(labels, task)):
+        slates = task_slates(task, split, labels, num_targets=num_targets, years=[y])
+        if slates:
+            per_slate.extend(evaluate(slates, score_fn_for_year(y, slates), ks)[1])
+    return macro_average(per_slate, ks), per_slate
 
 
 def advancement_labels(release_dir: str | Path, split: str) -> pd.DataFrame:

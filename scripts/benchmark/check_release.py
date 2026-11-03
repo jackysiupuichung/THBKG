@@ -38,8 +38,8 @@ Checks
                        ongoing-score leak (halved 0.7 = 0.35, 0.5 = 0.25)
              every pair with a trial outcome has a start-dated trial edge no
              later than its first outcome
-  labels     discovery / train / eval: ids and indices agree with mappings/,
-             one row per pair, entry years inside the file's window, train and
+  labels     discovery / hypothesis / train / eval: ids and indices agree with mappings/,
+             one row per pair, label years inside the file's window, train and
              eval disjoint; each file equals the table src/benchmark/tasks.py
              builds from this graph, so stale labels fail
   loader     the release's own load_thbkg.load_graph: every relation but
@@ -339,13 +339,15 @@ def check_edges(rep: Report, r: Release, contract: dict, first: int, last: int) 
 
 
 def check_labels(rep: Report, r: Release, first: int, last: int) -> None:
-    """The label files against this graph: discovery, train and eval ids and indices agree with mappings/, one
-    row per pair, entry years inside each file's window, train and eval disjoint, and each file equal to
-    the table src/benchmark/tasks.py builds from the graph (so stale labels fail)."""
+    """The label files against this graph: discovery, hypothesis, train and eval ids and indices agree with
+    mappings/, one row per pair, label years inside each file's window, train and eval disjoint, and each
+    file equal to the table src/benchmark/tasks.py builds from the graph (so stale labels fail)."""
     rd = r.path
     idx = {nt: pd.Series(np.arange(r.num_nodes(nt)), index=r.node_ids(nt)) for nt in ("target", "disease")}
-    rebuilt = {"discovery": tasks.build_discovery_labels(rd), **tasks.build_advancement_labels(rd)}
+    rebuilt = {"discovery": tasks.build_discovery_labels(rd), "hypothesis": tasks.build_hypothesis_labels(rd),
+               **tasks.build_advancement_labels(rd)}
     windows = {"discovery": ("first_trial_year", first, last),
+               "hypothesis": ("first_direct_year", first, last),
                **{k: ("transition_year", lo, hi) for k, (lo, hi, _) in tasks.ADVANCEMENT_LABEL_FILES.items()}}
     pairs = {}
     for name, built in rebuilt.items():

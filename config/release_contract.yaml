@@ -24,6 +24,7 @@ files:
     - benchmark_tasks.json
     - molecule_features.yaml
     - labels/discovery.parquet
+    - labels/hypothesis.parquet
     - labels/train.parquet
     - labels/eval.parquet
     - labels/therapeutic_areas.parquet
