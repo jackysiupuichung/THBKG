@@ -52,8 +52,8 @@
     "http://mlcommons.org/croissant/RAI/1.0"
   ],
   "name": "THBKG",
-  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG), format 2.0, built from Open Targets 26.09 with Gene Ontology, Reactome, IntAct, the Human Protein Atlas, ChEMBL and ClinicalTrials.gov. Every evidence edge carries the year it was first observed, so the graph can be read as of any past decision year, as a continuous event stream or as yearly snapshots. 110,220 nodes (target, disease, molecule, GO term, Reactome pathway) and 14.1M edge rows over 19 relations. Three benchmark tasks score year Y on evidence dated before Y: T1 discovery (a target-disease pair's first clinical trial), T2 hypothesis (a pair's first direct link is a literature co-mention) and T3 advancement (a pair entering Phase II reaches Phase III).",
-  "version": "26.09.1",
+  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG) v2, built from Open Targets 26.09 with Gene Ontology, Reactome, IntAct, the Human Protein Atlas, ChEMBL and ClinicalTrials.gov. Every evidence edge carries the year it was first observed, so the graph can be read as of any past decision year, as a continuous event stream or as yearly snapshots. 110,220 nodes (target, disease, molecule, GO term, Reactome pathway) and 14.1M edge rows over 19 relations. Three benchmark tasks score year Y on evidence dated before Y: T1 discovery (a target-disease pair's first clinical trial), T2 hypothesis (a pair's first direct link is a literature co-mention) and T3 advancement (a pair entering Phase II reaches Phase III).",
+  "version": "2.0.0",
   "license": "https://creativecommons.org/licenses/by/4.0/",
   "url": "https://huggingface.co/datasets/jspc00012567/THBKG",
   "sameAs": [

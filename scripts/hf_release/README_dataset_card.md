@@ -36,7 +36,7 @@ configs:
 
 # THBKG — Temporal Heterogeneous Biomedical Knowledge Graph
 
-A dated biomedical knowledge graph built from
+**THBKG v2**: a dated biomedical knowledge graph built from
 [Open Targets](https://www.opentargets.org/) **26.09**, with Gene Ontology,
 Reactome, IntAct, the Human Protein Atlas, ChEMBL and ClinicalTrials.gov. Every
 evidence edge carries the year it was first observed, so the graph can be read
@@ -53,10 +53,10 @@ In every task a model scores year *Y* using **only evidence dated strictly befor
 *Y***. All labels are read off the graph itself, so the year a label becomes
 true is exactly the year the time rule hides.
 
-## Format 2.0: what changed since the v26.09 release
+## v2: what changed since v26.09
 
-This build replaces the format-1.0 build of the same Open Targets release
-(revision `v26.09`). Code written for format 1.0 does not run on it unchanged.
+v2 (release format 2.0) replaces the v26.09 build of the same Open Targets
+release (format 1.0). Code written for v26.09 does not run on it unchanged.
 
 - **Edge attributes are `[score]`.** The `novelty` column is gone. `metadata.json`
   gives each edge type a `score_max`, a constant of the scoring formula, for
@@ -300,10 +300,12 @@ build. The results ship with it.
 
 ## Versions
 
-This is the format-2.0 build of Open Targets 26.09. Earlier builds stay
-available by revision:
+This is **v2** (revision `v2`, release format 2.0), built on Open Targets 26.09.
+Tags now version THBKG itself; the Open Targets release it is built on is in
+`source_versions.json`. Earlier builds stay available by revision:
 
 ```python
+snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v2")      # this build
 snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v26.09")  # format 1.0
 snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v26.03")
 ```
