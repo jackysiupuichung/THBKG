@@ -7,6 +7,13 @@ not dominate. Ties are broken pessimistically (positives rank last within a
 tie, lowest grade first), so a constant score cannot look better than random by
 index order.
 
+The primary metric is ``precision@R``, TargetBench's precision at top K with K
+set per slate to its number of positives R (R-precision): the share of the
+top R candidates that are positives. Unlike precision at a fixed K it can
+reach 1 on every slate, and a random ranking gets the slate's positive rate.
+``precision@R_per_disease`` pools a disease's slates across the split's years
+(hits in each year's top R over all its positives), one vote per disease.
+
 Precision and recall treat every positive alike. NDCG uses graded relevance: a
 positive's gain is its ``grade`` label column (T1: max outcome phase, see
 tasks.py), so ranking a pair that went on to Phase 3 above one that stopped at
@@ -133,6 +140,9 @@ def slate_metrics(scores: np.ndarray, positive_mask: np.ndarray, ks=KS, gains=No
         out[f"precision@{k}"] = hits / ke
         out[f"recall@{k}"] = hits / n_pos
         out[f"ndcg@{k}"] = _dcg(ranked_gain[:ke]) / _dcg(ideal[:ke])
+    hits_r = int(ranked[:n_pos].sum())  # K = the slate's number of positives
+    out["precision@R"] = hits_r / n_pos
+    out["hits@R"] = hits_r
     out["n_pos"] = n_pos
     out["n_cand"] = int(ranked.size)
     for name, mask in (strata or {}).items():
@@ -151,8 +161,14 @@ def macro_average(per_slate: list[dict], ks=KS) -> dict:
     n = len(per_slate)
     if n == 0:
         raise ValueError("no slates to average")
-    agg = {f"{m}@{k}": float(np.mean([s[f"{m}@{k}"] for s in per_slate]))
-           for k in ks for m in ("precision", "recall", "ndcg")}
+    agg = {"precision@R": float(np.mean([s["precision@R"] for s in per_slate]))}
+    if all("disease_index" in s for s in per_slate):
+        d = pd.DataFrame({"d": [s["disease_index"] for s in per_slate], "hits": [s["hits@R"] for s in per_slate],
+                          "pos": [s["n_pos"] for s in per_slate]}).groupby("d").sum()
+        agg["precision@R_per_disease"] = float((d["hits"] / d["pos"]).mean())
+        agg["n_diseases"] = len(d)
+    agg.update({f"{m}@{k}": float(np.mean([s[f"{m}@{k}"] for s in per_slate]))
+                for k in ks for m in ("precision", "recall", "ndcg")})
     agg["n_slates"] = n
     agg["mean_n_pos"] = float(np.mean([s["n_pos"] for s in per_slate]))
     agg["mean_n_cand"] = float(np.mean([s["n_cand"] for s in per_slate]))
@@ -190,11 +206,14 @@ def slate_stats(slates: list[Slate]) -> pd.DataFrame:
 def expected_random(stats: pd.DataFrame, ks=KS) -> dict:
     """Closed-form expectation of a uniformly random ranking, from ``slate_stats``.
 
-    precision@K = P/C and recall@K = K/C per slate, macro-averaged. A floor to
-    read results against: with ~2 positives among ~19,600 targets, absolute
-    precision@K is tiny for any model.
+    precision@K = P/C (for any K, R included) and recall@K = K/C per slate,
+    macro-averaged; per disease, expected hits P^2/C pooled over its slates. A
+    floor to read results against: with ~2 positives among ~19,600 targets,
+    absolute precision at a fixed K is tiny for any model.
     """
-    agg = {}
+    agg = {"precision@R": float((stats["n_pos"] / stats["n_cand"]).mean())}
+    d = stats.assign(hits=stats["n_pos"] ** 2 / stats["n_cand"]).groupby("disease_index")[["hits", "n_pos"]].sum()
+    agg["precision@R_per_disease"] = float((d["hits"] / d["n_pos"]).mean())
     for k in ks:
         agg[f"precision@{k}"] = float((stats["n_pos"] / stats["n_cand"]).mean())
         agg[f"recall@{k}"] = float((np.minimum(k, stats["n_cand"]) / stats["n_cand"]).mean())
