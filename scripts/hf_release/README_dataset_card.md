@@ -141,7 +141,11 @@ Decision years are split the same way for T1 and T2: **train 1996–2019, test
 2020–2026**. 2026 is a partial year: the graph ends at the 26.09 release, so its
 positives cover January to September only, and records reach Open Targets late
 (T1: 1,213 positives in 2026 against 1,795 in 2025; T2: 31,361 against
-157,891). T3 splits its pairs by Phase II entry year instead (train 1995–2019,
+157,891). The candidate pool is not smaller (about 19,500 targets per T1 slate
+and 18,800 per T2 slate, as in earlier years), so the pairs whose 2026 trial or
+co-mention is not yet recorded stay in it as negatives: T2 has 8.8 positives per
+2026 slate against about 25 in other years, and 2026 precision is a looser lower
+bound than other years'. T3 splits its pairs by Phase II entry year instead (train 1995–2019,
 test 2020–2023), and its test entries end at 2023 so every pair has at least
 three years to advance. Training on a split means using its labels and the graph
 before each decision year.
