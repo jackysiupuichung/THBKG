@@ -249,7 +249,7 @@ Baselines that need no training, on test:
 | T2 | random | 0.0011 |
 | T2 | target popularity (diseases linked before *Y*) | 0.0112 |
 | T3 | random | RS@10 = 1.00 (both rankings) |
-| T3 | Open Targets direct association score | RS@10 = 3.17 year-stratified (2.22 raw), AUROC 0.65 (0.62) |
+| T3 | Open Targets direct association score | RS@10 = 3.17 year-stratified (2.22 raw), AUROC 0.65 (0.61) |
 | T3 | genetics-only association score | RS@10 = 2.16 year-stratified (1.90 raw), AUROC 0.55 (0.50) |
 
 T1 and T2 use `precision@R_per_disease`; T3 uses the therapeutic-area mean of
