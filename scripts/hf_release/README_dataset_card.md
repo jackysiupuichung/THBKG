@@ -138,7 +138,8 @@ outcome edge (`positive`, `unmet_efficacy`, `adverse_effects` or
 ## Benchmark tasks
 
 Decision years are split the same way for T1 and T2: **train 1996–2019, test
-2020–2025**. T3 splits its pairs by Phase II entry year instead (train 1995–2019,
+2020–2026**. 2026 is a partial year: the graph ends at the 26.09 release, so its
+positives cover January to September only. T3 splits its pairs by Phase II entry year instead (train 1995–2019,
 test 2020–2023), and its test entries end at 2023 so every pair has at least
 three years to advance. Training on a split means using its labels and the graph
 before each decision year.

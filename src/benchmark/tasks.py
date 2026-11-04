@@ -75,10 +75,11 @@ from .slates import KS, Slate, discovery_slates, evaluate, hypothesis_slates, ma
 # The graph's last evidence year (config/event_graph_config.yaml
 # time_range.last_year): evidence runs to the 26.09 release, September 2026.
 LAST_GRAPH_YEAR = 2026
-# Last decision year: the last full year. Pinned rather than read off the labels,
-# so the partial year never enters the test split; last_label_year() checks the
-# labels run to LAST_GRAPH_YEAR.
-LAST_DECISION_YEAR = 2025
+# Last T1/T2 decision year: the graph's last year, 2026, although it is partial
+# (evidence to September 2026, so its positives cover January to September and
+# miss late-recorded trials and papers). Pinned rather than read off the labels;
+# last_label_year() checks the labels run to LAST_GRAPH_YEAR.
+LAST_DECISION_YEAR = LAST_GRAPH_YEAR
 # Decision years for T1 and T2, inclusive. No validation split: see cv_folds.
 SPLITS = {"train": (1996, 2019), "test": (2020, LAST_DECISION_YEAR)}
 # Label column holding the year a pair becomes a positive, per slate task.
