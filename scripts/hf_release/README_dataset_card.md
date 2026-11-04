@@ -139,7 +139,9 @@ outcome edge (`positive`, `unmet_efficacy`, `adverse_effects` or
 
 Decision years are split the same way for T1 and T2: **train 1996–2019, test
 2020–2026**. 2026 is a partial year: the graph ends at the 26.09 release, so its
-positives cover January to September only. T3 splits its pairs by Phase II entry year instead (train 1995–2019,
+positives cover January to September only, and records reach Open Targets late
+(T1: 1,213 positives in 2026 against 1,795 in 2025; T2: 31,361 against
+157,891). T3 splits its pairs by Phase II entry year instead (train 1995–2019,
 test 2020–2023), and its test entries end at 2023 so every pair has at least
 three years to advance. Training on a split means using its labels and the graph
 before each decision year.
@@ -158,13 +160,13 @@ target with no trial for that disease before *Y* (about 19,600 candidates).
 Positives are the targets whose first trial for the disease, at any phase,
 starts in *Y*. Test positives need a first trial at Phase 1 or later; pairs whose
 first trials are early Phase 1 or of unknown phase are left out of the test
-slates. Test slates are kept for the 728 diseases that gain more than three new
+slates. Test slates are kept for the 772 diseases that gain more than three new
 targets over the test period.
 
 | Split | Slates | Diseases | Positives |
 |---|---|---|---|
 | train | 11,517 | 2,561 | 77,375 |
-| test | 1,908 | 728 | 13,534 |
+| test | 2,142 | 772 | 14,807 |
 
 For NDCG, positives are graded by the highest phase their finished trials
 reached by the end of the graph (`grade`). The grade looks past *Y*, so use it
@@ -182,7 +184,7 @@ counts. There is no quality filter on the co-mention.
 | Split | Slates | Diseases | Positives |
 |---|---|---|---|
 | train | 93,214 | 8,997 | 1,177,962 |
-| test | 35,628 | 9,108 | 924,845 |
+| test | 39,193 | 9,167 | 956,206 |
 
 Results are also reported per stratum of the positives:
 - co-mentioned again in a later year;
@@ -245,10 +247,10 @@ Baselines that need no training, on test:
 | Task | Method | Primary metric |
 |---|---|---|
 | T1 | random | 0.0006 |
-| T1 | Open Targets direct association score | 0.0083 |
+| T1 | Open Targets direct association score | 0.0082 |
 | T1 | genetics-only association score | 0.0030 |
 | T2 | random | 0.0011 |
-| T2 | target popularity (diseases linked before *Y*) | 0.0112 |
+| T2 | target popularity (diseases linked before *Y*) | 0.0109 |
 | T3 | random | RS@10 = 1.00 (both rankings) |
 | T3 | Open Targets direct association score | RS@10 = 3.17 year-stratified (2.22 raw), AUROC 0.65 (0.61) |
 | T3 | genetics-only association score | RS@10 = 2.16 year-stratified (1.90 raw), AUROC 0.55 (0.50) |
@@ -325,7 +327,7 @@ build. The results ship with it.
   target its drug acts on, so a drug acting on a protein complex creates many
   pairs at once. Metformin (51 targets, the subunits of mitochondrial complex I)
   supplies 153 of the 377 T3 test positives, from one Phase III trial each in
-  knee osteoarthritis, COPD and Parkinson's disease, and 3,111 of the 14,645 T1
+  knee osteoarthritis, COPD and Parkinson's disease, and 3,366 of the 15,937 T1
   test-year positives. 47% of T3 and 34% of T1 test positives come only from
   drugs with 25 or more targets (also bortezomib, topiramate, pentoxifylline,
   collagenase, propofol and midazolam). Pairs are therefore far from
