@@ -30,7 +30,9 @@ Usage (``task_slates`` in tasks.py applies the split years and slate filter;
 
     labels = build_discovery_labels(release_dir)
     slates = task_slates("discovery", "test", labels, num_targets=num_targets)
-    summary, per_slate = evaluate(slates, lambda s: model_scores(s.year, s.disease_index, s.candidates))
+    log = PredictionLog()                     # keep the raw predictions
+    summary, per_slate = evaluate(slates, lambda s: model_scores(s.year, s.disease_index, s.candidates), log=log)
+    log.save(out_dir, "t1_mymodel_test")      # rescore() recomputes any metric, or a stratum, from it
 """
 
 from __future__ import annotations
@@ -181,13 +183,107 @@ def macro_average(per_slate: list[dict], ks=KS) -> dict:
     return agg
 
 
-def evaluate(slates: list[Slate], score_fn: Callable[[Slate], np.ndarray], ks=KS) -> tuple[dict, list[dict]]:
-    """Score every slate with ``score_fn`` (one score per ``slate.candidates``) and macro-average."""
+class PredictionLog:
+    """The raw predictions of a slate evaluation, small enough to keep for every run.
+
+    A T2 split holds ~750M candidate scores, too many to store. What is kept per
+    slate: each positive's rank in the full evaluation order (score descending,
+    ties as in ``slate_metrics``: negatives, then lower-gain positives, first),
+    its score and gain, and the ``top_k`` candidates. A stratum, weighting or
+    exclusion decided later only selects or reweights positives, so their ranks
+    are enough to recompute every metric of this module with ``rescore``; the
+    top candidates are for inspection. ``save`` writes
+    ``<prefix>_positives.parquet``, ``<prefix>_slates.parquet`` and
+    ``<prefix>_top<k>.parquet``.
+    """
+
+    def __init__(self, top_k: int = 100):
+        self.top_k = top_k
+        self._pos: list[pd.DataFrame] = []
+        self._slates: list[tuple] = []
+        self._top: list[pd.DataFrame] = []
+
+    def add(self, s: Slate, scores: np.ndarray) -> None:
+        """Record one scored slate."""
+        scores = np.asarray(scores, dtype=np.float64)
+        order = np.lexsort((s.gain, -scores))  # the order slate_metrics ranks in
+        rank = np.empty(order.size, dtype=np.int64)
+        rank[order] = np.arange(1, order.size + 1)
+        pos = np.flatnonzero(s.positive_mask)
+        self._pos.append(pd.DataFrame({"year": s.year, "disease_index": s.disease_index,
+                                       "target_index": s.candidates[pos], "score": scores[pos],
+                                       "gain": s.gain[pos], "rank": rank[pos]}))
+        self._slates.append((s.year, s.disease_index, int(order.size), int(pos.size)))
+        top = order[:self.top_k]
+        self._top.append(pd.DataFrame({"year": s.year, "disease_index": s.disease_index,
+                                       "rank": np.arange(1, top.size + 1), "target_index": s.candidates[top],
+                                       "score": scores[top], "positive": s.positive_mask[top]}))
+
+    def positives(self) -> pd.DataFrame:
+        """year, disease_index, target_index, score, gain, rank: one row per positive."""
+        return pd.concat(self._pos, ignore_index=True)
+
+    def slates(self) -> pd.DataFrame:
+        """year, disease_index, n_cand, n_pos: one row per slate."""
+        return pd.DataFrame(self._slates, columns=["year", "disease_index", "n_cand", "n_pos"])
+
+    def top(self) -> pd.DataFrame:
+        """year, disease_index, rank, target_index, score, positive: the top_k candidates of each slate."""
+        return pd.concat(self._top, ignore_index=True)
+
+    def save(self, out_dir, prefix: str) -> None:
+        """Write the three tables as parquet files in ``out_dir``."""
+        from pathlib import Path
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        self.positives().to_parquet(out / f"{prefix}_positives.parquet", index=False)
+        self.slates().to_parquet(out / f"{prefix}_slates.parquet", index=False)
+        self.top().to_parquet(out / f"{prefix}_top{self.top_k}.parquet", index=False)
+
+
+def rescore(positives: pd.DataFrame, slates: pd.DataFrame, ks=KS) -> tuple[dict, list[dict]]:
+    """``evaluate``'s metrics recomputed from a ``PredictionLog``, for its positives or any subset of them.
+
+    Filter ``positives`` to a stratum to score it: the other positives keep the
+    places they took, since every rank was taken in the full slate, and R and the
+    NDCG ideal become the stratum's. Slates left without a positive are dropped.
+    On the full set it equals ``evaluate`` (``run_cpu_baselines.py`` checks this).
+    """
+    n_cand = {(int(y), int(d)): int(c) for y, d, c in slates[["year", "disease_index", "n_cand"]].itertuples(index=False)}
+    per_slate = []
+    for _, g in positives.groupby(["year", "disease_index"], sort=True):
+        year, d = int(g["year"].to_numpy()[0]), int(g["disease_index"].to_numpy()[0])
+        r, gain, c = g["rank"].to_numpy(), g["gain"].to_numpy(np.float64), n_cand[(year, d)]
+        n_pos = r.size
+        ideal = np.sort(gain)[::-1]
+        m: dict = {}
+        for k in ks:
+            ke = min(k, c)
+            hits = int((r <= ke).sum())
+            m[f"precision@{k}"] = hits / ke
+            m[f"recall@{k}"] = hits / n_pos
+            top = r <= ke
+            dcg = float((gain[top] / np.log2(r[top] + 1.0)).sum())
+            m[f"ndcg@{k}"] = dcg / _dcg(ideal[:ke])
+        hits_r = int((r <= n_pos).sum())
+        m.update({"precision@R": hits_r / n_pos, "hits@R": hits_r, "n_pos": n_pos, "n_cand": c,
+                  "year": int(year), "disease_index": int(d)})
+        per_slate.append(m)
+    return macro_average(per_slate, ks), per_slate
+
+
+def evaluate(slates: list[Slate], score_fn: Callable[[Slate], np.ndarray], ks=KS,
+             log: PredictionLog | None = None) -> tuple[dict, list[dict]]:
+    """Score every slate with ``score_fn`` (one score per ``slate.candidates``) and macro-average; with
+    ``log``, also record the raw predictions."""
     per_slate = []
     for s in slates:
-        m = slate_metrics(score_fn(s), s.positive_mask, ks, gains=s.gain, strata=s.strata)
+        scores = score_fn(s)
+        m = slate_metrics(scores, s.positive_mask, ks, gains=s.gain, strata=s.strata)
         m.update(year=s.year, disease_index=s.disease_index)
         per_slate.append(m)
+        if log is not None:
+            log.add(s, scores)
     return macro_average(per_slate, ks), per_slate
 
 

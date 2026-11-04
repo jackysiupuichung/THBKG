@@ -70,7 +70,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .slates import KS, Slate, discovery_slates, evaluate, hypothesis_slates, macro_average
+from .slates import KS, PredictionLog, Slate, discovery_slates, evaluate, hypothesis_slates, macro_average
 
 # The graph's last evidence year (config/event_graph_config.yaml
 # time_range.last_year): evidence runs to the 26.09 release, September 2026.
@@ -396,7 +396,7 @@ def task_slates(task: str, split: str, labels: pd.DataFrame, *,
 
 
 def evaluate_task(task: str, split: str, labels: pd.DataFrame, *, num_targets: int,
-                  score_fn_for_year, ks=KS, years=None) -> tuple[dict, list[dict]]:
+                  score_fn_for_year, ks=KS, years=None, log: PredictionLog | None = None) -> tuple[dict, list[dict]]:
     """Build and score a T1 or T2 split one decision year at a time, then macro-average over its slates.
 
     ``score_fn_for_year(year, slates)`` returns the ``score_fn`` for that year's
@@ -404,14 +404,15 @@ def evaluate_task(task: str, split: str, labels: pd.DataFrame, *, num_targets: i
     snapshot once. Only that year's slates are held in memory: a whole T2 split
     would be ~5 GB of candidate arrays. ``years`` restricts to some of the split's
     years, e.g. a ``cv_folds`` validation block (lo, hi) on split "train":
-    ``years=range(lo, hi + 1)``.
+    ``years=range(lo, hi + 1)``. ``log`` (a ``PredictionLog``) keeps the raw
+    predictions, so strata or weights decided later can be scored without rerunning.
     """
     per_slate = []
     split_years = decision_years(split, last_label_year(labels, task))
     for y in split_years if years is None else [y for y in years if y in split_years]:
         slates = task_slates(task, split, labels, num_targets=num_targets, years=[y])
         if slates:
-            per_slate.extend(evaluate(slates, score_fn_for_year(y, slates), ks)[1])
+            per_slate.extend(evaluate(slates, score_fn_for_year(y, slates), ks, log=log)[1])
     return macro_average(per_slate, ks), per_slate
 
 

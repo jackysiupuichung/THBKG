@@ -288,16 +288,23 @@ Scoring a T1 or T2 split with the repository's harness, one decision year at a
 time (a model can embed each year's snapshot once):
 
 ```python
+from src.benchmark.slates import PredictionLog
 from src.benchmark.tasks import evaluate_task
 
 def score_fn_for_year(year, slates):
     z = my_model(load_snapshot(path, year))            # evidence before `year` only
     return lambda s: my_scores(z, s.disease_index, s.candidates)
 
+log = PredictionLog()                                  # raw predictions, kept compactly
 summary, per_slate = evaluate_task("hypothesis", "test", t2, num_targets=19_632,
-                                   score_fn_for_year=score_fn_for_year)
+                                   score_fn_for_year=score_fn_for_year, log=log)
 print(summary["precision@R_per_disease"])
+log.save("my_run", "t2_mymodel_test")
 ```
+
+`PredictionLog` keeps each positive's rank in its full slate and the top 100
+candidates. `slates.rescore` recomputes every metric from it, for all positives
+or any subset (a stratum chosen later), without rerunning the model.
 
 The label tables also load as 🤗 `datasets` configs: `discovery`, `hypothesis`
 and `advancement` (splits `train`, `eval`).

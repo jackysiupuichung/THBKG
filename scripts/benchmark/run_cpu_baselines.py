@@ -16,6 +16,11 @@ Writes, in --out-dir:
   t2_metrics.csv          the same for T2, plus recall@K per stratum (over the slates with
                           a positive in it)
   t2_per_slate.parquet    the same per slate
+  predictions/t{1,2}_<method>_<split>_{positives,slates,top100}.parquet
+                          the raw predictions (src.benchmark.slates.PredictionLog): each
+                          positive's rank in its full slate, and the top 100 candidates, so
+                          strata or weights decided later can be scored with
+                          slates.rescore; checked here to reproduce the metrics above
   t3_predictions.parquet  method, split, pair, transition_year, outcome, score
   t3_summary.csv          RS@N, AUROC, AP: TA mean and "all", per method, split and ranking
                           ("raw" scores, or "year_stratified": percentile rank within the
@@ -37,12 +42,24 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.advancement_metrics import evaluate_advancement, year_stratified  # noqa: E402
 from src.benchmark.baselines import SourceScores, harmonic_score, source_weights, target_degree  # noqa: E402
-from src.benchmark.slates import evaluate, expected_random, macro_average, slate_stats  # noqa: E402
+from src.benchmark.slates import (  # noqa: E402
+    PredictionLog, evaluate, expected_random, macro_average, rescore, slate_stats,
+)
 from src.benchmark.tasks import (  # noqa: E402
     advancement_labels, decision_years, evaluate_task, last_label_year, task_slates,
 )
 
 SPLITS = ("test",)
+
+
+def save_predictions(log: PredictionLog, live: dict, out: Path, prefix: str) -> None:
+    """Write ``log`` under out/predictions, after checking ``rescore`` reproduces the live metrics from it."""
+    again, _ = rescore(log.positives(), log.slates())
+    bad = {k: (live[k], again[k]) for k in live
+           if k in again and isinstance(live[k], float) and not np.isclose(live[k], again[k], rtol=1e-9, atol=1e-12)}
+    if bad:
+        raise AssertionError(f"{prefix}: rescored predictions differ from the live metrics: {bad}")
+    log.save(out / "predictions", prefix)
 
 
 def main() -> None:
@@ -68,6 +85,7 @@ def main() -> None:
     t1_rows, per_slate = [], []
     for split in SPLITS:
         stats, per = [], {m: [] for m in methods}
+        logs = {m: PredictionLog() for m in methods}
         for y in decision_years(split, last_label_year(t1)):
             slates = task_slates("discovery", split, t1, num_targets=n_targets, years=[y])
             if not slates:
@@ -86,11 +104,13 @@ def main() -> None:
                         full[ti] = sc
                     return full[s.candidates]
 
-                per[m].extend(evaluate(slates, score_fn)[1])
+                per[m].extend(evaluate(slates, score_fn, log=logs[m])[1])
         t1_rows.append({"method": "random", "split": split, **expected_random(pd.concat(stats))})
         for m, rows in per.items():
-            t1_rows.append({"method": m, "split": split, **macro_average(rows)})
+            macro = macro_average(rows)
+            t1_rows.append({"method": m, "split": split, **macro})
             per_slate.extend({"method": m, "split": split, **r} for r in rows)
+            save_predictions(logs[m], macro, out, f"t1_{m}_{split}")
         print(f"T1 {split}: {len(per['genetics']):,} slates ({time.time() - t0:.0f}s)")
     t1m = pd.DataFrame(t1_rows)
     t1m.to_csv(out / "t1_metrics.csv", index=False)
@@ -105,7 +125,10 @@ def main() -> None:
 
     t2_rows, t2_per_slate = [], []
     for split in SPLITS:
-        macro, rows = evaluate_task("hypothesis", split, t2, num_targets=n_targets, score_fn_for_year=degree_for_year)
+        log = PredictionLog()
+        macro, rows = evaluate_task("hypothesis", split, t2, num_targets=n_targets, score_fn_for_year=degree_for_year,
+                                    log=log)
+        save_predictions(log, macro, out, f"t2_target_degree_{split}")
         t2_rows.append({"method": "random", "split": split, **expected_random(pd.DataFrame(rows))})
         t2_rows.append({"method": "target_degree", "split": split, **macro})
         t2_per_slate.extend({"method": "target_degree", "split": split, **r} for r in rows)

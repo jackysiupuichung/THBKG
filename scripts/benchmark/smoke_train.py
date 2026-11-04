@@ -15,7 +15,8 @@ Protocol, with no label inside the graph it is trained or scored on:
     in the snapshot;
   * score each decision year Y of that fold's validation block (inside the
     train split; test is never touched) on its own snapshot (evidence before Y),
-    with the trained weights, over every candidate of every slate.
+    with the trained weights, over every candidate of every slate, keeping the
+    raw predictions (a PredictionLog) next to ``--out``.
 
 Model: a projection per node type (ModalityEncoder for the molecule
 modalities), two HeteroConv layers with one GraphSAGE convolution per relation
@@ -40,7 +41,7 @@ from torch import nn
 from torch_geometric.nn import HeteroConv, SAGEConv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.benchmark.slates import expected_random  # noqa: E402
+from src.benchmark.slates import PredictionLog, expected_random  # noqa: E402
 from src.benchmark.tasks import LABEL_YEAR, cv_folds, evaluate_task  # noqa: E402
 from src.models.node_input import input_spec, make_input_projection, node_inputs  # noqa: E402
 
@@ -154,8 +155,10 @@ def main() -> None:
         return lambda s: scores[s.candidates, col[s.disease_index]]
 
     v0, v1 = fold["val"]
+    log = PredictionLog()
     summary, rows = evaluate_task(args.task, "train", labels, num_targets=n_targets,
-                                  score_fn_for_year=score_fn_for_year, years=range(v0, v1 + 1))
+                                  score_fn_for_year=score_fn_for_year, years=range(v0, v1 + 1), log=log)
+    log.save(args.out.parent / "predictions", args.out.stem)  # raw predictions, for rescoring later
     floor = expected_random(pd.DataFrame(rows))
     out = {"task": args.task, "split": f"cv fold, val {v0}-{v1}", "train_snapshot": args.train_snapshot,
            "train_positives": int(tr_t.size), "epochs": args.epochs, "hidden": args.hidden, "seed": args.seed,
