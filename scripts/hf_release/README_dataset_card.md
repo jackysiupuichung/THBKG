@@ -320,6 +320,15 @@ build. The results ship with it.
 - **Literature co-mentions are text-mined.** They cannot tell a passing mention
   from a reported association. About half of the T2 positives of 2016–2019 are
   never co-mentioned again.
+- **Multi-target drugs dominate the trial labels.** A trial counts once for every
+  target its drug acts on, so a drug acting on a protein complex creates many
+  pairs at once. Metformin (51 targets, the subunits of mitochondrial complex I)
+  supplies 153 of the 377 T3 test positives, from one Phase III trial each in
+  knee osteoarthritis, COPD and Parkinson's disease, and 3,111 of the 14,645 T1
+  test-year positives. 47% of T3 and 34% of T1 test positives come only from
+  drugs with 25 or more targets (also bortezomib, topiramate, pentoxifylline,
+  collagenase, propofol and midazolam). Pairs are therefore far from
+  independent, and one programme can decide a therapeutic area's RS@N.
 - **T3 train outcomes overlap the first test years.** Train labels run to 2022,
   so outcomes of targets shared with test pairs can be learned before those test
   decisions (see T3). Fixed-horizon labels also give older entries more
