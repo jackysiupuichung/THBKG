@@ -4,7 +4,9 @@ The tasks follow one target-disease pair from its first link to the clinic,
 under one temporal protocol: a model ranks candidates for a decision year ``Y``
 using only graph evidence dated strictly before ``Y``. T1 and T2 split decision
 years by ``SPLITS``; T3 splits its labelled pairs by Phase II entry year
-(``ADVANCEMENT_SPLITS``) into the same train/val/test periods.
+(``ADVANCEMENT_SPLITS``) into the same train/test periods. There is no official
+validation split: select models on the time-blocked folds inside the train
+years (``cv_folds``), the same folds for every method.
 
 ========  ==========================================  =============================
 task      positive                                    candidate pool for (disease, Y)
@@ -24,7 +26,11 @@ edges, so a label year is by construction the year the masking rule hides. T3
 labels are read off the start-dated trial edge (``build_advancement_labels``):
 a pair enters Phase II in the first year a Phase II trial starts while it has
 no Phase III+ trial, and is positive if a Phase III+ trial starts by the
-horizon of its label file (``ADVANCEMENT_LABEL_FILES``).
+horizon of its label file (``ADVANCEMENT_LABEL_FILES``). Train pairs enter
+up to 2019 and are labelled by 2022, test pairs enter 2020-2023 and are
+labelled by 2026: the pairs are disjoint, but train labels include Phase III
+starts in 2020-2022, after some test decisions, and reach test pairs through
+shared targets and diseases.
 
 T2 labels (``build_hypothesis_labels``) hold every direct target->disease pair
 of the graph with the year of its first direct edge. A pair is a positive in
@@ -46,7 +52,7 @@ being evaluated.
 T1 test positives need a first trial at Phase 1 or later
 (``MIN_FIRST_TRIAL_PHASE``); pairs whose first trials are all early Phase 1 or
 of unknown phase are left out of the test slates, neither positive nor
-negative. Train and validation keep them as positives.
+negative. Train (and its cv_folds) keeps them as positives.
 
 T1 test slates are kept only for diseases that gain more than 3 new targets
 over the whole test period (``MIN_DISEASE_POSITIVES``). Always build slates
@@ -73,8 +79,8 @@ LAST_GRAPH_YEAR = 2026
 # so the partial year never enters the test split; last_label_year() checks the
 # labels run to LAST_GRAPH_YEAR.
 LAST_DECISION_YEAR = 2025
-# Decision years for T1 and T2, inclusive.
-SPLITS = {"train": (1996, 2015), "val": (2016, 2019), "test": (2020, LAST_DECISION_YEAR)}
+# Decision years for T1 and T2, inclusive. No validation split: see cv_folds.
+SPLITS = {"train": (1996, 2019), "test": (2020, LAST_DECISION_YEAR)}
 # Label column holding the year a pair becomes a positive, per slate task.
 LABEL_YEAR = {"discovery": "first_trial_year", "hypothesis": "first_direct_year"}
 # Evidence dated 1985 or earlier is collapsed onto 1985 by the event list
@@ -94,11 +100,10 @@ MIN_DISEASE_POSITIVES = {("discovery", "test"): 4}
 MIN_FIRST_TRIAL_PHASE = {("discovery", "test"): 0.1}
 
 # T3 splits by Phase II entry (transition) year: (label file, first, last), with
-# None = open. train is labels/train.parquet (outcome horizon = 2015 + window);
-# val and test divide labels/eval.parquet, whose outcome horizon is the last
-# evidence year, so its latest pairs enter Phase II window years before it.
-ADVANCEMENT_SPLITS = {"train": ("train", None, 2015), "val": ("eval", 2016, 2019),
-                      "test": ("eval", 2020, None)}
+# None = open. train is labels/train.parquet (outcome horizon = 2019 + window);
+# test is labels/eval.parquet, whose outcome horizon is the last evidence year,
+# so its latest pairs enter Phase II window years before it.
+ADVANCEMENT_SPLITS = {"train": ("train", None, None), "test": ("eval", None, None)}
 
 # T3 labels come from the start-dated trial edge, whose score is the highest
 # phase weight among the pair's trials started up to its year.
@@ -114,8 +119,12 @@ FIRST_ENTRY_YEAR = 1995
 # ADVANCEMENT_WINDOW years.
 ADVANCEMENT_LABEL_FILES = {
     "train": (FIRST_ENTRY_YEAR, SPLITS["train"][1], SPLITS["train"][1] + ADVANCEMENT_WINDOW),
-    "eval": (SPLITS["val"][0], LAST_GRAPH_YEAR - ADVANCEMENT_WINDOW, LAST_GRAPH_YEAR),
+    "eval": (SPLITS["test"][0], LAST_GRAPH_YEAR - ADVANCEMENT_WINDOW, LAST_GRAPH_YEAR),
 }
+# Model selection: CV_FOLDS time-blocked folds inside the train years
+# (cv_folds), validation blocks of CV_BLOCK calendar years ending where the
+# train split ends, each fold training on every earlier train year.
+CV_FOLDS, CV_BLOCK = 3, 4
 # T3 results are reported per therapeutic area: the primary ones are those not
 # matching this pattern with at least MIN_PRIMARY_TA_PAIRS eval pairs that have
 # direct (non-trial) target-disease evidence before their entry year.
@@ -386,16 +395,19 @@ def task_slates(task: str, split: str, labels: pd.DataFrame, *,
 
 
 def evaluate_task(task: str, split: str, labels: pd.DataFrame, *, num_targets: int,
-                  score_fn_for_year, ks=KS) -> tuple[dict, list[dict]]:
+                  score_fn_for_year, ks=KS, years=None) -> tuple[dict, list[dict]]:
     """Build and score a T1 or T2 split one decision year at a time, then macro-average over its slates.
 
     ``score_fn_for_year(year, slates)`` returns the ``score_fn`` for that year's
     slates (one score per ``slate.candidates``), so a model can embed the year's
     snapshot once. Only that year's slates are held in memory: a whole T2 split
-    would be ~5 GB of candidate arrays.
+    would be ~5 GB of candidate arrays. ``years`` restricts to some of the split's
+    years, e.g. a ``cv_folds`` validation block (lo, hi) on split "train":
+    ``years=range(lo, hi + 1)``.
     """
     per_slate = []
-    for y in decision_years(split, last_label_year(labels, task)):
+    split_years = decision_years(split, last_label_year(labels, task))
+    for y in split_years if years is None else [y for y in years if y in split_years]:
         slates = task_slates(task, split, labels, num_targets=num_targets, years=[y])
         if slates:
             per_slate.extend(evaluate(slates, score_fn_for_year(y, slates), ks)[1])
@@ -447,6 +459,18 @@ def advancement_years(release_dir: str | Path) -> pd.DataFrame:
     return pd.concat([entry, phase3], axis=1).reset_index()
 
 
+def _advancement_table(yrs: pd.DataFrame, tid, did, lo: int, hi: int, horizon: int) -> pd.DataFrame:
+    """Pairs of ``advancement_years`` entering Phase II in [lo, hi], positive if Phase III+ by ``horizon``."""
+    g = yrs[yrs["entry_year"].between(lo, hi)]
+    src, dst = g["src"].to_numpy(np.int64), g["dst"].to_numpy(np.int64)
+    return pd.DataFrame({
+        "target_id": tid[src], "disease_id": did[dst],
+        "target_index": src, "disease_index": dst,
+        "transition_year": g["entry_year"].to_numpy(np.int64),
+        "outcome": (g["phase3_year"] <= horizon).to_numpy(),  # NaN (never) -> False
+    }).sort_values(["transition_year", "disease_id", "target_id"], ignore_index=True)
+
+
 def build_advancement_labels(release_dir: str | Path) -> dict[str, pd.DataFrame]:
     """T3 label files (``ADVANCEMENT_LABEL_FILES``): every pair entering Phase II
     within a file's entry years, positive if it reaches Phase III by the file's
@@ -455,16 +479,50 @@ def build_advancement_labels(release_dir: str | Path) -> dict[str, pd.DataFrame]
     release_dir = Path(release_dir)
     yrs = advancement_years(release_dir)
     tid, did = node_ids(release_dir, "target"), node_ids(release_dir, "disease")
+    return {name: _advancement_table(yrs, tid, did, lo, hi, horizon)
+            for name, (lo, hi, horizon) in ADVANCEMENT_LABEL_FILES.items()}
+
+
+def cv_folds(task: str) -> list[dict]:
+    """Time-blocked model-selection folds inside the train split, the same for every method.
+
+    Fold k validates on a block of ``CV_BLOCK`` calendar years and trains on every
+    earlier year of the split (an expanding window); the last block ends where the
+    split ends. T1/T2 years are decision years. T3 years are Phase II entry years,
+    and each fold labels like the official split: train pairs positive if Phase
+    III+ by the year before the val block + ``ADVANCEMENT_WINDOW``
+    (``train_horizon``), val pairs by the block's last year + the window
+    (``val_horizon``); ``advancement_fold_labels`` builds them.
+
+    Returns [{"train": (first, last), "val": (first, last)[, "train_horizon",
+    "val_horizon"]}], years inclusive.
+    """
+    if task == "advancement":
+        first, last = FIRST_ENTRY_YEAR, ADVANCEMENT_LABEL_FILES["train"][1]
+    elif task in LABEL_YEAR:
+        first, last = SPLITS["train"]
+    else:
+        raise ValueError(f"unknown task {task!r}")
+    folds = []
+    for k in range(CV_FOLDS):
+        v1 = last - (CV_FOLDS - 1 - k) * CV_BLOCK
+        v0 = v1 - CV_BLOCK + 1
+        fold: dict = {"train": (first, v0 - 1), "val": (v0, v1)}
+        if task == "advancement":
+            fold.update(train_horizon=v0 - 1 + ADVANCEMENT_WINDOW, val_horizon=v1 + ADVANCEMENT_WINDOW)
+        folds.append(fold)
+    return folds
+
+
+def advancement_fold_labels(release_dir: str | Path, fold: dict) -> dict[str, pd.DataFrame]:
+    """T3 train and val pairs of one ``cv_folds("advancement")`` fold, labelled at that fold's horizons."""
+    release_dir = Path(release_dir)
+    yrs = advancement_years(release_dir)
+    tid, did = node_ids(release_dir, "target"), node_ids(release_dir, "disease")
     out = {}
-    for name, (lo, hi, horizon) in ADVANCEMENT_LABEL_FILES.items():
-        g = yrs[yrs["entry_year"].between(lo, hi)]
-        src, dst = g["src"].to_numpy(np.int64), g["dst"].to_numpy(np.int64)
-        out[name] = pd.DataFrame({
-            "target_id": tid[src], "disease_id": did[dst],
-            "target_index": src, "disease_index": dst,
-            "transition_year": g["entry_year"].to_numpy(np.int64),
-            "outcome": (g["phase3_year"] <= horizon).to_numpy(),  # NaN (never) -> False
-        }).sort_values(["transition_year", "disease_id", "target_id"], ignore_index=True)
+    for part in ("train", "val"):
+        lo, hi = fold[part]
+        out[part] = _advancement_table(yrs, tid, did, lo, hi, fold[f"{part}_horizon"])
     return out
 
 

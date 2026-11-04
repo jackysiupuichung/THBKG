@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Smoke-train a small heterogeneous GNN on a release and score T1 or T2 val, end to end.
+"""Smoke-train a small heterogeneous GNN on a release and score a T1 or T2 model-selection fold, end to end.
 
     python scripts/benchmark/smoke_train.py --release-dir $RELEASE_DIR --task discovery --out OUT.json
 
@@ -11,9 +11,11 @@ of training, no tuning.
 Protocol, with no label inside the graph it is trained or scored on:
   * train on the snapshot of ``--train-snapshot`` (evidence dated before it),
     with the task's positives whose label year lies between that year and the
-    last train decision year: none of their own edges is in the snapshot;
-  * score each val decision year Y on its own snapshot (evidence before Y), with
-    the trained weights, over every candidate of every slate.
+    end of the last ``cv_folds`` fold's train years: none of their own edges is
+    in the snapshot;
+  * score each decision year Y of that fold's validation block (inside the
+    train split; test is never touched) on its own snapshot (evidence before Y),
+    with the trained weights, over every candidate of every slate.
 
 Model: a projection per node type (ModalityEncoder for the molecule
 modalities), two HeteroConv layers with one GraphSAGE convolution per relation
@@ -38,7 +40,8 @@ from torch import nn
 from torch_geometric.nn import HeteroConv, SAGEConv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.benchmark.tasks import LABEL_YEAR, SPLITS, evaluate_task  # noqa: E402
+from src.benchmark.slates import expected_random  # noqa: E402
+from src.benchmark.tasks import LABEL_YEAR, cv_folds, evaluate_task  # noqa: E402
 from src.models.node_input import input_spec, make_input_projection, node_inputs  # noqa: E402
 
 LABEL_FILE = {"discovery": "discovery", "hypothesis": "hypothesis"}
@@ -107,9 +110,10 @@ def main() -> None:
     labels = lt.load_labels(rd, LABEL_FILE[args.task])
 
     # ---- train on one snapshot, with positives whose own edges come later
+    fold = cv_folds(args.task)[-1]
     g = lt.load_snapshot(rd, args.train_snapshot, normalise="max", recency=False).to(dev)
-    tr_t, tr_d = positives(labels, args.task, args.train_snapshot, SPLITS["train"][1])
-    print(f"{args.task}: {tr_t.size:,} train positives {args.train_snapshot}-{SPLITS['train'][1]}, "
+    tr_t, tr_d = positives(labels, args.task, args.train_snapshot, fold["train"][1])
+    print(f"{args.task}: {tr_t.size:,} train positives {args.train_snapshot}-{fold['train'][1]}, "
           f"snapshot {args.train_snapshot}: {sum(g[et].num_edges for et in g.edge_types):,} edges ({time.time() - t0:.0f}s)")
     model = Model(g, args.hidden).to(dev)
     with torch.no_grad():
@@ -136,7 +140,7 @@ def main() -> None:
             print(f"  epoch {epoch:3d}  loss {losses[-1]:.4f}  ({time.time() - t0:.0f}s)")
     del g
 
-    # ---- score val, one decision year at a time on that year's snapshot
+    # ---- score the fold's validation block, one decision year at a time on that year's snapshot
     model.eval()
 
     def score_fn_for_year(year, slates):
@@ -149,9 +153,11 @@ def main() -> None:
         print(f"  val {year}: {len(slates):,} slates ({time.time() - t0:.0f}s)")
         return lambda s: scores[s.candidates, col[s.disease_index]]
 
-    summary, _ = evaluate_task(args.task, "val", labels, num_targets=n_targets, score_fn_for_year=score_fn_for_year)
-    floor = json.loads((rd / "benchmark_tasks.json").read_text())["tasks"][args.task]["val"]["random_expected"]
-    out = {"task": args.task, "split": "val", "train_snapshot": args.train_snapshot,
+    v0, v1 = fold["val"]
+    summary, rows = evaluate_task(args.task, "train", labels, num_targets=n_targets,
+                                  score_fn_for_year=score_fn_for_year, years=range(v0, v1 + 1))
+    floor = expected_random(pd.DataFrame(rows))
+    out = {"task": args.task, "split": f"cv fold, val {v0}-{v1}", "train_snapshot": args.train_snapshot,
            "train_positives": int(tr_t.size), "epochs": args.epochs, "hidden": args.hidden, "seed": args.seed,
            "device": torch.cuda.get_device_name(0) if dev.type == "cuda" else "cpu",
            "loss_first": losses[0], "loss_last": losses[-1], "seconds": round(time.time() - t0),
@@ -159,7 +165,7 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(out, indent=2, default=float))
     keys = ("precision@R_per_disease", "precision@R", "recall@100", "ndcg@100")
-    print(f"✅ {args.task} val: " + ", ".join(f"{k} {summary[k]:.4f} (random {floor.get(k, float('nan')):.4f})"
+    print(f"✅ {args.task} fold val {v0}-{v1}: " + ", ".join(f"{k} {summary[k]:.4f} (random {floor.get(k, float('nan')):.4f})"
                                           for k in keys) + f" -> {args.out}")
 
 

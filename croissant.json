@@ -168,7 +168,7 @@
       "@type": "cr:FileObject",
       "@id": "advancement-train",
       "name": "advancement-train",
-      "description": "T3 advancement labels, pairs entering Phase II 1995-2015.",
+      "description": "T3 advancement labels, pairs entering Phase II 1995-2019, outcome by 2022.",
       "contentUrl": "labels/train.parquet",
       "encodingFormat": "application/x-parquet",
       "sha256": "filled in by scripts/hf_release/write_croissant.py"
@@ -177,7 +177,7 @@
       "@type": "cr:FileObject",
       "@id": "advancement-eval",
       "name": "advancement-eval",
-      "description": "T3 advancement labels, pairs entering Phase II 2016-2023 (val 2016-2019, test 2020-2023).",
+      "description": "T3 advancement labels of the test split, pairs entering Phase II 2020-2023, outcome by 2026.",
       "contentUrl": "labels/eval.parquet",
       "encodingFormat": "application/x-parquet",
       "sha256": "filled in by scripts/hf_release/write_croissant.py"
@@ -568,7 +568,7 @@
       "@type": "cr:RecordSet",
       "@id": "advancement_train",
       "name": "advancement_train",
-      "description": "T3 train: pairs entering Phase II 1995-2015, outcome by 2018.",
+      "description": "T3 train: pairs entering Phase II 1995-2019, outcome by 2022.",
       "field": [
         {
           "@type": "cr:Field",
@@ -649,7 +649,7 @@
           "@type": "cr:Field",
           "@id": "advancement_train/outcome",
           "name": "outcome",
-          "description": "True if a Phase III or later trial started by 2018.",
+          "description": "True if a Phase III or later trial started by 2022.",
           "dataType": "sc:Boolean",
           "source": {
             "fileObject": {
@@ -666,7 +666,7 @@
       "@type": "cr:RecordSet",
       "@id": "advancement_eval",
       "name": "advancement_eval",
-      "description": "T3 eval: pairs entering Phase II 2016-2023, outcome by 2026.",
+      "description": "T3 test: pairs entering Phase II 2020-2023, outcome by 2026.",
       "field": [
         {
           "@type": "cr:Field",

@@ -18,8 +18,9 @@ Writes
   labels/primary_therapeutic_areas.json     --diseases-dir, default
                                             $INPUT_EVIDENCE_DIR/diseases)
   benchmark_tasks.json        splits, slate filters, label counts and slate statistics
-                              per task and split (T2: positives per stratum), plus the
-                              closed-form random floor on val and test
+                              per task and split (T2: positives per stratum), the
+                              closed-form random floor on test, and the model-selection
+                              folds inside train (cv_folds; T3 with pair counts)
 """
 from __future__ import annotations
 
@@ -36,8 +37,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
     ADVANCEMENT_LABEL_FILES, ADVANCEMENT_SPLITS, HYPOTHESIS_STRATA, MIN_DISEASE_POSITIVES, MIN_FIRST_TRIAL_PHASE,
-    SPLITS, advancement_labels, build_advancement_labels, build_discovery_labels, build_hypothesis_labels,
-    decision_years, last_label_year, primary_therapeutic_areas, task_slates, therapeutic_areas,
+    SPLITS, advancement_fold_labels, advancement_labels, build_advancement_labels, build_discovery_labels,
+    build_hypothesis_labels, cv_folds, decision_years, last_label_year, primary_therapeutic_areas, task_slates,
+    therapeutic_areas,
 )
 
 
@@ -98,8 +100,16 @@ def main() -> None:
         "min_positives_per_disease": {f"{t}.{s}": k for (t, s), k in MIN_DISEASE_POSITIVES.items()},
         "min_first_trial_phase": {f"{t}.{s}": v for (t, s), v in MIN_FIRST_TRIAL_PHASE.items()},
         "hypothesis_strata": HYPOTHESIS_STRATA,
+        "advancement_label_files": {k: {"entry_years": [lo, hi], "outcome_horizon": h}
+                                    for k, (lo, hi, h) in ADVANCEMENT_LABEL_FILES.items()},
+        "cv_folds": {t: cv_folds(t) for t in ("discovery", "hypothesis", "advancement")},
         "tasks": {},
     }
+    for fold in summary["cv_folds"]["advancement"]:
+        for part, df in advancement_fold_labels(rd, fold).items():
+            fold[f"{part}_pairs"], fold[f"{part}_positives"] = len(df), int(df["outcome"].sum())
+        print(f"advancement fold val {fold['val']}: train {fold['train_pairs']:,} pairs "
+              f"({fold['train_positives']:,} positive), val {fold['val_pairs']:,} ({fold['val_positives']:,})")
     for task, labels in (("discovery", t1), ("hypothesis", t2)):
         summary["tasks"][task] = {}
         for split in SPLITS:

@@ -11,6 +11,14 @@ Reported per primary therapeutic area (labels/primary_therapeutic_areas.json),
 as the equally weighted mean over them ("TA mean", "all" excluded), for "all"
 pooled, and per entry year (AUROC / average precision), because the positive
 rate falls with entry year (later entries have less follow-up).
+
+Because the label is Phase III by a fixed horizon, older entries have more
+follow-up and more positives, so a model can gain by ranking older pairs above
+newer ones. ``year_stratified`` removes that: each score becomes its percentile
+rank among pairs with the same entry year, the years are pooled, and RS@N is
+computed as usual (the THBKG rebuttal's R1c ranking; on 26.03 it took the Open
+Targets score to chance, AUROC 0.556 -> 0.500). Report it next to the raw
+ranking.
 """
 from __future__ import annotations
 
@@ -37,6 +45,15 @@ def relative_success(scores: np.ndarray, outcome: np.ndarray, n: int) -> float:
     rate_top = pos_top / n
     rate_rest = (y.sum() - pos_top) / (m - n)
     return float(rate_top / rate_rest) if rate_rest > 0 else float("nan")
+
+
+def year_stratified(pred: pd.DataFrame) -> pd.DataFrame:
+    """``pred`` with each score replaced by its mid-rank percentile among pairs of the same transition_year,
+    (average rank - 0.5) / pairs that year, so no entry year can rise above another by follow-up length
+    alone. Mid-rank, not ``rank(pct=True)``: a block of tied scores then sits at the same percentile whatever
+    the year's size, so a constant score is 0.5 in every year (RS = 1) instead of favouring small years."""
+    g = pred.groupby("transition_year")["score"]
+    return pred.assign(score=(g.rank(method="average") - 0.5) / g.transform("size"))
 
 
 def _auroc_ap(scores, outcome) -> tuple[float, float]:

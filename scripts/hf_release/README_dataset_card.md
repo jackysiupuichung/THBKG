@@ -70,8 +70,11 @@ release (format 1.0). Code written for v26.09 does not run on it unchanged.
   description (256-d before).
 - **A snapshot view** (`snapshots/`): each pair's latest state before each
   decision year 1995–2027, with a recency feature.
-- **New tasks T1 and T2**, and T3 labels rebuilt from the graph's own trial edges
-  with a 2026 outcome horizon (eval entries 2016–2023; 2016–2021 before).
+- **New tasks T1 and T2**, and T3 labels rebuilt from the graph's own trial edges:
+  train entries 1995–2019 labelled by 2022, test entries 2020–2023 labelled by
+  2026 (v26.09: train to 2015 by 2018, eval 2016–2021 by 2024). There is no
+  official validation split; models are selected on fixed time-blocked folds
+  inside the train years.
 - **Build fixes.** The start-dated trial edge carries the trial's phase weight
   rather than Open Targets' score, which is halved for trials that later stopped
   for safety or efficacy (an outcome leaking into the start year). Gene Ontology
@@ -134,11 +137,18 @@ outcome edge (`positive`, `unmet_efficacy`, `adverse_effects` or
 
 ## Benchmark tasks
 
-Decision years are split the same way for every task: **train 1996–2015, val
-2016–2019, test 2020–2025**. T3 splits its pairs by Phase II entry year instead,
-and its test entries end at 2023 so every pair has at least three years to
-advance. Training on a split means using its labels and the graph before each
-decision year. Never train on a year you evaluate.
+Decision years are split the same way for T1 and T2: **train 1996–2019, test
+2020–2025**. T3 splits its pairs by Phase II entry year instead (train 1995–2019,
+test 2020–2023), and its test entries end at 2023 so every pair has at least
+three years to advance. Training on a split means using its labels and the graph
+before each decision year.
+
+There is no official validation split. Select models on the time-blocked folds
+inside the train years (`cv_folds` in `benchmark_tasks.json`, the same for every
+method): validation blocks 2008–2011, 2012–2015 and 2016–2019, each fold
+training on all earlier train years. T3 folds are labelled like the official
+split, train pairs by the year before the block plus three, validation pairs by
+the block's last year plus three. Never train or select on a test year.
 
 ### T1 discovery: which targets will enter the clinic for this disease?
 
@@ -152,8 +162,7 @@ targets over the test period.
 
 | Split | Slates | Diseases | Positives |
 |---|---|---|---|
-| train | 8,953 | 2,260 | 61,782 |
-| val | 2,564 | 1,457 | 15,593 |
+| train | 11,517 | 2,561 | 77,375 |
 | test | 1,908 | 728 | 13,534 |
 
 For NDCG, positives are graded by the highest phase their finished trials
@@ -171,8 +180,7 @@ counts. There is no quality filter on the co-mention.
 
 | Split | Slates | Diseases | Positives |
 |---|---|---|---|
-| train | 72,643 | 8,240 | 785,601 |
-| val | 20,571 | 7,379 | 392,361 |
+| train | 93,214 | 8,997 | 1,177,962 |
 | test | 35,628 | 9,108 | 924,845 |
 
 Results are also reported per stratum of the positives:
@@ -188,14 +196,20 @@ Compare them within a split.
 
 A pair enters Phase II in the first year a Phase II trial starts while it has no
 Phase III+ trial. It is positive if a Phase III+ trial starts by the horizon of
-its label file: 2018 for train, 2026 for eval. Each pair is scored at its entry
-year.
+its label file: 2022 for train, 2026 for test. Negative means "not at Phase III
+by the horizon", not failed. Each pair is scored at its entry year.
 
-| Split | Phase II entry | Pairs | Positive |
-|---|---|---|---|
-| train | 1995–2015 | 34,720 | 17.7% |
-| val | 2016–2019 | 8,748 | 9.8% |
-| test | 2020–2023 | 7,786 | 4.8% |
+| Split | Phase II entry | Outcome by | Pairs | Positive |
+|---|---|---|---|---|
+| train | 1995–2019 | 2022 | 43,468 | 18.0% |
+| test | 2020–2023 | 2026 | 7,786 | 4.8% |
+
+**Train outcomes reach past the first test decisions.** Train and test pairs are
+disjoint, but 1,077 train positives started Phase III in 2020–2022. 50.6% of test
+pairs share a target with such a pair whose Phase III came at or after the test
+pair's decision year (17.9% share a disease), and those test pairs advance more
+often (6.4% vs 3.2%). A model that learns which targets advance can use outcomes
+a decision in that year could not have known.
 
 ## Metrics and baselines
 
@@ -207,8 +221,23 @@ years, with one vote per disease (`precision@R_per_disease`). Precision, recall
 and NDCG at *K* = 100, 200 and 500, macro-averaged over slates, are secondary.
 Ties are broken against the positives, so a constant score cannot beat random.
 
-**T3.** Relative Success @ N (precision of the top *N* over the base rate) per
-primary therapeutic area and their mean, plus AUROC and AP.
+**T3.** Relative Success @ N (the advancement rate of a model's top *N* pairs over
+the rate of the rest) per primary therapeutic area (13 areas, plus "all") and
+their mean, plus AUROC and AP, under two rankings:
+- **raw**: scores ranked across all test entry years;
+- **year-stratified**: each score replaced by its mid-rank percentile among the
+  pairs entering Phase II in the same year, then the years pooled, as in the
+  THBKG rebuttal (mid-rank, so a constant score stays at RS 1).
+
+The label is Phase III by a fixed horizon, so the positive rate falls with entry
+year as follow-up shortens (5.8% of 2020 entries, 3.7% of 2023 entries). A raw
+ranking mixes that with real signal: on Open Targets 26.03 the year-stratified
+ranking took the Open Targets score to chance (AUROC 0.556 to 0.500), and on this
+test it moves the score's TA-mean RS@10 from 2.22 to 3.17 and its pooled RS@50
+from 7.31 to 4.65. We recommend comparing models on the year-stratified ranking:
+it compares each pair only with the programmes that entered Phase II in its
+year. The raw ranking is kept for comparison with Czech et al. and earlier
+THBKG results.
 
 Baselines that need no training, on test:
 
@@ -219,14 +248,14 @@ Baselines that need no training, on test:
 | T1 | genetics-only association score | 0.0030 |
 | T2 | random | 0.0011 |
 | T2 | target popularity (diseases linked before *Y*) | 0.0112 |
-| T3 | random | RS@10 = 1.00 |
-| T3 | Open Targets direct association score | RS@10 = 2.28, AUROC 0.61 |
-| T3 | genetics-only association score | RS@10 = 1.58, AUROC 0.50 |
+| T3 | random | RS@10 = 1.00 (both rankings) |
+| T3 | Open Targets direct association score | RS@10 = 3.17 year-stratified (2.22 raw), AUROC 0.65 (0.62) |
+| T3 | genetics-only association score | RS@10 = 2.16 year-stratified (1.90 raw), AUROC 0.55 (0.50) |
 
 T1 and T2 use `precision@R_per_disease`; T3 uses the therapeutic-area mean of
-RS@10. Open Targets scores are 0 for every T2 candidate (none has a direct edge
-yet), so T2's reference is target popularity. Nearly all of its hits are
-targets already linked to 1,000 or more diseases.
+RS@10 and of AUROC. Open Targets scores are 0 for every T2 candidate (none has a
+direct edge yet), so T2's reference is target popularity. Nearly all of its hits
+are targets already linked to 1,000 or more diseases.
 
 The slate builder, the metrics and these baselines are in the
 [GitHub repository](https://github.com/jackysiupuichung/THBKG)
@@ -289,8 +318,12 @@ build. The results ship with it.
 - **Precision is a lower bound.** A pair first trialled or co-mentioned after *Y*
   counts as a negative at *Y*.
 - **Literature co-mentions are text-mined.** They cannot tell a passing mention
-  from a reported association. About half of T2's val positives are never
-  co-mentioned again.
+  from a reported association. About half of the T2 positives of 2016–2019 are
+  never co-mentioned again.
+- **T3 train outcomes overlap the first test years.** Train labels run to 2022,
+  so outcomes of targets shared with test pairs can be learned before those test
+  decisions (see T3). Fixed-horizon labels also give older entries more
+  follow-up; compare models on the year-stratified ranking.
 - **Popularity is a strong prior.** New links favour well-studied targets; report
   results by target-degree stratum.
 - **Builds are not comparable.** Open Targets replaced many EFO disease IDs with

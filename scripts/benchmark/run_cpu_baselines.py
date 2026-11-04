@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run the baselines that need no training on every task, for val and test.
+"""Run the baselines that need no training on every task, on test (there is no official val).
 
     python scripts/benchmark/run_cpu_baselines.py --release-dir $RELEASE_DIR --out-dir $OUT
 
@@ -17,8 +17,10 @@ Writes, in --out-dir:
                           a positive in it)
   t2_per_slate.parquet    the same per slate
   t3_predictions.parquet  method, split, pair, transition_year, outcome, score
-  t3_summary.csv          RS@N, AUROC, AP: TA mean and "all", per method and split
-  t3_by_ta.csv            per primary therapeutic area
+  t3_summary.csv          RS@N, AUROC, AP: TA mean and "all", per method, split and ranking
+                          ("raw" scores, or "year_stratified": percentile rank within the
+                          entry year, which removes the follow-up advantage of older pairs)
+  t3_by_ta.csv            per primary therapeutic area, per ranking
   t3_by_year.csv          per entry year (positive rate, AUROC, AP)
 """
 from __future__ import annotations
@@ -33,14 +35,14 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.benchmark.advancement_metrics import evaluate_advancement  # noqa: E402
+from src.benchmark.advancement_metrics import evaluate_advancement, year_stratified  # noqa: E402
 from src.benchmark.baselines import SourceScores, harmonic_score, source_weights, target_degree  # noqa: E402
 from src.benchmark.slates import evaluate, expected_random, macro_average, slate_stats  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
     advancement_labels, decision_years, evaluate_task, last_label_year, task_slates,
 )
 
-SPLITS = ("val", "test")
+SPLITS = ("test",)
 
 
 def main() -> None:
@@ -131,10 +133,11 @@ def main() -> None:
         out / "t3_predictions.parquet", index=False)
     by_ta, summary, by_year = [], [], []
     for (m, split), g in pred.groupby(["method", "split"], sort=False):
-        res = evaluate_advancement(g, tas, primary)
-        by_ta.append(res["by_ta"].assign(method=m, split=split))
-        summary.append(res["summary"].assign(method=m, split=split))
-        by_year.append(res["by_year"].assign(method=m, split=split))
+        for ranking, gr in (("raw", g), ("year_stratified", year_stratified(g))):
+            res = evaluate_advancement(gr, tas, primary)
+            by_ta.append(res["by_ta"].assign(method=m, split=split, ranking=ranking))
+            summary.append(res["summary"].assign(method=m, split=split, ranking=ranking))
+        by_year.append(res["by_year"].assign(method=m, split=split))  # within-year metrics: same for both
     pd.concat(by_ta).to_csv(out / "t3_by_ta.csv", index=False)
     t3s = pd.concat(summary)
     t3s.to_csv(out / "t3_summary.csv", index=False)
@@ -149,8 +152,9 @@ def main() -> None:
             + [c for c in t2m.columns if c.endswith(".recall@100")] + ["n_slates"])
     print(t2m.set_index(["method", "split"])[cols].T.round(4).to_string())
     print("\nT3")
-    print(t3s.pivot_table(index=["split", "method", "scope"], columns="N", values="RS").round(2).join(
-        t3s.groupby(["split", "method", "scope"])[["auroc", "ap"]].first().round(3)).to_string())
+    keys = ["split", "ranking", "method", "scope"]
+    print(t3s.pivot_table(index=keys, columns="N", values="RS").round(2).join(
+        t3s.groupby(keys)[["auroc", "ap"]].first().round(3)).to_string())
     print(f"\n-> {out} ({time.time() - t0:.0f}s)")
 
 
