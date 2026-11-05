@@ -52,9 +52,9 @@
     "http://mlcommons.org/croissant/RAI/1.0"
   ],
   "name": "THBKG",
-  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG) v2, built from Open Targets 26.09 with Gene Ontology, Reactome, IntAct, the Human Protein Atlas, ChEMBL and ClinicalTrials.gov. Every evidence edge carries the year it was first observed, so the graph can be read as of any past decision year, as a continuous event stream or as yearly snapshots. 110,220 nodes (target, disease, molecule, GO term, Reactome pathway) and 14.1M edge rows over 19 relations. Three benchmark tasks score year Y on evidence dated before Y: T1 discovery (a target-disease pair's first clinical trial), T2 hypothesis (a pair's first direct link is a literature co-mention) and T3 advancement (a pair entering Phase II reaches Phase III).",
-  "version": "2.0.0",
-  "datePublished": "2026-11-03",
+  "description": "The Temporal Heterogeneous Biomedical Knowledge Graph (THBKG) v2.1, built from Open Targets 26.09 with Gene Ontology, Reactome, IntAct, the Human Protein Atlas, ChEMBL and ClinicalTrials.gov. Every evidence edge carries the year it was first observed, so the graph can be read as of any past decision year, as a continuous event stream or as yearly snapshots. 110,220 nodes (target, disease, molecule, GO term, Reactome pathway) and 14.1M edge rows over 19 relations. Three benchmark tasks score year Y on evidence dated before Y: T1 discovery (a target-disease pair's first clinical trial), T2 hypothesis (a pair's first direct link is a literature co-mention) and T3 advancement (a pair entering Phase II reaches Phase III).",
+  "version": "2.1.0",
+  "datePublished": "2026-11-05",
   "license": "https://creativecommons.org/licenses/by/4.0/",
   "url": "https://huggingface.co/datasets/jspc00012567/THBKG",
   "sameAs": [
@@ -123,7 +123,7 @@
       "@type": "cr:FileObject",
       "@id": "benchmark-tasks",
       "name": "benchmark-tasks",
-      "description": "Splits, slate filters, label and slate counts per task and split, and closed-form random floors.",
+      "description": "Official metric per task and seeds to report; T1/T2 val and test windows, training cutoffs, training recipes and the label relations hidden by recipe single; slate filters, label, slate and training-positive counts per task and split, closed-form random floors; T3 model-selection folds.",
       "contentUrl": "benchmark_tasks.json",
       "encodingFormat": "application/json",
       "sha256": "filled in by scripts/hf_release/write_croissant.py"

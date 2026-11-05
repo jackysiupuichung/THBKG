@@ -36,7 +36,7 @@ configs:
 
 # THBKG — Temporal Heterogeneous Biomedical Knowledge Graph
 
-**THBKG v2**: a dated biomedical knowledge graph built from
+**THBKG v2.1**: a dated biomedical knowledge graph built from
 [Open Targets](https://www.opentargets.org/) **26.09**, with Gene Ontology,
 Reactome, IntAct, the Human Protein Atlas, ChEMBL and ClinicalTrials.gov. Every
 evidence edge carries the year it was first observed, so the graph can be read
@@ -45,13 +45,45 @@ from its first published link, to its first clinical trial, to Phase III:
 
 | Task | A model ranks… | Positive |
 |---|---|---|
-| **T1 discovery** | every target with no trial for the disease yet | the pair's first clinical trial starts in year *Y* |
-| **T2 hypothesis** | every target with no direct link of any kind to the disease yet | the pair's first direct link is a literature co-mention in year *Y* |
+| **T1 discovery** | every target with no trial for the disease before the cutoff | the pair's first clinical trial starts in the window after it |
+| **T2 hypothesis** | every target with no direct link of any kind to the disease before the cutoff | the pair's first direct link is a literature co-mention in the window |
 | **T3 advancement** | target–disease pairs entering Phase II in year *Y* | the pair reaches Phase III by a fixed horizon |
 
-In every task a model scores year *Y* using **only evidence dated strictly before
-*Y***. All labels are read off the graph itself, so the year a label becomes
-true is exactly the year the time rule hides.
+A model decides at a year *Y* (T1, T2: the window's cutoff; T3: the pair's Phase
+II entry year) using **only evidence dated strictly before *Y***. All labels are
+read off the graph itself, so the year a label becomes true is exactly the year
+the time rule hides.
+
+## v2.1: what changed since v2
+
+v2.1 keeps v2's edges, loader and release format 2.0, and revises the benchmark.
+**Results are not comparable with v2.**
+
+- **T1 and T2 rank once per window**, from the window's cutoff: val 2017–2019
+  (cutoff 2017) and test 2020–2026 (cutoff 2020), one slate per disease. v2 had
+  one slate per disease and year (train 1996–2015, val 2016–2019, test
+  2020–2025). The label tables `discovery.parquet` and `hypothesis.parquet` are
+  unchanged.
+- **A training protocol**: train only on what is dated before the scored split's
+  cutoff, select on val, refit before test, run 5 seeds, and make no test-time
+  updates. Two training recipes (`single`, `stacked`) are reported with the
+  results.
+- **T3 is re-split**: train entries 1995–2019 labelled by 2022 (v2: 1995–2015),
+  and `labels/eval.parquet` holds only the test entries 2020–2023 (v2: also the
+  val entries 2016–2019). T3 selects models on time-blocked folds inside the
+  train years. With fewer eval pairs, 13 therapeutic areas qualify as primary
+  (v2: 18).
+- **Ties count at their expected value** over random orders of the tied
+  candidates, so a constant score scores exactly random (v2: positives ranked
+  last within a tie). The per-disease pooled precision@R is dropped, as each
+  split has one slate per disease.
+- **`benchmark_tasks.json`** has a new layout: the official metric per task
+  (`primary_metric`), seeds, windows, cutoffs, recipes and training-positive
+  counts.
+- **GO and Reactome node features** were recomputed by the same autoencoder,
+  which is not deterministic on GPU. They match v2's closely (median cosine
+  0.997 and 0.987) but not exactly. Every other tensor of `graph.safetensors`
+  is unchanged.
 
 ## v2: what changed since v26.09
 
@@ -70,11 +102,8 @@ release (format 1.0). Code written for v26.09 does not run on it unchanged.
   description (256-d before).
 - **A snapshot view** (`snapshots/`): each pair's latest state before each
   decision year 1995–2027, with a recency feature.
-- **New tasks T1 and T2**, and T3 labels rebuilt from the graph's own trial edges:
-  train entries 1995–2019 labelled by 2022, test entries 2020–2023 labelled by
-  2026 (v26.09: train to 2015 by 2018, eval 2016–2021 by 2024). There is no
-  official validation split; models are selected on fixed time-blocked folds
-  inside the train years.
+- **New tasks T1 and T2**, and T3 labels rebuilt from the graph's own trial edges
+  with a 2026 outcome horizon (eval entries 2016–2023; 2016–2021 before).
 - **Build fixes.** The start-dated trial edge carries the trial's phase weight
   rather than Open Targets' score, which is halved for trials that later stopped
   for safety or efficacy (an outcome leaking into the start year). Gene Ontology
@@ -96,7 +125,7 @@ release (format 1.0). Code written for v26.09 does not run on it unchanged.
 | `labels/therapeutic_areas.parquet`, `labels/primary_therapeutic_areas.json` | Disease → Open Targets therapeutic areas, and the areas T3 is reported on. |
 | `scores/target_disease_by_source.parquet` | Per-source target–disease scores by year, for baselines that need the sources apart. |
 | `features/` | Raw 1280-d ESM-2 embeddings of the biologics, target-feature imputation flags, how disease embeddings were made. |
-| `benchmark_tasks.json` | Splits, slate filters, label and slate counts per task and split, closed-form random floors. |
+| `benchmark_tasks.json` | Official metric per task and seeds to report; T1/T2 windows, training cutoffs and recipes; slate filters, label, slate and training-positive counts per task and split; closed-form random floors; T3 folds. |
 | `check_release.json`, `check_inputs.json` | The release checks this build passed (see *Checks*). |
 | `molecule_features.yaml`, `source_versions.json` | Molecule feature recipe; pinned upstream versions. |
 | `load_thbkg.py` | Standalone loader: PyG `HeteroData` for either view, label tables. |
@@ -137,67 +166,102 @@ outcome edge (`positive`, `unmet_efficacy`, `adverse_effects` or
 
 ## Benchmark tasks
 
-Decision years are split the same way for T1 and T2: **train 1996–2019, test
-2020–2026**. 2026 is a partial year: the graph ends at the 26.09 release, so its
-positives cover January to September only, and records reach Open Targets late
-(T1: 1,213 positives in 2026 against 1,795 in 2025; T2: 31,361 against
-157,891). The candidate pool is not smaller (about 19,500 targets per T1 slate
-and 18,800 per T2 slate, as in earlier years), so the pairs whose 2026 trial or
-co-mention is not yet recorded stay in it as negatives: T2 has 8.8 positives per
-2026 slate against about 25 in other years, and 2026 precision is a looser lower
-bound than other years'. T3 splits its pairs by Phase II entry year instead (train 1995–2019,
-test 2020–2023), and its test entries end at 2023 so every pair has at least
-three years to advance. Training on a split means using its labels and the graph
-before each decision year.
+**T1 and T2 rank once per window.** A slate is one disease: it ranks every
+candidate target from the graph before the window's first year (its cutoff) and
+counts every event in the window as a positive. Both tasks share two windows:
 
-There is no official validation split. Select models on the time-blocked folds
-inside the train years (`cv_folds` in `benchmark_tasks.json`, the same for every
-method): validation blocks 2008–2011, 2012–2015 and 2016–2019, each fold
-training on all earlier train years. T3 folds are labelled like the official
-split, train pairs by the year before the block plus three, validation pairs by
-the block's last year plus three. Never train or select on a test year.
+| Split | Cutoff | Events | Use |
+|---|---|---|---|
+| val | 2017 | 2017–2019 | choose settings and the number of epochs |
+| test | 2020 | 2020–2026 | score the refitted model once |
+
+2026 is a partial year: the graph ends at the 26.09 release, so its positives
+cover January to September only, and records reach Open Targets late (T1: 1,213
+positives in 2026 against 1,795 in 2025; T2: 31,361 against 157,891). The
+candidate pool is the same either way, so pairs whose 2026 trial or co-mention
+is not yet recorded count as negatives, and test precision is a lower bound.
+
+T3 splits its pairs by Phase II entry year instead (train 1995–2019, test
+2020–2023), and its test entries end at 2023 so every pair has at least three
+years to advance. T3 has no official validation split: select models on the
+time-blocked folds inside the train years (`cv_folds` in `benchmark_tasks.json`,
+the same for every method): validation blocks 2008–2011, 2012–2015 and
+2016–2019, each fold training on all earlier train years. The folds are labelled
+like the official split, train pairs by the year before the block plus three,
+validation pairs by the block's last year plus three.
+
+### Training protocol (T1 and T2)
+
+The rules, the same for every method:
+
+1. A model scored on a split trains only on evidence and labels dated before its
+   cutoff: before 2017 for val, before 2020 for test.
+2. Choose settings, and the number of epochs, on val.
+3. Refit the chosen setting on everything dated before 2020 and score test once.
+   Run it with 5 seeds and report the mean ± std of the primary metric.
+4. No test-time updates. Each slate is scored from the snapshot of its cutoff,
+   and no event inside the window reaches the model: when it ranks the targets
+   first trialled in 2023, it has not seen the trials of 2020–2022. (TGB lets a
+   model absorb each test batch's true edges before the next; a decision made in
+   2020 cannot.)
+
+A model chooses its **recipe**, how it turns the labels before the cutoff into
+training examples, and reports it with its results:
+
+| Recipe | Training examples | Positives before 2017 (T1 / T2) | Before 2020 (T1 / T2) |
+|---|---|---|---|
+| `single` | every positive before the cutoff, on the one snapshot of the cutoff; while a pair is trained on, its own label edges are hidden in both directions (T1: the five `clinical_trial_*` relations, as a T1 candidate can have other evidence; T2: all eleven target–disease relations) | 68,683 / 1,003,150 | 80,248 / 1,306,893 |
+| `stacked` | the positives of each 3-year window from 1996 (1996–1998, …), each ranked from the snapshot before its window; nothing to hide | 65,810 / 874,219 | 77,375 / 1,177,962 |
+
+`single` suits static models, as in GATher and Rosalind. Its older training
+pairs sit in a graph that also holds what came after them, for example the
+papers a trial produced. `stacked` gives every training pair only the evidence
+before it, as test does; a time-aware model can do the same from the continuous
+view by keeping each pair's edges dated before its window. The test input is the
+same either way, so the two compare directly.
 
 ### T1 discovery: which targets will enter the clinic for this disease?
 
-One slate per (disease, year *Y*) with at least one positive. It ranks every
-target with no trial for that disease before *Y* (about 19,600 candidates).
-Positives are the targets whose first trial for the disease, at any phase,
-starts in *Y*. Test positives need a first trial at Phase 1 or later; pairs whose
-first trials are early Phase 1 or of unknown phase are left out of the test
-slates. Test slates are kept for the 772 diseases that gain more than three new
-targets over the test period.
+One slate per disease and window with at least one positive. It ranks every
+target with no trial for that disease before the cutoff (about 19,600
+candidates). Positives are the targets whose first trial for the disease, at any
+phase, starts in the window. Test positives need a first trial at Phase 1 or
+later; pairs whose first trials are early Phase 1 or of unknown phase are left
+out of the test slates. Test slates are kept for the 772 diseases that gain more
+than three new targets over the test window.
 
-| Split | Slates | Diseases | Positives |
-|---|---|---|---|
-| train | 11,517 | 2,561 | 77,375 |
-| test | 2,142 | 772 | 14,807 |
+| Split | Slates (diseases) | Positives |
+|---|---|---|
+| val | 1,259 | 11,565 |
+| test | 772 | 14,807 |
 
 For NDCG, positives are graded by the highest phase their finished trials
-reached by the end of the graph (`grade`). The grade looks past *Y*, so use it
-only to score rankings.
+reached by the end of the graph (`grade`). The grade looks past the cutoff, so
+use it only to score rankings.
 
 ### T2 hypothesis: which targets will be linked to this disease next?
 
-One slate per (disease, year *Y*). It ranks every target with **no direct edge of
-any relation to the disease before *Y***, trials included. Positives are the
-targets whose first direct link to the disease is a Europe PMC literature
-co-mention in *Y*. Pairs first linked by other evidence are left out of that
-year's slate, and a linked pair leaves the pool, so a repeat co-mention never
-counts. There is no quality filter on the co-mention.
+One slate per disease and window. It ranks every target with **no direct edge of
+any relation to the disease before the cutoff**, trials included. Positives are
+the targets whose first direct link to the disease is a Europe PMC literature
+co-mention in the window. Pairs first linked by other evidence in the window are
+left out of the slate, and a pair linked before the cutoff is not a candidate,
+so a repeat co-mention never counts. There is no quality filter on the
+co-mention.
 
-| Split | Slates | Diseases | Positives |
-|---|---|---|---|
-| train | 93,214 | 8,997 | 1,177,962 |
-| test | 39,193 | 9,167 | 956,206 |
+| Split | Slates (diseases) | Positives |
+|---|---|---|
+| val | 6,965 | 303,743 |
+| test | 9,167 | 956,206 |
 
 Results are also reported per stratum of the positives:
 - co-mentioned again in a later year;
 - later linked by non-literature evidence;
 - later trialled;
-- by how many diseases the target was linked to before *Y* (0–9, 10–99, 100–999, 1000+).
+- by how many diseases the target was linked to before the cutoff (0–9, 10–99, 100–999, 1000+).
 
-The first three look past *Y* and have less time to happen in later test years.
-Compare them within a split.
+The first three look past the cutoff and have less time to happen for positives
+late in the window. Compare them within a split.
 
 ### T3 advancement: which Phase II programmes will reach Phase III?
 
@@ -222,11 +286,11 @@ a decision in that year could not have known.
 
 **T1 and T2.** The primary metric is **precision@R**: the precision at top *K* of
 [TargetBench](https://www.nature.com/articles/s41598-026-47765-3), with *K* set
-to the number of positives, i.e. the share of the top *R* candidates that are
-positives. A disease's slates are pooled across the split's
-years, with one vote per disease (`precision@R_per_disease`). Precision, recall
-and NDCG at *K* = 100, 200 and 500, macro-averaged over slates, are secondary.
-Ties are broken against the positives, so a constant score cannot beat random.
+to each slate's number of positives, i.e. the share of its top *R* candidates
+that are positives, averaged over slates (one vote per disease). Precision,
+recall and NDCG at *K* = 100, 200 and 500 are secondary. Ties count at their
+expected value over random orders of the tied candidates (for one positive, its
+mid-rank, as in TGB and OGB), so a constant score scores exactly random.
 
 **T3.** Relative Success @ N (the advancement rate of a model's top *N* pairs over
 the rate of the rest) per primary therapeutic area (13 areas, plus "all") and
@@ -246,21 +310,25 @@ it compares each pair only with the programmes that entered Phase II in its
 year. The raw ranking is kept for comparison with Czech et al. and earlier
 THBKG results.
 
+`benchmark_tasks.json` names each task's official metric (`primary_metric`):
+precision@R for T1 and T2, the year-stratified therapeutic-area mean of RS@10
+for T3.
+
 Baselines that need no training, on test:
 
 | Task | Method | Primary metric |
 |---|---|---|
-| T1 | random | 0.0006 |
-| T1 | Open Targets direct association score | 0.0082 |
-| T1 | genetics-only association score | 0.0030 |
-| T2 | random | 0.0011 |
-| T2 | target popularity (diseases linked before *Y*) | 0.0109 |
+| T1 | random | 0.0010 |
+| T1 | Open Targets direct association score | 0.0151 |
+| T1 | genetics-only association score | 0.0037 |
+| T2 | random | 0.0061 |
+| T2 | target popularity (diseases linked before the cutoff) | 0.0293 |
 | T3 | random | RS@10 = 1.00 (both rankings) |
 | T3 | Open Targets direct association score | RS@10 = 3.17 year-stratified (2.22 raw), AUROC 0.65 (0.61) |
 | T3 | genetics-only association score | RS@10 = 2.16 year-stratified (1.90 raw), AUROC 0.55 (0.50) |
 
-T1 and T2 use `precision@R_per_disease`; T3 uses the therapeutic-area mean of
-RS@10 and of AUROC. Open Targets scores are 0 for every T2 candidate (none has a
+T1 and T2 show precision@R; T3 the therapeutic-area mean of RS@10 and of
+AUROC. Open Targets scores are 0 for every T2 candidate (none has a
 direct edge yet), so T2's reference is target popularity. Nearly all of its hits
 are targets already linked to 1,000 or more diseases.
 
@@ -284,27 +352,32 @@ train, eval_ = load_labels(path, "train"), load_labels(path, "eval")   # T3
 t2i = node_index(path, "target")         # node_id -> index
 ```
 
-Scoring a T1 or T2 split with the repository's harness, one decision year at a
-time (a model can embed each year's snapshot once):
+Scoring a T1 or T2 split with the repository's harness (the model embeds the
+snapshot of the split's cutoff once), and recording the run:
 
 ```python
+from src.benchmark.results import save_result
 from src.benchmark.slates import PredictionLog
 from src.benchmark.tasks import evaluate_task
 
-def score_fn_for_year(year, slates):
-    z = my_model(load_snapshot(path, year))            # evidence before `year` only
+def score_fn_for_year(cutoff, slates):
+    z = my_model(load_snapshot(path, cutoff))          # evidence before the cutoff only
     return lambda s: my_scores(z, s.disease_index, s.candidates)
 
 log = PredictionLog()                                  # raw predictions, kept compactly
 summary, per_slate = evaluate_task("hypothesis", "test", t2, num_targets=19_632,
                                    score_fn_for_year=score_fn_for_year, log=log)
-print(summary["precision@R_per_disease"])
-log.save("my_run", "t2_mymodel_test")
+print(summary["precision@R"])
+log.save("my_run", "t2_mymodel_seed0_test")
+save_result("my_run/results.json", task="hypothesis", model="mymodel", recipe="single",
+            seed=0, val=val_summary, test=summary)
 ```
 
-`PredictionLog` keeps each positive's rank in its full slate and the top 100
-candidates. `slates.rescore` recomputes every metric from it, for all positives
-or any subset (a stratum chosen later), without rerunning the model.
+`PredictionLog` keeps the ranks each positive shares with its ties in its full
+slate, and the top 100 candidates. `slates.rescore` recomputes every metric from
+it, for all positives or any subset (a stratum chosen later), without rerunning
+the model. `results.summarise` gives the mean ± std over seeds per model, task
+and recipe.
 
 The label tables also load as 🤗 `datasets` configs: `discovery`, `hypothesis`
 and `advancement` (splits `train`, `eval`).
@@ -329,8 +402,8 @@ build. The results ship with it.
 - **Dates are evidence dates, not curation dates.** A snapshot for year *Y* shows
   evidence published before *Y* as Open Targets 26.09 curates it today. Evidence
   that was only added to the databases later is still visible at *Y*.
-- **Precision is a lower bound.** A pair first trialled or co-mentioned after *Y*
-  counts as a negative at *Y*.
+- **Precision is a lower bound.** A pair first trialled or co-mentioned after a
+  window, or in it but not yet recorded, counts as a negative.
 - **Literature co-mentions are text-mined.** They cannot tell a passing mention
   from a reported association. About half of the T2 positives of 2016–2019 are
   never co-mentioned again.
@@ -338,8 +411,8 @@ build. The results ship with it.
   target its drug acts on, so a drug acting on a protein complex creates many
   pairs at once. Metformin (51 targets, the subunits of mitochondrial complex I)
   supplies 153 of the 377 T3 test positives, from one Phase III trial each in
-  knee osteoarthritis, COPD and Parkinson's disease, and 3,366 of the 15,937 T1
-  test-year positives. 47% of T3 and 34% of T1 test positives come only from
+  knee osteoarthritis, COPD and Parkinson's disease, and 3,366 of the 14,807 T1
+  test positives. 47% of T3 and 37% of T1 test positives come only from
   drugs with 25 or more targets (also bortezomib, topiramate, pentoxifylline,
   collagenase, propofol and midazolam). Pairs are therefore far from
   independent, and one programme can decide a therapeutic area's RS@N.
@@ -355,12 +428,13 @@ build. The results ship with it.
 
 ## Versions
 
-This is **v2** (revision `v2`, release format 2.0), built on Open Targets 26.09.
+This is **v2.1** (revision `v2.1`, release format 2.0), built on Open Targets 26.09.
 Tags now version THBKG itself; the Open Targets release it is built on is in
 `source_versions.json`. Earlier builds stay available by revision:
 
 ```python
-snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v2")      # this build
+snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v2.1")    # this build
+snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v2")      # v2 benchmark protocol
 snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v26.09")  # format 1.0
 snapshot_download("jspc00012567/THBKG", repo_type="dataset", revision="v26.03")
 ```
