@@ -16,7 +16,7 @@ time_range:
   # paper in their literature list.
   first_year: 1985
   # Evidence runs to the 26.09 release (September 2026), so 2026 is a partial
-  # year; it is still the last T1/T2 decision year (src/benchmark/tasks.py
-  # LAST_DECISION_YEAR), with January-September positives.
+  # year; the T1/T2 test window still runs to it (src/benchmark/tasks.py
+  # SPLITS), with January-September positives for 2026.
   last_year: 2026
 

@@ -43,10 +43,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.benchmark.advancement_metrics import evaluate_advancement, year_stratified  # noqa: E402
 from src.benchmark.baselines import SourceScores, harmonic_score, source_weights, target_degree  # noqa: E402
 from src.benchmark.slates import (  # noqa: E402
-    PredictionLog, evaluate, expected_random, macro_average, rescore, slate_stats,
+    PredictionLog, evaluate, expected_random, rescore, slate_stats,
 )
 from src.benchmark.tasks import (  # noqa: E402
-    advancement_labels, decision_years, evaluate_task, last_label_year, task_slates,
+    advancement_labels, evaluate_task, task_slates,
 )
 
 SPLITS = ("test",)
@@ -80,47 +80,41 @@ def main() -> None:
     }
     print(f"per-source scores: {scores.key.size:,} rows, {len(scores.sources)} sources ({time.time() - t0:.0f}s)")
 
-    # ---- T1: rank every candidate target in each (disease, year) slate
+    # ---- T1: rank every candidate target for each disease, from the graph before the window
     t1 = pd.read_parquet(rd / "labels" / "discovery.parquet")
     t1_rows, per_slate = [], []
     for split in SPLITS:
-        stats, per = [], {m: [] for m in methods}
-        logs = {m: PredictionLog() for m in methods}
-        for y in decision_years(split, last_label_year(t1)):
-            slates = task_slates("discovery", split, t1, num_targets=n_targets, years=[y])
-            if not slates:
-                continue
-            stats.append(slate_stats(slates))
-            ps = scores.as_of(y)
-            ps = ps[ps["disease_index"].isin({s.disease_index for s in slates})]
-            for m, fn in methods.items():
-                pair = fn(ps)
-                by_d = {d: (g["target_index"].to_numpy(), g["score"].to_numpy()) for d, g in pair.groupby("disease_index")}
+        slates = task_slates("discovery", split, t1, num_targets=n_targets)
+        cutoff = slates[0].year
+        ps = scores.as_of(cutoff)
+        ps = ps[ps["disease_index"].isin({s.disease_index for s in slates})]
+        t1_rows.append({"method": "random", "split": split, **expected_random(slate_stats(slates))})
+        for m, fn in methods.items():
+            pair = fn(ps)
+            by_d = {d: (g["target_index"].to_numpy(), g["score"].to_numpy()) for d, g in pair.groupby("disease_index")}
 
-                def score_fn(s, by_d=by_d):
-                    full = np.zeros(n_targets)
-                    if s.disease_index in by_d:
-                        ti, sc = by_d[s.disease_index]
-                        full[ti] = sc
-                    return full[s.candidates]
+            def score_fn(s, by_d=by_d):
+                full = np.zeros(n_targets)
+                if s.disease_index in by_d:
+                    ti, sc = by_d[s.disease_index]
+                    full[ti] = sc
+                return full[s.candidates]
 
-                per[m].extend(evaluate(slates, score_fn, log=logs[m])[1])
-        t1_rows.append({"method": "random", "split": split, **expected_random(pd.concat(stats))})
-        for m, rows in per.items():
-            macro = macro_average(rows)
+            log = PredictionLog()
+            macro, rows = evaluate(slates, score_fn, log=log)
             t1_rows.append({"method": m, "split": split, **macro})
             per_slate.extend({"method": m, "split": split, **r} for r in rows)
-            save_predictions(logs[m], macro, out, f"t1_{m}_{split}")
-        print(f"T1 {split}: {len(per['genetics']):,} slates ({time.time() - t0:.0f}s)")
+            save_predictions(log, macro, out, f"t1_{m}_{split}")
+        print(f"T1 {split}: {len(slates):,} slates, cutoff {cutoff} ({time.time() - t0:.0f}s)")
     t1m = pd.DataFrame(t1_rows)
     t1m.to_csv(out / "t1_metrics.csv", index=False)
     pd.DataFrame(per_slate).to_parquet(out / "t1_per_slate.parquet", index=False)
 
-    # ---- T2: rank every target with no direct edge to the disease yet, one decision year at a time
+    # ---- T2: rank every target with no direct edge to the disease before the window's cutoff
     t2 = pd.read_parquet(rd / "labels" / "hypothesis.parquet")
 
-    def degree_for_year(year, slates):
-        degree = target_degree(t2, year, n_targets)
+    def degree_for_year(cutoff, slates):
+        degree = target_degree(t2, cutoff, n_targets)
         return lambda s: degree[s.candidates]
 
     t2_rows, t2_per_slate = [], []

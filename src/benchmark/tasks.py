@@ -1,21 +1,42 @@
 """Label tables for the THBKG benchmark tasks.
 
 The tasks follow one target-disease pair from its first link to the clinic,
-under one temporal protocol: a model ranks candidates for a decision year ``Y``
-using only graph evidence dated strictly before ``Y``. T1 and T2 split decision
-years by ``SPLITS``; T3 splits its labelled pairs by Phase II entry year
-(``ADVANCEMENT_SPLITS``) into the same train/test periods. There is no official
-validation split: select models on the time-blocked folds inside the train
-years (``cv_folds``), the same folds for every method.
+under one temporal protocol: a model scores at a decision year ``Y`` using only
+graph evidence dated strictly before ``Y``, and every task tests from
+``TEST_START`` (2020) on. T1 and T2 are cumulative: a window of years has one
+cutoff, its first year, and one slate per disease, ranked from the graph before
+the cutoff and judged on every event in the window. ``SPLITS`` holds the two
+scored windows, the same for every method: val, 2017-2019, and test, 2020 to
+the graph's last year. The protocol:
+
+  * a model scored on a split trains only on graph evidence and labels dated
+    before its cutoff (``fit_before``);
+  * settings (and the number of epochs) are chosen on val, after fitting on
+    everything before 2017;
+  * the chosen setting is refitted on everything before 2020 and scored once
+    on test, over several seeds (``results.py``);
+  * no test-time updates: every slate is scored from the snapshot of its
+    window's cutoff, so no event inside the window (a 2021 trial, when scoring
+    2023) reaches the model, whose weights and inputs stay as they were at the
+    cutoff.
+
+How a model turns its labels into training examples is its recipe
+(``RECIPES``), reported with the results: "single" trains on one snapshot with
+each trained pair's own edges hidden (``hide_pairs``), "stacked" ranks each
+3-year window's events from the snapshot before it (``fit_windows``).
+``PRIMARY_METRIC`` is each task's official metric. T3 decides each pair at its
+own Phase II entry year (``ADVANCEMENT_SPLITS``) and selects models on
+``cv_folds``, inside the train years; it has no official validation split.
 
 ========  ==========================================  =============================
-task      positive                                    candidate pool for (disease, Y)
+task      positive                                    candidate pool for (disease,
+                                                      window starting at Y)
 ========  ==========================================  =============================
 T1        (target, disease) pair whose first trial    every target with no trial for
-discovery (any phase) starts in ``Y``                 that disease before ``Y``
+discovery (any phase) starts in the window            that disease before ``Y``
 T2        (target, disease) pair whose first direct   every target with no direct
-hypo-     edge is a literature co-mention in ``Y``    edge of any relation (trials
-thesis                                                included) to it before ``Y``
+hypo-     edge is a literature co-mention, in the     edge of any relation (trials
+thesis    window                                      included) to it before ``Y``
 T3        Phase II entry in ``Y`` that reaches        the labelled pairs themselves
 advance-  Phase III by a fixed horizon, at least      (labels/train|eval.parquet)
 ment      3 years after the split's last entry year
@@ -33,14 +54,15 @@ starts in 2020-2022, after some test decisions, and reach test pairs through
 shared targets and diseases.
 
 T2 labels (``build_hypothesis_labels``) hold every direct target->disease pair
-of the graph with the year of its first direct edge. A pair is a positive in
-that year only if the edge is a literature co-mention (``novel``): the first
-evidence of any kind linking the target to the disease is a paper mentioning
-both. A pair first linked by other evidence is left out of that year's slate,
-and every linked pair leaves the pool, so a repeat co-mention never counts. T2
-has no quality filter and no grade. ``HYPOTHESIS_STRATA`` split the positives,
-for reporting only, by what followed (another co-mention, other evidence, a
-trial; these look past ``Y``) and by how studied the target was before ``Y``.
+of the graph with the year of its first direct edge. A pair is a positive of a
+window containing that year only if the edge is a literature co-mention
+(``novel``): the first evidence of any kind linking the target to the disease
+is a paper mentioning both. A pair first linked by other evidence in the
+window is left out of the slate, and every pair linked before the cutoff
+leaves the pool, so a repeat co-mention never counts. T2 has no quality filter
+and no grade. ``HYPOTHESIS_STRATA`` split the positives, for reporting only,
+by what followed (another co-mention, other evidence, a trial; these look past
+the cutoff) and by how studied the target was before the cutoff.
 
 T1 positives are graded for NDCG by their max outcome phase: the highest phase
 among the pair's finished trials (outcome edges) up to the end of the graph.
@@ -52,11 +74,11 @@ being evaluated.
 T1 test positives need a first trial at Phase 1 or later
 (``MIN_FIRST_TRIAL_PHASE``); pairs whose first trials are all early Phase 1 or
 of unknown phase are left out of the test slates, neither positive nor
-negative. Train (and its cv_folds) keeps them as positives.
+negative. Val and training keep them as positives.
 
 T1 test slates are kept only for diseases that gain more than 3 new targets
-over the whole test period (``MIN_DISEASE_POSITIVES``). Always build slates
-through ``task_slates`` so the split years and this filter are applied.
+over the test window (``MIN_DISEASE_POSITIVES``). Always build slates through
+``task_slates`` so the split window and these filters are applied.
 
 Works directly on a release directory (graph.safetensors + metadata.json +
 mappings/), without PyG.
@@ -75,13 +97,34 @@ from .slates import KS, PredictionLog, Slate, discovery_slates, evaluate, hypoth
 # The graph's last evidence year (config/event_graph_config.yaml
 # time_range.last_year): evidence runs to the 26.09 release, September 2026.
 LAST_GRAPH_YEAR = 2026
-# Last T1/T2 decision year: the graph's last year, 2026, although it is partial
-# (evidence to September 2026, so its positives cover January to September and
-# miss late-recorded trials and papers). Pinned rather than read off the labels;
-# last_label_year() checks the labels run to LAST_GRAPH_YEAR.
-LAST_DECISION_YEAR = LAST_GRAPH_YEAR
-# Decision years for T1 and T2, inclusive. No validation split: see cv_folds.
-SPLITS = {"train": (1996, 2019), "test": (2020, LAST_DECISION_YEAR)}
+# First test year of every task: T1/T2 test ranks from the graph before it, T3
+# tests the pairs entering Phase II from it on.
+TEST_START = 2020
+# T1/T2 scored windows (first, last event year), cumulative: a slate ranks every
+# candidate from the graph before the window's first year (its cutoff), and its
+# positives are the pairs whose event falls anywhere in the window. Val is the
+# WINDOW years before test. Test runs to the graph's last year, 2026, although
+# it is partial (evidence to September 2026, and trials and papers are recorded
+# late); last_label_year() checks the labels run to it.
+WINDOW = 3
+SPLITS = {"val": [(TEST_START - WINDOW, TEST_START - 1)], "test": [(TEST_START, LAST_GRAPH_YEAR)]}
+# How a model scored on a split turns the labels dated before its cutoff
+# (fit_before) into training examples: the method's choice, reported with its
+# results, as both are scored the same way. The stacked windows start at
+# FIRST_DECISION_YEAR; "single" trains on every earlier positive too.
+RECIPES = {
+    "single": "one snapshot, the graph before fit_before; every positive dated before it is a target, "
+              "trained on with its own label edges hidden (hide_pairs)",
+    "stacked": "WINDOW-year windows up to fit_before (fit_windows), each window's positives ranked from "
+               "the snapshot before its first year; nothing to hide",
+}
+FIRST_DECISION_YEAR = 1996
+# The official metric of each task, the one results are compared on. T1/T2: a
+# key of evaluate_task's summary. T3: RS@10, the mean over the primary
+# therapeutic areas, of the year-stratified ranking (evaluate_advancement on
+# year_stratified(pred): "summary" row scope "TA mean", N 10).
+PRIMARY_METRIC = {"discovery": "precision@R", "hypothesis": "precision@R",
+                  "advancement": "year_stratified.TA_mean.RS@10"}
 # Label column holding the year a pair becomes a positive, per slate task.
 LABEL_YEAR = {"discovery": "first_trial_year", "hypothesis": "first_direct_year"}
 # Evidence dated 1985 or earlier is collapsed onto 1985 by the event list
@@ -89,9 +132,9 @@ LABEL_YEAR = {"discovery": "first_trial_year", "hypothesis": "first_direct_year"
 # trial in 1985" means "by 1985".
 FIRST_GRAPH_YEAR = 1985
 
-# Minimum positives a disease needs over a whole split for its slates to
+# Minimum positives a disease's slate needs (its new targets in the window) to
 # count, per (task, split); default 1. T1 test keeps only diseases with more
-# than 3 new targets across the test period.
+# than 3 new targets across the test window.
 MIN_DISEASE_POSITIVES = {("discovery", "test"): 4}
 
 # Minimum phase weight of a pair's first trials (the strongest trial dated in
@@ -119,12 +162,12 @@ FIRST_ENTRY_YEAR = 1995
 # eval pairs at the graph's last year, so the last eval entries also get
 # ADVANCEMENT_WINDOW years.
 ADVANCEMENT_LABEL_FILES = {
-    "train": (FIRST_ENTRY_YEAR, SPLITS["train"][1], SPLITS["train"][1] + ADVANCEMENT_WINDOW),
-    "eval": (SPLITS["test"][0], LAST_GRAPH_YEAR - ADVANCEMENT_WINDOW, LAST_GRAPH_YEAR),
+    "train": (FIRST_ENTRY_YEAR, TEST_START - 1, TEST_START - 1 + ADVANCEMENT_WINDOW),
+    "eval": (TEST_START, LAST_GRAPH_YEAR - ADVANCEMENT_WINDOW, LAST_GRAPH_YEAR),
 }
-# Model selection: CV_FOLDS time-blocked folds inside the train years
-# (cv_folds), validation blocks of CV_BLOCK calendar years ending where the
-# train split ends, each fold training on every earlier train year.
+# T3 model selection: CV_FOLDS time-blocked folds inside the train entry years
+# (cv_folds), validation blocks of CV_BLOCK years ending where train ends, each
+# fold training on every earlier train year.
 CV_FOLDS, CV_BLOCK = 3, 4
 # T3 results are reported per therapeutic area: the primary ones are those not
 # matching this pattern with at least MIN_PRIMARY_TA_PAIRS eval pairs that have
@@ -327,12 +370,14 @@ def build_hypothesis_labels(release_dir: str | Path) -> pd.DataFrame:
     return out.sort_values(["first_direct_year", "disease_id", "target_id"], ignore_index=True)
 
 
-def hypothesis_strata(labels: pd.DataFrame) -> dict[str, pd.Series]:
-    """The ``HYPOTHESIS_STRATA`` of every row of a T2 label table, as bool columns."""
+def hypothesis_strata(labels: pd.DataFrame, cutoff: int) -> dict[str, pd.Series]:
+    """The ``HYPOTHESIS_STRATA`` of every row of a T2 label table for a window starting at ``cutoff``, as bool
+    columns. The target-degree strata count the diseases each target had a direct edge to before the cutoff."""
     out = {"repeated": labels["literature_repeated"].astype(bool),
            "other_evidence": labels["first_other_evidence_year"].notna(),
            "trial": labels["first_trial_year"].notna()}
-    deg = labels["target_prior_diseases"]
+    before = labels.loc[labels["first_direct_year"] < cutoff, "target_index"]
+    deg = labels["target_index"].map(before.value_counts()).fillna(0)
     for name, (lo, hi) in TARGET_DEGREE_BINS.items():
         out[f"target_degree_{name}"] = (deg >= lo) & (True if hi is None else deg < hi)
     if list(out) != list(HYPOTHESIS_STRATA):
@@ -341,78 +386,135 @@ def hypothesis_strata(labels: pd.DataFrame) -> dict[str, pd.Series]:
 
 
 def last_label_year(labels: pd.DataFrame, task: str = "discovery") -> int:
-    """End of the test split (LAST_DECISION_YEAR), once the labels are checked to
-    run to the graph's last year."""
+    """The graph's last year, where the T1/T2 test window ends, once the labels are checked to reach it."""
     latest = int(labels[LABEL_YEAR[task]].max())
     if latest != LAST_GRAPH_YEAR:
         raise ValueError(f"labels run to {latest} but LAST_GRAPH_YEAR is {LAST_GRAPH_YEAR}: "
                          "update it together with the graph's time range")
-    return LAST_DECISION_YEAR
+    return LAST_GRAPH_YEAR
 
 
-def decision_years(split: str, last_year: int | None = None) -> list[int]:
-    """Decision years of a T1 or T2 split. ``last_year`` resolves an open-ended split."""
-    lo, hi = SPLITS[split]
-    if hi is None:
-        if last_year is None:
-            raise ValueError(f"split {split!r} runs to the latest label year; pass last_year")
-        hi = last_year
-    return list(range(lo, hi + 1))
+def fit_before(split: str) -> int:
+    """The cutoff of a scored T1/T2 split: a model scored on it trains only on evidence and labels dated
+    before this year."""
+    return SPLITS[split][0][0]
+
+
+def fit_windows(before: int) -> list[tuple[int, int]]:
+    """Recipe "stacked": consecutive WINDOW-year windows (first, last) from FIRST_DECISION_YEAR to the year
+    before ``before``; each window's positives are ranked from the snapshot before its first year."""
+    return [(y, min(y + WINDOW, before) - 1) for y in range(FIRST_DECISION_YEAR, before, WINDOW)]
+
+
+def training_pairs(task: str, labels: pd.DataFrame, before: int, since: int | None = None) -> pd.DataFrame:
+    """The task's positives with label year in [since, before): every one before ``fit_before`` for recipe
+    "single", one window's at a time for "stacked". T1 keeps early Phase 1 and unknown-phase first trials."""
+    y = labels[LABEL_YEAR[task]]
+    keep = (y < before) & (y >= since if since is not None else True)
+    if task == "hypothesis":
+        keep &= labels["novel"]
+    return labels[keep]
+
+
+def linked_pairs(task: str, labels: pd.DataFrame, before: int) -> pd.DataFrame:
+    """Pairs linked before ``before`` (T1: trialled; T2: any direct edge): out of every candidate pool from
+    then on, so they are not negatives either."""
+    return labels[labels[LABEL_YEAR[task]] < before]
+
+
+def label_edge_types(task: str, edge_types) -> list[tuple[str, str, str]]:
+    """The edge types whose edges make a pair a positive of ``task``, both directions (rev_ types included):
+    T1 the target->disease ``clinical_trial_*`` relations (a T1 candidate can have other evidence), T2
+    every target->disease relation (a T2 candidate has none)."""
+    if task not in LABEL_YEAR:
+        raise ValueError(f"unknown slate task {task!r}")
+    return [et for et in edge_types if {et[0], et[2]} == {"target", "disease"}
+            and (task == "hypothesis" or et[1].removeprefix("rev_").startswith(T1_RELATION_PREFIX))]
+
+
+def hide_pairs(data, task: str, target_index, disease_index):
+    """Recipe "single": a copy of a snapshot (HeteroData, as load_snapshot returns it) without the edges that
+    make the given (target, disease) pairs positives of ``task`` (``label_edge_types``), in both directions.
+
+    Train on a batch of positives on the graph without their own edges, as a test
+    positive has none before its cutoff; the other pairs' edges stay as context.
+    Only the edge stores of those types are copied.
+    """
+    import copy
+
+    import torch
+
+    ets = label_edge_types(task, data.edge_types)
+    if not ets:
+        raise ValueError(f"no {task} label edge types in the graph")
+    out = copy.copy(data)
+    n_dis = data["disease"].num_nodes
+    dev = data[ets[0]].edge_index.device
+    hidden = (torch.as_tensor(target_index, dtype=torch.long, device=dev) * n_dis
+              + torch.as_tensor(disease_index, dtype=torch.long, device=dev))
+    for et in ets:
+        store = out[et]
+        ei = store.edge_index
+        t, d = (ei[0], ei[1]) if et[0] == "target" else (ei[1], ei[0])
+        keep = ~torch.isin(t * n_dis + d, hidden)
+        nnz = ei.size(1)
+        for k, v in list(store.items()):  # the edge-level tensors, as load_thbkg's reverse edges copy them
+            if k == "edge_index":
+                store.edge_index = ei[:, keep]
+            elif torch.is_tensor(v) and v.size(0) == nnz:
+                store[k] = v[keep]
+    return out
 
 
 def task_slates(task: str, split: str, labels: pd.DataFrame, *,
-                num_targets: int | None = None, years=None) -> list[Slate]:
-    """Slates for one task and split, with the split's years and slate filter applied.
+                num_targets: int | None = None, window: tuple[int, int] | None = None) -> list[Slate]:
+    """One slate per disease for one window (first, last) of a T1 or T2 split, with the split's filters.
 
-    ``years`` restricts to a subset of the split, e.g. one year at a time to
-    bound memory (a slate holds ~19,600 candidates; a T2 year up to ~6,000 slates).
+    ``window`` defaults to the split's window (``SPLITS``). Training slates of the
+    "stacked" recipe use split "train", which has no filter: pass one of
+    ``fit_windows``. The split decides the filters (test's only).
     """
     if task not in LABEL_YEAR:
         raise ValueError(f"unknown slate task {task!r} (T3 is evaluated on its labelled pairs)")
     if num_targets is None:
         raise ValueError(f"{task} slates need num_targets")
-    year_col = LABEL_YEAR[task]
-    split_years = decision_years(split, last_label_year(labels, task))
-    years = split_years if years is None else [y for y in years if y in split_years]
+    last_label_year(labels, task)
+    if window is None:
+        if split not in SPLITS:
+            raise ValueError(f"split {split!r} has no window of its own: pass window=")
+        window = SPLITS[split][0]
     if task == "hypothesis":
-        labels = labels.assign(rankable=labels["novel"], **hypothesis_strata(labels))
-        slates = hypothesis_slates(labels, years, num_targets, strata=HYPOTHESIS_STRATA)
+        labels = labels.assign(rankable=labels["novel"], **hypothesis_strata(labels, window[0]))
+        slates = hypothesis_slates(labels, window, num_targets, strata=HYPOTHESIS_STRATA)
     else:
         min_phase = MIN_FIRST_TRIAL_PHASE.get((task, split))
         if min_phase is not None:
             labels = labels.assign(rankable=labels["first_trial_phase"] >= min_phase)
-        slates = discovery_slates(labels, years, num_targets)
+        slates = discovery_slates(labels, window, num_targets)
     k = MIN_DISEASE_POSITIVES.get((task, split), 1)
-    if k > 1:
-        # Counted over the whole split, not over ``years``, so a year-by-year
-        # build keeps the same slates. Every positive is in its slate's pool.
-        in_split = labels[year_col].isin(split_years)
-        if "rankable" in labels.columns:
-            in_split &= labels["rankable"]
-        per_disease = labels.loc[in_split].groupby("disease_index").size()
-        keep = set(per_disease.index[per_disease >= k].tolist())
-        slates = [s for s in slates if s.disease_index in keep]
-    return slates
+    return [s for s in slates if int(s.positive_mask.sum()) >= k]
 
 
-def evaluate_task(task: str, split: str, labels: pd.DataFrame, *, num_targets: int,
-                  score_fn_for_year, ks=KS, years=None, log: PredictionLog | None = None) -> tuple[dict, list[dict]]:
-    """Build and score a T1 or T2 split one decision year at a time, then macro-average over its slates.
+def evaluate_task(task: str, split: str, labels: pd.DataFrame, *, num_targets: int, score_fn_for_year, ks=KS,
+                  windows=None, log: PredictionLog | None = None) -> tuple[dict, list[dict]]:
+    """Score a T1 or T2 split, one window at a time (one slate per disease and window), and macro-average.
 
-    ``score_fn_for_year(year, slates)`` returns the ``score_fn`` for that year's
-    slates (one score per ``slate.candidates``), so a model can embed the year's
-    snapshot once. Only that year's slates are held in memory: a whole T2 split
-    would be ~5 GB of candidate arrays. ``years`` restricts to some of the split's
-    years, e.g. a ``cv_folds`` validation block (lo, hi) on split "train":
-    ``years=range(lo, hi + 1)``. ``log`` (a ``PredictionLog``) keeps the raw
-    predictions, so strata or weights decided later can be scored without rerunning.
+    ``score_fn_for_year(cutoff, slates)`` returns the ``score_fn`` for a window's
+    slates (one score per ``slate.candidates``), so a model embeds the snapshot of
+    each window's cutoff once. ``windows`` defaults to the split's one (``SPLITS``);
+    pass a list for split "train", e.g. ``fit_windows(fit_before("val"))``.
+    ``log`` (a ``PredictionLog``) keeps the raw predictions, so strata or weights
+    decided later can be scored without rerunning.
     """
+    if windows is None and split not in SPLITS:
+        raise ValueError(f"split {split!r} has no window of its own: pass windows=")
     per_slate = []
-    split_years = decision_years(split, last_label_year(labels, task))
-    for y in split_years if years is None else [y for y in years if y in split_years]:
-        slates = task_slates(task, split, labels, num_targets=num_targets, years=[y])
+    for window in SPLITS[split] if windows is None else windows:
+        slates = task_slates(task, split, labels, num_targets=num_targets, window=tuple(window))
         if slates:
-            per_slate.extend(evaluate(slates, score_fn_for_year(y, slates), ks, log=log)[1])
+            per_slate.extend(evaluate(slates, score_fn_for_year(slates[0].year, slates), ks, log=log)[1])
+    if not per_slate:
+        raise ValueError(f"no {task} slates for split {split!r}")
     return macro_average(per_slate, ks), per_slate
 
 
@@ -486,33 +588,31 @@ def build_advancement_labels(release_dir: str | Path) -> dict[str, pd.DataFrame]
 
 
 def cv_folds(task: str) -> list[dict]:
-    """Time-blocked model-selection folds inside the train split, the same for every method.
+    """T3 model-selection folds inside the train entry years, the same for every method (T1/T2 select
+    on ``SPLITS["val"]``).
 
-    Fold k validates on a block of ``CV_BLOCK`` calendar years and trains on every
-    earlier year of the split (an expanding window); the last block ends where the
-    split ends. T1/T2 years are decision years. T3 years are Phase II entry years,
-    and each fold labels like the official split: train pairs positive if Phase
-    III+ by the year before the val block + ``ADVANCEMENT_WINDOW``
-    (``train_horizon``), val pairs by the block's last year + the window
-    (``val_horizon``); ``advancement_fold_labels`` builds them.
+    ``CV_FOLDS`` folds of Phase II entry years; fold k validates on a block of
+    ``CV_BLOCK`` years and trains on every earlier entry year (an expanding
+    window), the last block ending where train ends. Each fold labels like the
+    official split: train pairs positive if Phase III+ by the year before the val
+    block + ``ADVANCEMENT_WINDOW`` (``train_horizon``), val pairs by the block's
+    last year + the window (``val_horizon``); ``advancement_fold_labels`` builds them.
 
-    Returns [{"train": (first, last), "val": (first, last)[, "train_horizon",
-    "val_horizon"]}], years inclusive.
+    Returns [{"train": (first, last), "val": (first, last), "train_horizon", "val_horizon"}],
+    entry years inclusive.
     """
-    if task == "advancement":
-        first, last = FIRST_ENTRY_YEAR, ADVANCEMENT_LABEL_FILES["train"][1]
-    elif task in LABEL_YEAR:
-        first, last = SPLITS["train"]
-    else:
+    if task in LABEL_YEAR:
+        raise ValueError(f"{task} selects on SPLITS['val'], after fitting on what is dated before "
+                         "fit_before('val')")
+    if task != "advancement":
         raise ValueError(f"unknown task {task!r}")
+    first, last = FIRST_ENTRY_YEAR, ADVANCEMENT_LABEL_FILES["train"][1]
     folds = []
     for k in range(CV_FOLDS):
         v1 = last - (CV_FOLDS - 1 - k) * CV_BLOCK
         v0 = v1 - CV_BLOCK + 1
-        fold: dict = {"train": (first, v0 - 1), "val": (v0, v1)}
-        if task == "advancement":
-            fold.update(train_horizon=v0 - 1 + ADVANCEMENT_WINDOW, val_horizon=v1 + ADVANCEMENT_WINDOW)
-        folds.append(fold)
+        folds.append({"train": (first, v0 - 1), "val": (v0, v1),
+                      "train_horizon": v0 - 1 + ADVANCEMENT_WINDOW, "val_horizon": v1 + ADVANCEMENT_WINDOW})
     return folds
 
 

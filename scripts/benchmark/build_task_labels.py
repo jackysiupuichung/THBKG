@@ -17,10 +17,14 @@ Writes
   labels/therapeutic_areas.parquet          disease -> therapeutic areas (needs
   labels/primary_therapeutic_areas.json     --diseases-dir, default
                                             $INPUT_EVIDENCE_DIR/diseases)
-  benchmark_tasks.json        splits, slate filters, label counts and slate statistics
-                              per task and split (T2: positives per stratum), the
-                              closed-form random floor on test, and the model-selection
-                              folds inside train (cv_folds; T3 with pair counts)
+  benchmark_tasks.json        the official metric per task and the seeds to report; T1/T2
+                              scored splits (val, test: window, fit_before, the
+                              stacked recipe's windows), the recipes, the label relations
+                              hidden by recipe "single", slate filters, and per task and
+                              split the slate statistics (T2: positives per stratum), the
+                              training positives per recipe and the closed-form random
+                              floors; T3 label counts and model-selection folds (cv_folds,
+                              with pair counts)
 """
 from __future__ import annotations
 
@@ -29,31 +33,29 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.benchmark.results import SEEDS  # noqa: E402
 from src.benchmark.slates import expected_random, slate_stats, slate_summary  # noqa: E402
 from src.benchmark.tasks import (  # noqa: E402
     ADVANCEMENT_LABEL_FILES, ADVANCEMENT_SPLITS, HYPOTHESIS_STRATA, MIN_DISEASE_POSITIVES, MIN_FIRST_TRIAL_PHASE,
-    SPLITS, advancement_fold_labels, advancement_labels, build_advancement_labels, build_discovery_labels,
-    build_hypothesis_labels, cv_folds, decision_years, last_label_year, primary_therapeutic_areas, task_slates,
-    therapeutic_areas,
+    PRIMARY_METRIC, RECIPES, SPLITS, advancement_fold_labels, advancement_labels, build_advancement_labels, build_discovery_labels,
+    build_hypothesis_labels, cv_folds, fit_before, fit_windows, label_edge_types, last_label_year,
+    primary_therapeutic_areas, task_slates, therapeutic_areas, training_pairs,
 )
 
 
 def _split_stats(task, split, labels, n_targets) -> tuple[pd.DataFrame, dict]:
-    """Build slates one year at a time and keep only their sizes (a full T1 split
-    holds ~19,600 candidates per slate), plus the grade counts of their positives."""
-    years = decision_years(split, last_label_year(labels, task))
-    frames, grades = [], []
-    for y in years:
-        slates = task_slates(task, split, labels, num_targets=n_targets, years=[y])
-        frames.append(slate_stats(slates))
-        grades.extend(g for s in slates for g in s.gain[s.positive_mask].tolist())
+    """Build a scored split's slates (one per disease, ~19,600 candidates each) and keep only their sizes,
+    plus the grade counts of their positives."""
+    slates = task_slates(task, split, labels, num_targets=n_targets)
+    grades = [g for s in slates for g in s.gain[s.positive_mask].tolist()]
     counts = pd.Series(grades, dtype=float).value_counts().sort_index()
-    return pd.concat(frames, ignore_index=True), {str(k): int(v) for k, v in counts.items()}
+    return slate_stats(slates), {str(k): int(v) for k, v in counts.items()}
 
 
 def main() -> None:
@@ -95,14 +97,24 @@ def main() -> None:
         print("no --diseases-dir: therapeutic-area tables not written")
 
     last = last_label_year(t1)
-    summary = {
-        "splits_decision_years": {k: [lo, last if hi is None else hi] for k, (lo, hi) in SPLITS.items()},
+    edge_types = [(e["src"], e["rel"], e["dst"]) for e in meta["edge_types"]]
+    summary: dict[str, Any] = {
+        "primary_metric": PRIMARY_METRIC,
+        "seeds": SEEDS,  # runs per setting, reported as mean ± std
+        # T1/T2 scored windows (first, last event year; the cutoff is the first year): a model scored on one
+        # trains only on evidence and labels dated before fit_before, by one of the recipes
+        "splits": {k: {"window": list(ws[0]), "fit_before": fit_before(k),
+                       "stacked_windows": [list(w) for w in fit_windows(fit_before(k))]} for k, ws in SPLITS.items()},
+        "recipes": RECIPES,
+        # target->disease relations recipe "single" hides (with their rev_ reverses) for the pairs trained on
+        "label_relations": {t: [r for _, r, _ in label_edge_types(t, edge_types)] for t in ("discovery", "hypothesis")},
+        "last_graph_year": last,
         "min_positives_per_disease": {f"{t}.{s}": k for (t, s), k in MIN_DISEASE_POSITIVES.items()},
         "min_first_trial_phase": {f"{t}.{s}": v for (t, s), v in MIN_FIRST_TRIAL_PHASE.items()},
         "hypothesis_strata": HYPOTHESIS_STRATA,
         "advancement_label_files": {k: {"entry_years": [lo, hi], "outcome_horizon": h}
                                     for k, (lo, hi, h) in ADVANCEMENT_LABEL_FILES.items()},
-        "cv_folds": {t: cv_folds(t) for t in ("discovery", "hypothesis", "advancement")},
+        "cv_folds": {"advancement": cv_folds("advancement")},
         "tasks": {},
     }
     for fold in summary["cv_folds"]["advancement"]:
@@ -117,11 +129,16 @@ def main() -> None:
             s = slate_summary(stats)
             if task == "discovery":  # T2 positives are not graded
                 s["positive_grades"] = grade_counts
-            if split != "train" and not stats.empty:
+            if not stats.empty:
                 s["random_expected"] = expected_random(stats)
+            cut = fit_before(split)
+            s["training_positives"] = {
+                "single": len(training_pairs(task, labels, cut)),
+                "stacked": sum(len(training_pairs(task, labels, hi + 1, since=lo)) for lo, hi in fit_windows(cut))}
             summary["tasks"][task][split] = s
-            print(f"{task:12s} {split:5s} slates={s['n_slates']:,} positives={s.get('n_positives', 0):,} "
-                  f"mean_candidates={s.get('mean_candidates', 0):,.0f}")
+            print(f"{task:12s} {split:4s} slates={s['n_slates']:,} positives={s.get('n_positives', 0):,} "
+                  f"mean_candidates={s.get('mean_candidates', 0):,.0f} training positives before {cut}: "
+                  f"single {s['training_positives']['single']:,}, stacked {s['training_positives']['stacked']:,}")
 
     adv = {}
     for split, (file, _, _) in ADVANCEMENT_SPLITS.items():
